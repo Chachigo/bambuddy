@@ -2,6 +2,12 @@
 
 All notable changes to Bambuddy will be documented in this file.
 
+## [1.2.5.2] - Unreleased
+
+### Fixed
+- **Bambu Cloud sign-in with a TOTP (authenticator app) account always failed with "Invalid code" (#2696, reporter @cmerkle)** — Every TOTP verification was rejected regardless of the code. Bambu Lab added double-submit CSRF protection to the `bambulab.com` web origin, which is where — and only where — Bambuddy posts the two-factor code; the endpoint refused the request with `403 CSRF error: missing_cookie` **before evaluating the code at all**, and Bambuddy surfaced that as "Invalid code". Reproduced against the live endpoint with a deliberately invalid key: a bare POST returns `missing_cookie`, `GET /api/csrf` mints a `bbl_csrf_token` cookie, a POST carrying only that cookie returns `missing_header`, and a POST carrying the cookie plus an `x-bbl-csrf-token` header reaches application logic. Bambuddy now performs that handshake before submitting the code. Note that landing on the sign-in page first — the intuitive fix — does **not** work: that page sets only Cloudflare's `__cf_bm`. **Also fixed:** a CSRF refusal no longer masquerades as a wrong code; it now says the code was never checked, so nobody else loses an evening to clock drift and leading-zero theories. Only TOTP sign-ins were affected — every other cloud call, including the email-code two-factor path, goes to `api.bambulab.com`, which is not gated, and existing stored tokens kept working throughout. Covered by tests that pin the exact header name and the origin used per region.
+
+
 ## [1.2.5.1] - 2026-07-27
 
 ### Fixed
