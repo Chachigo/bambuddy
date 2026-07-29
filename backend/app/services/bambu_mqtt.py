@@ -147,9 +147,11 @@ def apply_tray_exist_bits(
     the HT keeps echoing stale ``tray_type`` and its ``state`` is firmware-variant
     (#2670). Verified against OrcaSlicer ``DevFilaSystem.cpp``
     (``is_exists = tray_exist_bits >> (16 + (ams_id-128))``) and a live H2D
-    capture (HT-A → bit 16). The A2L-Lite (normalised to id 6 upstream) lands at
-    bits 24-27 via the regular ``ams_id * 4`` formula, matching OrcaSlicer's
-    ``AMS_LITE_MIXED`` offset, so it needs no special case here.
+    capture (HT-A → bit 16). The A2L-Lite lands at bits 24-27 via the regular
+    ``ams_id * 4`` formula, matching OrcaSlicer's ``AMS_LITE_MIXED`` offset; the
+    unit id is folded through ``normalize_am_unit_id`` first so callers holding
+    the raw physical id 16 get the same bit base as callers holding the
+    normalised 6 (#2697).
 
     `tray_exist_bits_str` is expected as a hex string (firmware sends it that
     way). Ints are tolerated for defensive symmetry but typically not seen
@@ -192,6 +194,13 @@ def apply_tray_exist_bits(
             continue
         if not isinstance(ams_id, int):
             continue
+        # The A2L AMS-Lite reaches this helper under either id: `_handle_ams_data`
+        # normalises 16 -> 6 before calling, but the VP bridge parses the raw
+        # printer payload itself (`mqtt_bridge._on_printer_raw`) and still holds
+        # the physical 16. Both mean bit base 24, so fold them together here
+        # rather than relying on every caller to normalise first — reading 16 as
+        # 16*4 = bit 64 finds nothing set and wipes every A2L slot (#2697).
+        ams_id = normalize_am_unit_id(ams_id)
         # AMS-HT (n3s, id 128-135): single tray, presence bit at 16+(ams_id-128).
         # Regular AMS (and the A2L-Lite normalised to id 6): ams_id*4 + tray_id.
         # Anything outside those ranges has no known bit layout — don't guess it.
