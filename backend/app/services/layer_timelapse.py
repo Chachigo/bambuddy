@@ -6,6 +6,7 @@ Captures a frame on each layer change and stitches them into a video on print co
 import asyncio
 import logging
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -303,3 +304,66 @@ def cancel_session(printer_id: int):
 def get_active_sessions() -> dict[int, TimelapseSession]:
     """Get all active timelapse sessions."""
     return _active_sessions.copy()
+
+
+def cleanup_orphaned_timelapse_sessions(min_age_seconds: float = 300) -> int:
+    """Remove timelapse_frames/<printer_id>/* left behind by a crash or
+    restart that happened while a session was active.
+
+    _active_sessions is in-memory only, so a process restart loses track of
+    any in-flight session without ever calling cancel_session()/cleanup() -
+    the frames directory (and, if stitching had already produced output
+    before the restart, a stray `timelapse_<session_id>.mp4`) are then
+    orphaned on disk with nothing else to reap them (unlike the ffmpeg
+    orphan janitor in routes/camera.py, there was no equivalent here).
+
+    Safe to call once at startup: normal operation always cleans up via
+    on_print_complete/cancel_session, so anything found here predates this
+    process - and a restart-recovered print doesn't get a new timelapse
+    session either (`_maybe_start_layer_timelapse` is only wired into fresh
+    PRINT_START events, see #1353), so an orphaned directory can never be
+    resumed. `min_age_seconds` is just a defensive margin against reordering
+    if this is ever also called mid-run.
+
+    Returns the number of orphaned directories/files removed.
+    """
+    base_dir = settings.base_dir / "timelapse_frames"
+    if not base_dir.exists():
+        return 0
+
+    now = time.time()
+    removed = 0
+    for printer_dir in base_dir.iterdir():
+        if not printer_dir.is_dir():
+            continue
+        try:
+            printer_id = int(printer_dir.name)
+        except ValueError:
+            continue
+
+        active_session = _active_sessions.get(printer_id)
+        active_session_id = active_session.session_id if active_session else None
+
+        for entry in printer_dir.iterdir():
+            # Frame dirs are named "<session_id>/"; stitched-but-not-yet-
+            # attached output files are "timelapse_<session_id>.mp4" (see
+            # on_print_complete's output_path).
+            entry_session_id = entry.name.removeprefix("timelapse_").removesuffix(".mp4") if entry.is_file() else entry.name
+            if entry_session_id == active_session_id:
+                continue
+            try:
+                if now - entry.stat().st_mtime < min_age_seconds:
+                    continue
+            except OSError:
+                continue
+            try:
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=True)
+                else:
+                    entry.unlink(missing_ok=True)
+                removed += 1
+                logger.info("Removed orphaned timelapse artifact: %s", entry)
+            except OSError as e:
+                logger.warning("Failed to remove orphaned timelapse artifact %s: %s", entry, e)
+
+    return removed

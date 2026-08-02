@@ -4,6 +4,7 @@ Tests for the layer timelapse service.
 These tests cover session management and pure logic functions.
 """
 
+import time
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -318,3 +319,117 @@ class TestGetActiveSessions:
                 assert 1 in _active_sessions
 
                 cancel_session(1)
+
+
+class TestCleanupOrphanedTimelapseSessions:
+    """_active_sessions is in-memory only, so a process restart mid-print
+    loses track of an active session without ever cleaning up its frames
+    directory (or a stitched-but-not-attached output .mp4). Confirmed live:
+    38MB of exactly this leftover on Carl's OrangePi after several restarts
+    during testing. cleanup_orphaned_timelapse_sessions() sweeps for it."""
+
+    def _touch_old(self, path, age_seconds=600):
+        import os
+
+        path.touch()
+        old = time.time() - age_seconds
+        os.utime(path, (old, old))
+
+    def _mkdir_old(self, path, age_seconds=600):
+        import os
+
+        path.mkdir(parents=True)
+        old = time.time() - age_seconds
+        os.utime(path, (old, old))
+
+    def test_removes_orphaned_frame_dir_and_stray_output(self, tmp_path):
+        from backend.app.services.layer_timelapse import (
+            _active_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        printer_dir = tmp_path / "timelapse_frames" / "1"
+        self._mkdir_old(printer_dir / "20260101_000000")
+        self._touch_old(printer_dir / "timelapse_20260101_000000.mp4")
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            removed = cleanup_orphaned_timelapse_sessions(min_age_seconds=300)
+
+        assert removed == 2
+        assert not (printer_dir / "20260101_000000").exists()
+        assert not (printer_dir / "timelapse_20260101_000000.mp4").exists()
+
+    def test_spares_the_currently_active_session(self, tmp_path):
+        from backend.app.services.layer_timelapse import (
+            TimelapseSession,
+            _active_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        printer_dir = tmp_path / "timelapse_frames" / "1"
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            session = TimelapseSession(1, 100, "/dev/video1", "usb")
+            _active_sessions[1] = session
+            import os
+
+            old = time.time() - 600
+            os.utime(session.frames_dir, (old, old))
+
+            removed = cleanup_orphaned_timelapse_sessions(min_age_seconds=300)
+
+        assert removed == 0
+        assert session.frames_dir.exists()
+        _active_sessions.clear()
+
+    def test_spares_recently_modified_entries(self, tmp_path):
+        """Defensive margin: something modified within min_age_seconds is
+        left alone even if it doesn't match an active session, in case this
+        is ever invoked while a session is mid-creation."""
+        from backend.app.services.layer_timelapse import (
+            _active_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        printer_dir = tmp_path / "timelapse_frames" / "1"
+        printer_dir.mkdir(parents=True)
+        (printer_dir / "20260101_000000").mkdir()
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            removed = cleanup_orphaned_timelapse_sessions(min_age_seconds=300)
+
+        assert removed == 0
+        assert (printer_dir / "20260101_000000").exists()
+
+    def test_no_base_dir_is_a_no_op(self, tmp_path):
+        from backend.app.services.layer_timelapse import cleanup_orphaned_timelapse_sessions
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path / "does-not-exist"
+            removed = cleanup_orphaned_timelapse_sessions()
+
+        assert removed == 0
+
+    def test_ignores_non_numeric_printer_dirs(self, tmp_path):
+        """Defensive: unrelated directories under timelapse_frames/ (there
+        shouldn't be any, but printer_id is parsed from the dir name) must
+        not raise."""
+        from backend.app.services.layer_timelapse import (
+            _active_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        (tmp_path / "timelapse_frames" / "not-a-printer-id").mkdir(parents=True)
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            removed = cleanup_orphaned_timelapse_sessions()
+
+        assert removed == 0

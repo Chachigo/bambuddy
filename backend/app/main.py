@@ -6844,6 +6844,18 @@ async def lifespan(app: FastAPI):
     # Start camera stream orphan cleanup
     start_camera_cleanup()
 
+    # One-shot sweep for timelapse session directories orphaned by a crash
+    # or restart that happened mid-print (in-memory session tracking can't
+    # survive that, and nothing else reaps the leftover frames/output file)
+    try:
+        from backend.app.services.layer_timelapse import cleanup_orphaned_timelapse_sessions
+
+        removed = cleanup_orphaned_timelapse_sessions()
+        if removed:
+            logging.getLogger(__name__).info("Removed %d orphaned timelapse session artifact(s)", removed)
+    except Exception as e:
+        logging.getLogger(__name__).warning("Orphaned timelapse session cleanup failed: %s", e)
+
     # Start expected-print TTL eviction (prevents memory leak when prints are
     # registered but on_print_start never fires)
     start_expected_prints_cleanup()
