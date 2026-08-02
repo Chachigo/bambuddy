@@ -250,6 +250,12 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
             response.nozzle_diameter = item.archive.nozzle_diameter
             response.sliced_for_model = item.archive.sliced_for_model
             response.bed_type = item.archive.bed_type
+            # Marks history/reprint rows whose archive carries the slicer's own
+            # live-resolved AMS-slot pick (extra_data.slicer_ams_mapping) — see
+            # `_extract_slicer_ams_mapping_json` in virtual_printer/manager.py.
+            response.archive_has_slicer_ams_mapping = bool(
+                item.archive.extra_data and item.archive.extra_data.get("slicer_ams_mapping")
+            )
             if item.plate_id:
                 archive_path = settings.base_dir / item.archive.file_path
                 if archive_path.exists():
@@ -643,6 +649,23 @@ async def add_to_queue(
             raise HTTPException(status_code=404, detail="Project not found")
 
     ams_mapping_json = json.dumps(data.ams_mapping) if data.ams_mapping else None
+    # Reprint fallback: the caller didn't specify an explicit ams_mapping (no
+    # per-slot filament-mapping edit was made), but the archive carries the
+    # slicer's own live-resolved AMS-slot pick from the original print (see
+    # `extra_data.slicer_ams_mapping`, written by the VP-queue path via
+    # `_extract_slicer_ams_mapping_json`). Reuse it so the reprint dispatches
+    # to the exact same physical spool instead of the scheduler re-deriving a
+    # (possibly ambiguous) mapping from just the file's static type/color.
+    #
+    # Note this is unconditional — it applies regardless of whether the
+    # physical spool in that slot has changed since the original print. #1308
+    # covers re-verifying a stored mapping against live AMS state at dispatch
+    # time; that check is a separate PR and, once merged, will also catch a
+    # stale slot inherited through this fallback.
+    if ams_mapping_json is None and archive and archive.extra_data:
+        saved_mapping = archive.extra_data.get("slicer_ams_mapping")
+        if isinstance(saved_mapping, list) and saved_mapping:
+            ams_mapping_json = json.dumps(saved_mapping)
     items = []
     for i in range(quantity):
         item = PrintQueueItem(

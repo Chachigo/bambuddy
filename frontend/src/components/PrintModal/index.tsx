@@ -325,6 +325,13 @@ export function PrintModal({
   // Get sliced_for_model from archive or library file
   const slicedForModel = archiveDetails?.sliced_for_model || libraryFileDetails?.sliced_for_model || null;
 
+  // The archive's own saved AMS-slot pick from the slicer (see the "Save AMS
+  // mapping" virtual-printer setting) — undefined for library files or
+  // archives that predate the feature / had it off at print time.
+  const archiveSlicerAmsMapping = !isLibraryFile
+    ? (archiveDetails?.extra_data?.slicer_ams_mapping as number[] | undefined)
+    : undefined;
+
   // Fetch plates for archives
   const { data: archivePlatesData, isError: archivePlatesError } = useQuery({
     queryKey: ['archive-plates', archiveId],
@@ -1407,6 +1414,7 @@ export function PrintModal({
                 onForceColorMatchChange={(slotId, value) =>
                   setForceColorMatch((prev) => ({ ...prev, [slotId]: value }))
                 }
+                archiveAmsMapping={archiveSlicerAmsMapping}
               />
             )}
 

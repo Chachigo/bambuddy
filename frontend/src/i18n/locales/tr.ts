@@ -935,6 +935,8 @@ export default {
       uploadedBy: 'Yükleyen',
       noPermissionReprint: 'Yeniden yazdırma izniniz yok',
       noFileForReprint: 'Kullanılabilir 3MF dosyası yok — baskı kaydedildiğinde dosya yazıcıdan indirilemedi',
+      slicerAmsMapping: 'AMS eşlemesi kaydedildi',
+      slicerAmsMappingTooltip: 'Bu arşivde dilimleyiciden kaydedilmiş bir AMS yuva eşlemesi var',
       noPermissionEdit: 'Arşivleri düzenleme izniniz yok',
       noPermissionDelete: 'Arşivleri silme izniniz yok',
       openInBambuStudio: 'Dilimleyicide Aç',
@@ -1145,6 +1147,10 @@ export default {
       lineItem: 'Yuva {{slot}}: {{required}} g gerekli, {{remaining}} g kaldı',
       unknown: 'bilinmiyor',
       printAnyway: 'Yine de Yazdır',
+    },
+    slicerAmsMapping: {
+      rowBadge: 'Dilimleyiciden kaydedilen AMS yuvası',
+      rowTooltip: 'Bu arşiv, dilimleme/gönderme sırasında dilimleyicinin seçtiği tam AMS yuvasını taşır. Yeniden yazdırma, tür/renkten yeniden tahmin etmek yerine o fiziksel makarayı yeniden kullanır.',
     },
     // Baskı modali
     editQueueItem: 'Kuyruk Öğesini Düzenle',
@@ -4597,6 +4603,10 @@ export default {
     selectPrinter: 'Yazıcı Seç',
     selectPlate: 'Plaka Seç',
     filamentMapping: 'Filament Eşlemesi',
+    useArchiveMapping: 'Eşleme',
+    useArchiveMappingTooltip: 'Tür/renge göre eşleştirmek yerine, bu arşivle kaydedilen AMS eşlemesindeki (dilimleyiciden) her yuvayı seç.',
+    clickToChangeSlot: 'Yuva atamasını değiştirmek için tıklayın',
+    reRead: 'Yeniden oku',
     plateN: 'Plaka {{n}}',
     plateFilamentsUnreadable: 'Seçili bir plakanın filamentleri okunamadı, bu yüzden eşleştirilemiyor. Diğerlerini kuyruğa almak için o plakanın seçimini kaldırın.',
     totalCost: 'Toplam maliyet:',
@@ -5104,6 +5114,10 @@ export default {
     queueForceColorMatch: {
       title: 'Renk eşleşmesini zorla',
       description: 'Tam olarak doğru filament türü ve rengi yüklü olmayan bir yazıcıya sevk etmeyi reddet. Varsayılan olarak kapalı — bu olmadan kuyruk yalnızca model eşleşmesi kullanır ve yanlış renk yüklü bir yazıcı seçebilir.',
+    },
+    saveAmsMapping: {
+      title: 'AMS eşlemesini kaydet',
+      description: 'Dilimleyicinin kendi seçtiği AMS yuvasını (project_file MQTT komutundan) arşive kalıcı olarak kaydeder, böylece daha sonraki bir yeniden yazdırma dosyanın türünden/renginden yeniden türetmek yerine tam olarak aynı fiziksel makarayı yeniden kullanır. Varsayılan olarak kapalı.',
     },
     gcodeInjection: {
       title: 'G-code enjeksiyonu',

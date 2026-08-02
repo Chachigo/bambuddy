@@ -935,6 +935,8 @@ export default {
       uploadedBy: 'Téléversé par',
       noPermissionReprint: 'Pas d\'autorisation de réimpression',
       noFileForReprint: 'Aucun fichier 3MF disponible — le fichier n\'a pas pu être téléchargé depuis l\'imprimante lors de l\'enregistrement',
+      slicerAmsMapping: 'Mappage AMS enregistré',
+      slicerAmsMappingTooltip: 'Cette archive dispose d\'un mappage des emplacements AMS enregistré depuis le slicer',
       noPermissionEdit: 'Pas d\'autorisation de modification',
       noPermissionDelete: 'Pas d\'autorisation de suppression',
       openInBambuStudio: 'Ouvrir dans le Slicer',
@@ -1143,6 +1145,10 @@ export default {
       lineItem: 'Emplacement {{slot}} : besoin de {{required}} g, {{remaining}} g restants',
       unknown: 'inconnu',
       printAnyway: 'Imprimer quand meme',
+    },
+    slicerAmsMapping: {
+      rowBadge: 'Emplacement AMS enregistré depuis le slicer',
+      rowTooltip: 'Cette archive conserve l\'emplacement AMS exact choisi par le slicer lors du tranchage/envoi. Une réimpression réutilise cette bobine physique au lieu de deviner à nouveau par type/couleur.',
     },
     title: 'File d\'attente',
     subtitle: 'Gérez vos travaux d\'impression',
@@ -4608,6 +4614,10 @@ export default {
     selectPrinter: 'Choisir l\'imprimante',
     selectPlate: 'Choisir le plateau',
     filamentMapping: 'Mapping Filament',
+    useArchiveMapping: 'Mappage',
+    useArchiveMappingTooltip: 'Sélectionner tous les emplacements à partir du mappage AMS enregistré avec cette archive (depuis le slicer), au lieu de faire correspondre par type/couleur.',
+    clickToChangeSlot: 'Cliquez pour modifier l\'attribution de l\'emplacement',
+    reRead: 'Relire',
     plateN: 'Plateau {{n}}',
     plateFilamentsUnreadable: 'Les filaments d\'un plateau sélectionné n\'ont pas pu être lus, il est donc impossible de l\'affecter. Désélectionnez-le pour mettre les autres en file.',
     totalCost: 'Coût total :',
@@ -5129,6 +5139,10 @@ export default {
     queueForceColorMatch: {
       title: 'Forcer la correspondance des couleurs',
       description: 'Refuser l\'envoi vers une imprimante qui n\'a pas exactement le type de filament et la couleur chargés. Désactivé par défaut — sans cela, la file d\'attente utilise uniquement la correspondance par modèle et peut choisir une imprimante avec la mauvaise couleur.',
+    },
+    saveAmsMapping: {
+      title: 'Enregistrer le mappage AMS',
+      description: 'Conserve dans l\'archive le choix d\'emplacement AMS propre au slicer (depuis la commande MQTT project_file), afin qu\'une réimpression ultérieure réutilise la même bobine physique au lieu de la redéduire à partir du type/de la couleur du fichier. Désactivé par défaut.',
     },
     gcodeInjection: {
       title: 'Injection G-code',

@@ -49,6 +49,14 @@ class VirtualPrinter(Base):
     )  # queue mode: pin per-slot type+color from the 3MF onto the queue
     # item so the scheduler refuses to dispatch onto a printer with the wrong
     # filament loaded (#1188).
+    save_ams_mapping: Mapped[bool] = mapped_column(
+        Boolean, server_default="false"
+    )  # queue mode: persist the slicer's own live-resolved AMS-slot pick (the
+    # `ams_mapping` field on the MQTT `project_file` command) onto the
+    # archive's `extra_data.slicer_ams_mapping`, so a later reprint can reuse
+    # the exact physical spool instead of re-deriving one from the file's
+    # static type/color. Off by default — archives don't grow this field
+    # unless the user opts in per virtual printer.
     gcode_injection: Mapped[bool] = mapped_column(
         Boolean, server_default="false"
     )  # queue mode: opt this VP's Send/Print jobs into per-model G-code snippet

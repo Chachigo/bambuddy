@@ -890,6 +890,8 @@ export default {
       uploadedBy: '업로드한 사용자',
       noPermissionReprint: '재인쇄 권한이 없습니다',
       noFileForReprint: '3MF 파일 없음 — 인쇄 기록 시 프린터에서 파일을 다운로드할 수 없었습니다',
+      slicerAmsMapping: 'AMS 매핑 저장됨',
+      slicerAmsMappingTooltip: '이 아카이브에는 슬라이서에서 저장된 AMS 슬롯 매핑이 있습니다',
       noPermissionEdit: '아카이브를 편집할 권한이 없습니다',
       noPermissionDelete: '아카이브를 삭제할 권한이 없습니다',
       openInBambuStudio: '슬라이서에서 열기',
@@ -1349,7 +1351,11 @@ export default {
       lineItem: '슬롯 {{slot}}: {{required}}g 필요, {{remaining}}g 남음',
       unknown: '알 수 없음',
       printAnyway: '그냥 인쇄'
-    }
+    },
+    slicerAmsMapping: {
+      rowBadge: '슬라이서에서 저장된 AMS 슬롯',
+      rowTooltip: '이 아카이브에는 슬라이싱/전송 시 슬라이서가 선택한 정확한 AMS 슬롯이 보존되어 있습니다. 재인쇄 시 유형/색상으로 다시 추측하는 대신 해당 실물 스풀을 재사용합니다.',
+    },
   },
   stats: {
     title: '대시보드',
@@ -4391,6 +4397,10 @@ export default {
     selectPrinter: '프린터 선택',
     selectPlate: '플레이트 선택',
     filamentMapping: '필라멘트 매핑',
+    useArchiveMapping: '매핑',
+    useArchiveMappingTooltip: '유형/색상으로 매칭하는 대신, 이 아카이브에 저장된 AMS 매핑(슬라이서 제공)에서 모든 슬롯을 선택합니다.',
+    clickToChangeSlot: '클릭하여 슬롯 할당 변경',
+    reRead: '다시 읽기',
     plateN: '플레이트 {{n}}',
     plateFilamentsUnreadable: '선택한 플레이트의 필라멘트를 읽을 수 없어 매핑할 수 없습니다. 해당 플레이트를 선택 해제하면 나머지를 대기열에 추가할 수 있습니다.',
     totalCost: '총 비용:',
@@ -4877,6 +4887,10 @@ export default {
     queueForceColorMatch: {
       title: '색상 일치 강제',
       description: '정확한 필라멘트 유형과 색상이 장착되지 않은 프린터에는 발송을 거부합니다. 기본적으로 꺼져 있음 — 이 옵션 없이는 대기열이 모델 전용 매칭을 사용하여 잘못된 색상이 장착된 프린터를 선택할 수 있습니다.'
+    },
+    saveAmsMapping: {
+      title: 'AMS 매핑 저장',
+      description: '슬라이서가 직접 선택한 AMS 슬롯(project_file MQTT 명령에서)을 아카이브에 저장하여, 이후 재인쇄 시 파일의 유형/색상에서 다시 유추하지 않고 동일한 실물 스풀을 재사용하도록 합니다. 기본값은 꺼짐입니다.',
     },
     gcodeInjection: {
       title: 'G-code 주입',

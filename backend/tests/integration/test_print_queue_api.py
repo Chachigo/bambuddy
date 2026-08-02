@@ -260,6 +260,71 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_add_to_queue_falls_back_to_archive_slicer_ams_mapping_when_unset(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """When the caller sends no explicit ams_mapping, but the archive
+        carries the slicer's own saved pick (extra_data.slicer_ams_mapping,
+        written by a VP with "Save AMS mapping" on), the queue item should
+        inherit it — the same exact-physical-spool reuse the "Mapping"
+        button gives you, but automatic when nothing was hand-edited.
+        """
+        printer = await printer_factory()
+        archive = await archive_factory(extra_data={"slicer_ams_mapping": [5, -1, 2, -1]})
+
+        data = {
+            "printer_id": printer.id,
+            "archive_id": archive.id,
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] == [5, -1, 2, -1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_add_to_queue_explicit_ams_mapping_wins_over_archive_fallback(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """An explicit ams_mapping in the request (e.g. from the filament
+        mapping panel) must take priority over the archive's saved slicer
+        pick — the fallback only fires when the caller sent nothing at all.
+        """
+        printer = await printer_factory()
+        archive = await archive_factory(extra_data={"slicer_ams_mapping": [5, -1, 2, -1]})
+
+        data = {
+            "printer_id": printer.id,
+            "archive_id": archive.id,
+            "ams_mapping": [9, -1, 1, -1],
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] == [9, -1, 1, -1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_add_to_queue_archive_extra_data_without_slicer_mapping_key_not_used(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """extra_data present but without a slicer_ams_mapping key (the
+        common case — most archives have other metadata but no saved slicer
+        mapping) must not accidentally trip the fallback."""
+        printer = await printer_factory()
+        archive = await archive_factory(extra_data={"filament_slots": []})
+
+        data = {
+            "printer_id": printer.id,
+            "archive_id": archive.id,
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_add_to_queue_with_plate_id(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):

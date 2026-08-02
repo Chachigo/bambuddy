@@ -1848,6 +1848,202 @@ class TestVirtualPrinterInstance:
         assert item.nozzle_mapping is None
 
     @pytest.mark.asyncio
+    async def test_add_to_print_queue_captures_ams_mapping_on_queue_item_regardless_of_toggle(self, tmp_path):
+        """The slicer's live-resolved AMS-slot pick (`ams_mapping` in the
+        project_file MQTT command) must land on the queue item's own
+        `ams_mapping` column unconditionally — this is what THIS dispatch
+        uses, and is a correctness fix, not a feature. Only persisting it
+        onto the *archive* (for future reprints) is gated behind the
+        per-VP `save_ams_mapping` toggle — see the sibling test below.
+        """
+        import json as _json
+
+        from backend.app.services.virtual_printer.manager import VirtualPrinterInstance
+
+        added_items = []
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock(side_effect=added_items.append)
+        mock_db.commit = AsyncMock()
+        mock_session_factory = MagicMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_factory.return_value = mock_session_ctx
+
+        inst = VirtualPrinterInstance(
+            vp_id=44,
+            name="AMSMappingOff",
+            mode="queue",
+            model="X1C",
+            access_code="12345678",
+            serial_suffix="391800044",
+            base_dir=tmp_path,
+            session_factory=mock_session_factory,
+            save_ams_mapping=False,
+        )
+
+        file_path = tmp_path / "test.3mf"
+        file_path.write_bytes(b"fake3mf")
+
+        await inst.on_print_command(
+            file_path.name,
+            {"command": "project_file", "ams_mapping": [4, -1, 12, -1]},
+        )
+
+        mock_archive = MagicMock()
+        mock_archive.id = 1
+        mock_archive.print_name = "test"
+
+        with (
+            patch(
+                "backend.app.api.routes.settings.get_setting",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "backend.app.services.archive.ArchiveService.archive_print",
+                new_callable=AsyncMock,
+                return_value=mock_archive,
+            ) as mock_archive_print,
+        ):
+            await inst._add_to_print_queue(file_path, "192.168.1.100")
+
+        assert len(added_items) == 1
+        item = added_items[0]
+        assert item.ams_mapping is not None
+        assert _json.loads(item.ams_mapping) == [4, -1, 12, -1]
+
+        # Toggle is off: the archive's print_data must NOT carry the mapping.
+        print_data = mock_archive_print.await_args.kwargs["print_data"]
+        assert print_data["ams_mapping"] is None
+
+    @pytest.mark.asyncio
+    async def test_add_to_print_queue_persists_ams_mapping_to_archive_when_toggle_on(self, tmp_path):
+        """With the per-VP `save_ams_mapping` toggle on, the slicer's AMS
+        pick must also be forwarded to `ArchiveService.archive_print` so it
+        gets promoted to `archive.extra_data.slicer_ams_mapping` and a later
+        reprint can reuse the exact physical spool.
+        """
+        import json as _json
+
+        from backend.app.services.virtual_printer.manager import VirtualPrinterInstance
+
+        added_items = []
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock(side_effect=added_items.append)
+        mock_db.commit = AsyncMock()
+        mock_session_factory = MagicMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_factory.return_value = mock_session_ctx
+
+        inst = VirtualPrinterInstance(
+            vp_id=45,
+            name="AMSMappingOn",
+            mode="queue",
+            model="X1C",
+            access_code="12345678",
+            serial_suffix="391800045",
+            base_dir=tmp_path,
+            session_factory=mock_session_factory,
+            save_ams_mapping=True,
+        )
+
+        file_path = tmp_path / "test.3mf"
+        file_path.write_bytes(b"fake3mf")
+
+        await inst.on_print_command(
+            file_path.name,
+            {"command": "project_file", "ams_mapping": [4, -1, 12, -1]},
+        )
+
+        mock_archive = MagicMock()
+        mock_archive.id = 1
+        mock_archive.print_name = "test"
+
+        with (
+            patch(
+                "backend.app.api.routes.settings.get_setting",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "backend.app.services.archive.ArchiveService.archive_print",
+                new_callable=AsyncMock,
+                return_value=mock_archive,
+            ) as mock_archive_print,
+        ):
+            await inst._add_to_print_queue(file_path, "192.168.1.100")
+
+        assert len(added_items) == 1
+        assert _json.loads(added_items[0].ams_mapping) == [4, -1, 12, -1]
+
+        print_data = mock_archive_print.await_args.kwargs["print_data"]
+        assert print_data["ams_mapping"] == [4, -1, 12, -1]
+
+    @pytest.mark.asyncio
+    async def test_add_to_print_queue_ignores_unresolved_ams_mapping_sentinel(self, tmp_path):
+        """#2589: an all -1 `ams_mapping` means the slicer's own race lost —
+        every slot unresolved. Must be dropped (queue item AND archive),
+        never trusted over a fresh scheduler-computed mapping.
+        """
+        from backend.app.services.virtual_printer.manager import VirtualPrinterInstance
+
+        added_items = []
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock(side_effect=added_items.append)
+        mock_db.commit = AsyncMock()
+        mock_session_factory = MagicMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_factory.return_value = mock_session_ctx
+
+        inst = VirtualPrinterInstance(
+            vp_id=46,
+            name="AMSMappingSentinel",
+            mode="queue",
+            model="X1C",
+            access_code="12345678",
+            serial_suffix="391800046",
+            base_dir=tmp_path,
+            session_factory=mock_session_factory,
+            save_ams_mapping=True,
+        )
+
+        file_path = tmp_path / "test.3mf"
+        file_path.write_bytes(b"fake3mf")
+
+        await inst.on_print_command(
+            file_path.name,
+            {"command": "project_file", "ams_mapping": [-1, -1, -1, -1]},
+        )
+
+        mock_archive = MagicMock()
+        mock_archive.id = 1
+        mock_archive.print_name = "test"
+
+        with (
+            patch(
+                "backend.app.api.routes.settings.get_setting",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "backend.app.services.archive.ArchiveService.archive_print",
+                new_callable=AsyncMock,
+                return_value=mock_archive,
+            ) as mock_archive_print,
+        ):
+            await inst._add_to_print_queue(file_path, "192.168.1.100")
+
+        assert len(added_items) == 1
+        assert added_items[0].ams_mapping is None
+        print_data = mock_archive_print.await_args.kwargs["print_data"]
+        assert print_data["ams_mapping"] is None
+
+    @pytest.mark.asyncio
     async def test_add_to_print_queue_nozzle_pick_replicated_across_plates(self, tmp_path, monkeypatch):
         """#1780 × #1697/#1188: a multi-plate Send All from BS must stamp the
         same nozzle_mapping on every plate's queue item, not only the first.
@@ -2185,6 +2381,59 @@ class TestVirtualPrinterInstance:
         assert "test.3mf" not in inst._recent_queue_items
 
 
+class TestExtractSlicerAmsMappingJson:
+    """Unit tests for `_extract_slicer_ams_mapping_json`, the pure-function
+    parser that pulls the slicer's own live-resolved AMS-slot pick out of a
+    captured project_file MQTT payload (see docstring in manager.py)."""
+
+    def _extract(self, data):
+        from backend.app.services.virtual_printer.manager import _extract_slicer_ams_mapping_json
+
+        return _extract_slicer_ams_mapping_json(data, "[test]")
+
+    def test_missing_field_returns_none(self):
+        assert self._extract({}) is None
+
+    def test_valid_int_list_returns_json(self):
+        import json as _json
+
+        result = self._extract({"ams_mapping": [4, -1, 12, -1]})
+        assert result is not None
+        assert _json.loads(result) == [4, -1, 12, -1]
+
+    def test_stringified_json_is_parsed(self):
+        import json as _json
+
+        result = self._extract({"ams_mapping": "[0, 1, 2]"})
+        assert result is not None
+        assert _json.loads(result) == [0, 1, 2]
+
+    def test_unparseable_string_returns_none(self):
+        assert self._extract({"ams_mapping": "not json"}) is None
+
+    def test_non_list_value_returns_none(self):
+        assert self._extract({"ams_mapping": 42}) is None
+
+    def test_empty_list_returns_none(self):
+        assert self._extract({"ams_mapping": []}) is None
+
+    def test_non_int_entries_return_none(self):
+        assert self._extract({"ams_mapping": [1, "two", 3]}) is None
+
+    def test_2589_all_unresolved_sentinel_returns_none(self):
+        """#2589: every slot -1 means the slicer's own resolution race
+        lost — never trust this over a fresh live computation."""
+        assert self._extract({"ams_mapping": [-1, -1, -1, -1]}) is None
+
+    def test_partially_resolved_mapping_is_kept(self):
+        import json as _json
+
+        # Only some slots resolved is still meaningful — keep it.
+        result = self._extract({"ams_mapping": [-1, 4, -1, -1]})
+        assert result is not None
+        assert _json.loads(result) == [-1, 4, -1, -1]
+
+
 class TestVirtualPrinterManager:
     """Tests for VirtualPrinterManager orchestrator."""
 
@@ -2358,6 +2607,7 @@ class TestVirtualPrinterManager:
             "auto_dispatch": True,
             "tailscale_disabled": True,  # Opt-in default (#1070 UX fix)
             "queue_force_color_match": False,  # default — must be explicit so MagicMock truthiness doesn't trip the change detector
+            "save_ams_mapping": False,  # same reason as above
             "gcode_injection": False,  # same reason as above
             "position": 0,
         }

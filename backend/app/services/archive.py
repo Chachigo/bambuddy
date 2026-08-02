@@ -1253,6 +1253,18 @@ class ArchiveService:
         # Merge with print data from MQTT
         if print_data:
             metadata["_print_data"] = print_data
+            # Promote the slicer's own live-resolved AMS-slot pick (captured
+            # from the project_file MQTT command by the VP-queue path — see
+            # `_extract_slicer_ams_mapping_json` in virtual_printer/manager.py)
+            # to a stable top-level extra_data key. Lets a later reprint reuse
+            # the exact tray the user picked/BambuStudio auto-matched at slice
+            # time instead of the scheduler re-deriving one from just the
+            # file's static type/color, which can land on the wrong physical
+            # spool when that match isn't unique. Top-level (not nested under
+            # the `_print_data` diagnostic bag) so API consumers have a single
+            # stable path: `archive.extra_data.slicer_ams_mapping`.
+            if print_data.get("ams_mapping"):
+                metadata["slicer_ams_mapping"] = print_data["ams_mapping"]
 
         # Determine status and timestamps
         status = print_data.get("status", "completed") if print_data else "archived"

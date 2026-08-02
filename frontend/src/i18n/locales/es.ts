@@ -935,6 +935,8 @@ export default {
       uploadedBy: 'Subido por',
       noPermissionReprint: 'No tiene permiso para reimprimir',
       noFileForReprint: 'No hay archivo 3MF disponible — no se pudo descargar el archivo de la impresora cuando se registró la impresión',
+      slicerAmsMapping: 'Mapeo de AMS guardado',
+      slicerAmsMappingTooltip: 'Este archivo tiene un mapeo de ranuras AMS guardado desde el slicer',
       noPermissionEdit: 'No tiene permiso para editar archivos',
       noPermissionDelete: 'No tiene permiso para eliminar archivos',
       openInBambuStudio: 'Abrir en el laminador',
@@ -1143,6 +1145,10 @@ export default {
       lineItem: 'Slot {{slot}}: necesita {{required}} g, quedan {{remaining}} g',
       unknown: 'desconocido',
       printAnyway: 'Imprimir de todos modos',
+    },
+    slicerAmsMapping: {
+      rowBadge: 'Ranura AMS guardada desde el slicer',
+      rowTooltip: 'Este archivo conserva la ranura AMS exacta que eligió el slicer al laminar/enviar. Una reimpresión reutiliza ese carrete físico en lugar de volver a adivinar por tipo/color.',
     },
     title: 'Cola de impresión',
     subtitle: 'Programe y gestione sus trabajos de impresión',
@@ -4627,6 +4633,10 @@ export default {
     selectPrinter: 'Seleccionar impresora',
     selectPlate: 'Seleccionar cama',
     filamentMapping: 'Mapeo de filamentos',
+    useArchiveMapping: 'Mapeo',
+    useArchiveMappingTooltip: 'Selecciona todas las ranuras a partir del mapeo de AMS guardado con este archivo (del slicer), en lugar de emparejar por tipo/color.',
+    clickToChangeSlot: 'Haga clic para cambiar la asignación de ranura',
+    reRead: 'Releer',
     plateN: 'Cama {{n}}',
     plateFilamentsUnreadable: 'No se han podido leer los filamentos de una cama seleccionada, por lo que no se puede asignar. Deselecciónala para encolar las demás.',
     totalCost: 'Coste total:',
@@ -5148,6 +5158,10 @@ export default {
     queueForceColorMatch: {
       title: 'Forzar la coincidencia de color',
       description: 'Negarse a enviar a una impresora que no tiene cargados el tipo y el color exactos de filamento. Desactivado de forma predeterminada — sin esto, la cola usa la coincidencia solo por modelo y puede elegir una impresora con el color equivocado cargado.',
+    },
+    saveAmsMapping: {
+      title: 'Guardar mapeo de AMS',
+      description: 'Guarda en el archivo la selección de ranura AMS propia del slicer (del comando MQTT project_file), de modo que una reimpresión posterior reutilice el mismo carrete físico en lugar de volver a derivarlo del tipo/color del archivo. Desactivado de forma predeterminada.',
     },
     gcodeInjection: {
       title: 'Inyección de G-code',

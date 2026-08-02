@@ -935,6 +935,8 @@ export default {
       uploadedBy: '上传者',
       noPermissionReprint: '您没有重新打印的权限',
       noFileForReprint: '无可用的 3MF 文件 — 打印记录时无法从打印机下载该文件',
+      slicerAmsMapping: '已保存 AMS 映射',
+      slicerAmsMappingTooltip: '此存档已保存来自切片软件的 AMS 槽位映射',
       noPermissionEdit: '您没有编辑归档的权限',
       noPermissionDelete: '您没有删除归档的权限',
       openInBambuStudio: '在切片软件中打开',
@@ -1143,6 +1145,10 @@ export default {
       lineItem: '插槽 {{slot}}：需要 {{required}} g，剩余 {{remaining}} g',
       unknown: '未知',
       printAnyway: '仍要打印',
+    },
+    slicerAmsMapping: {
+      rowBadge: '已保存来自切片软件的 AMS 槽位',
+      rowTooltip: '此存档保留了切片/发送时切片软件选择的确切 AMS 槽位。重新打印会复用该实体线材，而不是根据类型/颜色重新猜测。',
     },
     title: '打印队列',
     subtitle: '排程和管理您的打印任务',
@@ -4607,6 +4613,10 @@ export default {
     selectPrinter: '选择打印机',
     selectPlate: '选择板',
     filamentMapping: '耗材映射',
+    useArchiveMapping: '映射',
+    useArchiveMappingTooltip: '从此存档保存的 AMS 映射（来自切片软件）中选择所有槽位，而不是按类型/颜色匹配。',
+    clickToChangeSlot: '点击更改槽位分配',
+    reRead: '重新读取',
     plateN: '板 {{n}}',
     plateFilamentsUnreadable: '无法读取所选盘的耗材信息，因此无法进行映射。取消选择该盘即可将其余盘加入队列。',
     totalCost: '总成本：',
@@ -5128,6 +5138,10 @@ export default {
     queueForceColorMatch: {
       title: '强制颜色匹配',
       description: '拒绝派发到没有完全相同耗材类型和颜色的打印机。默认关闭 — 不启用时，队列仅按型号匹配，可能选到颜色错误的打印机。',
+    },
+    saveAmsMapping: {
+      title: '保存 AMS 映射',
+      description: '将切片软件自身选择的 AMS 槽位（来自 project_file MQTT 命令）保存到存档中，以便之后重新打印时复用同一卷实体线材，而不是根据文件的类型/颜色重新推导。默认关闭。',
     },
     gcodeInjection: {
       title: 'G-code 注入',

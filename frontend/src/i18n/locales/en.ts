@@ -939,6 +939,8 @@ export default {
       uploadedBy: 'Uploaded By',
       noPermissionReprint: 'You do not have permission to reprint',
       noFileForReprint: 'No 3MF file available — the file could not be downloaded from the printer when the print was recorded',
+      slicerAmsMapping: 'AMS mapping saved',
+      slicerAmsMappingTooltip: 'This archive has a saved AMS slot mapping from the slicer',
       noPermissionEdit: 'You do not have permission to edit archives',
       noPermissionDelete: 'You do not have permission to delete archives',
       openInBambuStudio: 'Open in Slicer',
@@ -1154,6 +1156,10 @@ export default {
       lineItem: 'Slot {{slot}}: needs {{required}} g, {{remaining}} g remaining',
       unknown: 'unknown',
       printAnyway: 'Print Anyway',
+    },
+    slicerAmsMapping: {
+      rowBadge: 'AMS slot saved from slicer',
+      rowTooltip: 'This archive carries the exact AMS slot the slicer picked when it was sliced/sent. A reprint reuses that physical spool instead of re-guessing from type/color.',
     },
     // Print modal
     editQueueItem: 'Edit Queue Item',
@@ -4662,6 +4668,10 @@ export default {
     selectPrinter: 'Select Printer',
     selectPlate: 'Select Plate',
     filamentMapping: 'Filament Mapping',
+    useArchiveMapping: 'Mapping',
+    useArchiveMappingTooltip: 'Select every slot from the AMS mapping saved with this archive (from the slicer), instead of matching by type/color.',
+    clickToChangeSlot: 'Click to change slot assignment',
+    reRead: 'Re-read',
     plateN: 'Plate {{n}}',
     plateFilamentsUnreadable: 'The filaments of a selected plate could not be read, so it can\'t be mapped. Deselect it to queue the others.',
     totalCost: 'Total cost:',
@@ -5183,6 +5193,10 @@ export default {
     queueForceColorMatch: {
       title: 'Force color match',
       description: 'Refuse to dispatch onto a printer that does not have the exact filament type and color loaded. Off by default — without this, the queue uses model-only matching and may pick a printer with the wrong color loaded.',
+    },
+    saveAmsMapping: {
+      title: 'Save AMS mapping',
+      description: 'Persist the slicer\'s own AMS-slot pick (from the project_file MQTT command) onto the archive, so a later reprint reuses the exact physical spool instead of re-deriving one from the file\'s type/color. Off by default.',
     },
     gcodeInjection: {
       title: 'G-code injection',

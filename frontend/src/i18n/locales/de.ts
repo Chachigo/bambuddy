@@ -935,6 +935,8 @@ export default {
       uploadedBy: 'Hochgeladen von',
       noPermissionReprint: 'Sie haben keine Berechtigung, erneut zu drucken',
       noFileForReprint: 'Keine 3MF-Datei verfügbar — die Datei konnte beim Aufzeichnen des Drucks nicht vom Drucker heruntergeladen werden',
+      slicerAmsMapping: 'AMS-Zuordnung gespeichert',
+      slicerAmsMappingTooltip: 'Für dieses Archiv ist eine gespeicherte AMS-Zuordnung vom Slicer vorhanden',
       noPermissionEdit: 'Sie haben keine Berechtigung, Archive zu bearbeiten',
       noPermissionDelete: 'Sie haben keine Berechtigung, Archive zu löschen',
       openInBambuStudio: 'Im Slicer öffnen',
@@ -1143,6 +1145,10 @@ export default {
       lineItem: 'Slot {{slot}}: benoetigt {{required}} g, {{remaining}} g verbleibend',
       unknown: 'unbekannt',
       printAnyway: 'Trotzdem drucken',
+    },
+    slicerAmsMapping: {
+      rowBadge: 'AMS-Steckplatz vom Slicer gespeichert',
+      rowTooltip: 'Dieses Archiv enthält den genauen AMS-Steckplatz, den der Slicer beim Slicen/Senden ausgewählt hat. Ein erneuter Druck verwendet diese physische Spule, statt sie erneut anhand von Typ/Farbe zu erraten.',
     },
     title: 'Druckwarteschlange',
     subtitle: 'Planen und verwalten Sie Ihre Druckaufträge',
@@ -4619,6 +4625,10 @@ export default {
     selectPrinter: 'Drucker auswählen',
     selectPlate: 'Platte auswählen',
     filamentMapping: 'Filamentzuordnung',
+    useArchiveMapping: 'Zuordnung',
+    useArchiveMappingTooltip: 'Jeden Steckplatz aus der mit diesem Archiv gespeicherten AMS-Zuordnung (vom Slicer) auswählen, anstatt nach Typ/Farbe abzugleichen.',
+    clickToChangeSlot: 'Klicken, um die Steckplatzzuweisung zu ändern',
+    reRead: 'Neu einlesen',
     plateN: 'Platte {{n}}',
     plateFilamentsUnreadable: 'Die Filamente einer ausgewählten Platte konnten nicht gelesen werden, sie lässt sich daher nicht zuordnen. Wähle sie ab, um die anderen einzureihen.',
     totalCost: 'Gesamtkosten:',
@@ -5139,6 +5149,10 @@ export default {
     queueForceColorMatch: {
       title: 'Farbabgleich erzwingen',
       description: 'Druckaufträge nur an Drucker senden, bei denen der genaue Filament-Typ und die genaue Farbe geladen sind. Standardmäßig deaktiviert — ohne diese Option verwendet die Warteschlange nur den Drucker-Modell-Abgleich und wählt möglicherweise einen Drucker mit der falschen Farbe.',
+    },
+    saveAmsMapping: {
+      title: 'AMS-Zuordnung speichern',
+      description: 'Speichert die vom Slicer selbst gewählte AMS-Steckplatz-Zuordnung (aus dem MQTT-Befehl project_file) im Archiv, sodass ein späterer erneuter Druck dieselbe physische Spule verwendet, anstatt sie erneut aus Typ/Farbe der Datei abzuleiten. Standardmäßig deaktiviert.',
     },
     gcodeInjection: {
       title: 'G-code-Injektion',
