@@ -5027,6 +5027,7 @@ export default {
       flowType: '流量類型',
       highFlow: '高流量',
       standard: '標準',
+      flowTypeNotReported: '印表機未回報',
       nozzleSize: '噴嘴尺寸',
       extruder: '擠出機',
       extruders: '擠出機',

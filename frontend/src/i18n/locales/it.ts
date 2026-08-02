@@ -5027,6 +5027,7 @@ export default {
       flowType: 'Tipo flow',
       highFlow: 'Alto flusso',
       standard: 'Standard',
+      flowTypeNotReported: 'Non riportato dalla stampante',
       nozzleSize: 'Dimensione ugello',
       extruder: 'Estrusore',
       extruders: 'Estrusori',

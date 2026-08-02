@@ -42,16 +42,21 @@ const truncateK = (value: string) => {
   return (Math.trunc(num * 1000) / 1000).toFixed(3);
 };
 
-// Get flow type label from nozzle_id (e.g., "HH00-0.4" -> "HF", "HS00-0.4" -> "S")
+// Get flow type label from nozzle_id (e.g., "HH00-0.4" -> "HF", "HS00-0.4" -> "S").
+// Single-nozzle printers omit nozzle_id from their extrusion_cali_get response
+// entirely (#1748), and there is no other field to recover the flow type from —
+// so return '' and let the caller show nothing rather than assert "Standard".
 const getFlowTypeLabel = (nozzleId: string) => {
   if (nozzleId.startsWith('HH')) return 'HF';  // High Flow
-  return 'S';  // Standard Flow (default)
+  if (nozzleId.startsWith('HS')) return 'S';   // Standard Flow
+  return '';  // not reported by the printer
 };
 
-// Extract nozzle type prefix from nozzle_id (e.g., "HH00-0.4" -> "HH00")
+// Extract nozzle type prefix from nozzle_id (e.g., "HH00-0.4" -> "HH00").
+// '' when the printer reported no nozzle_id — see getFlowTypeLabel.
 const getNozzleTypePrefix = (nozzleId: string) => {
   const match = nozzleId.match(/^([A-Z]{2}\d{2})/);
-  return match ? match[1] : 'HH00';
+  return match ? match[1] : '';
 };
 
 // Extract filament name from profile name (e.g., "High Flow_Devil Design PLA Basic" -> "Devil Design PLA Basic")
@@ -120,7 +125,7 @@ function KProfileCard({ profile, onEdit, onCopy, selectionMode, isSelected, onTo
             </span>
           )}
           <span className="text-xs text-bambu-gray whitespace-nowrap">
-            {flowType} {diameter}
+            {[flowType, diameter].filter(Boolean).join(' ')}
           </span>
         </div>
         {note && (
@@ -183,8 +188,12 @@ function KProfileModal({
   );
   const [filamentId, setFilamentId] = useState(profile?.filament_id || '');
   // Split nozzle into type and diameter
+  // Both selects are read-only while editing: they report what the printer
+  // holds, they don't set it. '' means the printer reported no nozzle_id, which
+  // single-nozzle models never do (#1748) — showing "High Flow" there was the
+  // UI inventing a value the printer never sent.
   const [nozzleType, setNozzleType] = useState(
-    profile?.nozzle_id ? getNozzleTypePrefix(profile.nozzle_id) : 'HH00'
+    profile ? getNozzleTypePrefix(profile.nozzle_id) : 'HH00'
   );
   const [modalDiameter, setModalDiameter] = useState(
     profile?.nozzle_diameter || nozzleDiameter
@@ -316,14 +325,22 @@ function KProfileModal({
     // Combine nozzle type and diameter into nozzle_id (e.g., "HH00-0.4")
     const nozzleId = `${nozzleType}-${modalDiameter}`;
 
+    // An edit is delete + re-add on single-nozzle printers, so the nozzle
+    // fields have to survive the round trip untouched — both selects are
+    // disabled while editing. Rebuilding them from the selects is what let a
+    // 0.6mm profile come back as "HH00-0.4" once the parse defaults had
+    // stamped it 0.4 (#1748); pass through what the printer reported instead.
+    const editNozzleId = profile ? profile.nozzle_id : nozzleId;
+    const editDiameter = profile ? profile.nozzle_diameter : modalDiameter;
+
     // For editing or single extruder: just save one profile
     if (profile || selectedExtruders.length === 1) {
       const payload = {
         name: name,
         k_value: formattedKValue,
         filament_id: filamentId,
-        nozzle_id: nozzleId,
-        nozzle_diameter: modalDiameter,
+        nozzle_id: editNozzleId,
+        nozzle_diameter: editDiameter,
         extruder_id: profile ? profile.extruder_id : selectedExtruders[0],
         setting_id: profile?.setting_id,
         slot_id: profile?.slot_id ?? 0,
@@ -508,7 +525,7 @@ function KProfileModal({
                     if (!profile && filamentId && !name) {
                       const selectedFilament = knownFilaments.find(f => f.id === filamentId);
                       if (selectedFilament) {
-                        const flowLabel = newNozzleType === 'HS00' ? 'HF' : 'S';
+                        const flowLabel = newNozzleType === 'HH00' ? 'HF' : 'S';
                         setName(`${flowLabel} ${selectedFilament.name}`);
                       }
                     }
@@ -516,6 +533,12 @@ function KProfileModal({
                   disabled={!!profile}
                   className={`w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none ${profile ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
+                  {/* Only reachable when editing a profile the printer
+                      reported without a nozzle_id — the select is disabled
+                      there, so this is a readout, not a choice. */}
+                  {nozzleType === '' && (
+                    <option value="">{t('kProfiles.modal.flowTypeNotReported')}</option>
+                  )}
                   <option value="HH00">{t('kProfiles.modal.highFlow')}</option>
                   <option value="HS00">{t('kProfiles.modal.standard')}</option>
                 </select>
@@ -865,6 +888,21 @@ export function KProfilesView() {
     return builtinFilamentMap.get(profile.filament_id) || extractFilamentName(profile.name);
   }, [builtinFilamentMap]);
 
+  // Whether the printer reports a nozzle_id at all. Single-nozzle models omit
+  // it from every extrusion_cali_get entry (#1748), so a flow-type filter there
+  // could only ever match nothing — hide it instead of offering a control that
+  // silently empties the list.
+  const hasFlowTypeInfo = React.useMemo(
+    () => (kprofiles?.profiles ?? []).some((p) => getFlowTypeLabel(p.nozzle_id) !== ''),
+    [kprofiles?.profiles]
+  );
+
+  // Don't strand the list behind a filter whose control just disappeared
+  // (switching printers, or a refetch that no longer carries nozzle ids).
+  useEffect(() => {
+    if (!hasFlowTypeInfo) setFlowTypeFilter('all');
+  }, [hasFlowTypeInfo]);
+
   // Filter and sort profiles
   // Note: nozzle diameter filtering is done server-side via MQTT request
   const filteredProfiles = React.useMemo(() => {
@@ -1002,7 +1040,10 @@ export function KProfilesView() {
               name: p.name,
               k_value: parseFloat(p.k_value).toFixed(6),
               filament_id: p.filament_id,
-              nozzle_id: p.nozzle_id || `HH00-${nozzleDiameter}`,
+              // Keep an absent nozzle_id absent. Exports from single-nozzle
+              // printers carry none (#1748), and HH00 vs HS00 is a coin flip
+              // we'd be writing to the printer as if it were fact.
+              nozzle_id: p.nozzle_id || '',
               nozzle_diameter: p.nozzle_diameter || nozzleDiameter,
               extruder_id: p.extruder_id ?? 0,
               slot_id: 0, // Always create new
@@ -1248,17 +1289,19 @@ export function KProfilesView() {
             </select>
           </div>
         )}
-        <div className="w-32">
-          <select
-            value={flowTypeFilter}
-            onChange={(e) => setFlowTypeFilter(e.target.value as FlowTypeFilter)}
-            className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
-          >
-            <option value="all">{t('kProfiles.allFlow')}</option>
-            <option value="hf">{t('kProfiles.hfOnly')}</option>
-            <option value="s">{t('kProfiles.sOnly')}</option>
-          </select>
-        </div>
+        {hasFlowTypeInfo && (
+          <div className="w-32">
+            <select
+              value={flowTypeFilter}
+              onChange={(e) => setFlowTypeFilter(e.target.value as FlowTypeFilter)}
+              className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
+            >
+              <option value="all">{t('kProfiles.allFlow')}</option>
+              <option value="hf">{t('kProfiles.hfOnly')}</option>
+              <option value="s">{t('kProfiles.sOnly')}</option>
+            </select>
+          </div>
+        )}
         <div className="w-32">
           <select
             value={sortOption}

@@ -5038,6 +5038,7 @@ export default {
       flowType: 'Flusstyp',
       highFlow: 'Hoher Durchfluss',
       standard: 'Standard',
+      flowTypeNotReported: 'Vom Drucker nicht gemeldet',
       nozzleSize: 'Düsengröße',
       extruder: 'Extruder',
       extruders: 'Extruder',

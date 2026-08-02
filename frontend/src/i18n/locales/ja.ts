@@ -5039,6 +5039,7 @@ export default {
       flowType: 'フロータイプ',
       highFlow: 'ハイフロー',
       standard: 'スタンダード',
+      flowTypeNotReported: 'プリンターから報告なし',
       nozzleSize: 'ノズルサイズ',
       extruder: 'エクストルーダー',
       extruders: 'エクストルーダー',

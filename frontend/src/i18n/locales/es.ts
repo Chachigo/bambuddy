@@ -5047,6 +5047,7 @@ export default {
       flowType: 'Tipo de flujo',
       highFlow: 'Flujo alto',
       standard: 'Estándar',
+      flowTypeNotReported: 'No informado por la impresora',
       nozzleSize: 'Tamaño de la boquilla',
       extruder: 'Extrusor',
       extruders: 'Extrusores',

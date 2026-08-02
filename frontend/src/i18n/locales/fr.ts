@@ -5028,6 +5028,7 @@ export default {
       flowType: 'Type de débit',
       highFlow: 'Haut Débit (HF)',
       standard: 'Standard',
+      flowTypeNotReported: 'Non communiqué par l\'imprimante',
       nozzleSize: 'Taille buse',
       extruder: 'Extrudeur',
       extruders: 'Extrudeurs',

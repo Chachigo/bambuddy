@@ -4770,6 +4770,7 @@ export default {
       flowType: "Тип потока",
       highFlow: "Высокопоточный",
       standard: "Стандартный",
+      flowTypeNotReported: "Принтер не сообщает",
       nozzleSize: "Диаметр сопла",
       extruder: "Экструдер",
       extruders: "Экструдеры",

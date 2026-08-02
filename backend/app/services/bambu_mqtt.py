@@ -812,10 +812,12 @@ class BambuMQTTClient:
         # so that missing-serial / missing-firmware warnings fire only once per connection.
         self._ams_version_warned: set[tuple[int | str, str]] = set()
 
-        # K-profile command tracking
+        # K-profile command tracking. One entry per in-flight extrusion_cali_get,
+        # keyed by the sequence_id we sent, so two concurrent requests for
+        # different nozzle sizes can't steal each other's response (#1748).
+        # Value: {"nozzle": str, "event": asyncio.Event, "profiles": list | None}.
         self._sequence_id: int = 0
-        self._pending_kprofile_response: asyncio.Event | None = None
-        self._kprofile_response_data: list | None = None
+        self._pending_kprofile_requests: dict[str, dict] = {}
 
         # Xcam hold timers - OrcaSlicer pattern: ignore incoming data for 3 seconds after command
         # Key: module_name, Value: timestamp when command was sent
@@ -5412,98 +5414,120 @@ class BambuMQTTClient:
             self._drying_targets.pop(ams_id, None)
         return True
 
+    @staticmethod
+    def _parse_kprofile_entries(filaments: list, response_nozzle: str | None, log_errors: bool) -> list[KProfile]:
+        """Build KProfile objects from an ``extrusion_cali_get`` filaments array.
+
+        The printer reports ``nozzle_diameter`` **only on the response
+        envelope** — the per-filament entries carry just setting_id,
+        filament_id, name, k_value, n_coef and cali_idx. Defaulting the
+        per-entry lookup to "0.4" therefore stamped every profile 0.4mm on
+        single-nozzle printers regardless of the installed nozzle (#1748),
+        which broke the K-Profiles display and, worse, the cali_idx cascade
+        in the inventory/Spoolman assign paths that matches on
+        nozzle_diameter. Fall back to the envelope value instead, and only
+        to "0.4" when the envelope has none either.
+
+        ``or`` rather than a dict default on purpose: it also covers an entry
+        that carries the key with an empty value, and stops ``str()`` turning
+        a missing envelope value into the literal "None".
+        """
+        profiles: list[KProfile] = []
+        for i, f in enumerate(filaments):
+            if not isinstance(f, dict):
+                continue
+            try:
+                profiles.append(
+                    KProfile(
+                        # cali_idx is the actual slot/calibration index from the printer
+                        slot_id=f.get("cali_idx", i),
+                        extruder_id=int(f.get("extruder_id", 0)),
+                        nozzle_id=str(f.get("nozzle_id", "")),
+                        nozzle_diameter=str(f.get("nozzle_diameter") or response_nozzle or "0.4"),
+                        filament_id=str(f.get("filament_id", "")),
+                        name=str(f.get("name", "")),
+                        k_value=str(f.get("k_value", "0.000000")),
+                        n_coef=str(f.get("n_coef", "0.000000")),
+                        ams_id=int(f.get("ams_id", 0)),
+                        tray_id=int(f.get("tray_id", -1)),
+                        setting_id=f.get("setting_id"),
+                    )
+                )
+            except (ValueError, TypeError) as e:
+                # Skip malformed entries; the remaining profiles stay usable.
+                # Unsolicited broadcasts arrive constantly, so only a response
+                # someone is actually waiting on is worth a warning.
+                if log_errors:
+                    logger.warning("Failed to parse K-profile: %s", e)
+                else:
+                    logger.debug("Failed to parse K-profile from broadcast: %s", e)
+        return profiles
+
     def _handle_kprofile_response(self, data: dict):
         """Handle K-profile response from printer."""
         response_nozzle = data.get("nozzle_diameter")
-        response_seq_id = data.get("sequence_id", "?")
+        response_seq_id = str(data.get("sequence_id", ""))
         filaments = data.get("filaments", [])
-        expected_nozzle = getattr(self, "_expected_kprofile_nozzle", None)
-        has_pending_request = self._pending_kprofile_response is not None
 
-        # Log all incoming responses when we have a pending request (for debugging)
-        if has_pending_request:
+        # Snapshot the map: the asyncio thread adds and removes entries while
+        # this MQTT callback thread walks it.
+        pending = dict(self._pending_kprofile_requests)
+        request = pending.get(response_seq_id)
+
+        if request is None and pending:
+            # Firmware that doesn't echo our sequence_id still has to be
+            # served, so fall back to the pre-#1748 rule of matching on the
+            # nozzle size. Only requests still waiting are eligible, and the
+            # sequence_id lookup above has already claimed any response that
+            # identifies itself, so this can no longer hand request A's
+            # answer to request B when both are in flight.
+            request = next(
+                (r for r in pending.values() if r["nozzle"] == response_nozzle and r["profiles"] is None),
+                None,
+            )
+
+        if pending:
             logger.info(
-                f"[{self.serial_number}] K-profile response: nozzle={response_nozzle}, "
-                f"seq_id={response_seq_id}, {len(filaments)} profiles, expected={expected_nozzle}"
+                "[%s] K-profile response: nozzle=%s, seq_id=%s, %d profiles, matched=%s",
+                self.serial_number,
+                response_nozzle,
+                response_seq_id or "?",
+                len(filaments),
+                request is not None,
             )
 
-        # If we have a pending request, only accept responses with matching nozzle_diameter
-        # The printer broadcasts 0.4mm profiles constantly - we need to wait for the actual response
-        if has_pending_request and expected_nozzle and response_nozzle != expected_nozzle:
-            # Ignore this broadcast, keep waiting for matching response
+        if request is None and pending:
+            # A request is outstanding and this isn't its answer. The printer
+            # broadcasts extrusion_cali_get unsolicited, so letting this
+            # through would replace state.kprofiles with another nozzle's
+            # profiles while the caller is still waiting.
             logger.debug(
-                f"[{self.serial_number}] Ignoring broadcast: got nozzle={response_nozzle}, waiting for {expected_nozzle}"
+                "[%s] Ignoring unmatched K-profile response: nozzle=%s, seq_id=%s",
+                self.serial_number,
+                response_nozzle,
+                response_seq_id or "?",
             )
             return
 
-        # If no pending request, this is just a broadcast - update state silently and return early
-        if not has_pending_request:
-            # Still parse profiles to keep state updated, but don't log
-            profiles = []
-            for f in filaments:
-                if isinstance(f, dict):
-                    try:
-                        cali_idx = f.get("cali_idx", 0)
-                        profiles.append(
-                            KProfile(
-                                slot_id=cali_idx,
-                                extruder_id=int(f.get("extruder_id", 0)),
-                                nozzle_id=str(f.get("nozzle_id", "")),
-                                nozzle_diameter=str(f.get("nozzle_diameter", "0.4")),
-                                filament_id=str(f.get("filament_id", "")),
-                                name=str(f.get("name", "")),
-                                k_value=str(f.get("k_value", "0.000000")),
-                                n_coef=str(f.get("n_coef", "0.000000")),
-                                ams_id=int(f.get("ams_id", 0)),
-                                tray_id=int(f.get("tray_id", -1)),
-                                setting_id=f.get("setting_id"),
-                            )
-                        )
-                    except (ValueError, TypeError):
-                        pass  # Skip malformed K-profile entries; remaining profiles still usable
-            self.state.kprofiles = profiles
+        profiles = self._parse_kprofile_entries(filaments, response_nozzle, log_errors=request is not None)
+        self.state.kprofiles = profiles
+
+        if request is None:
+            # Unsolicited broadcast with nothing in flight: state is refreshed,
+            # nobody to wake.
             return
 
-        profiles = []
+        logger.info("[%s] Got %s K-profiles for nozzle=%s", self.serial_number, len(profiles), response_nozzle)
+        request["profiles"] = profiles
 
-        for i, f in enumerate(filaments):
-            if isinstance(f, dict):
-                try:
-                    # cali_idx is the actual slot/calibration index from the printer
-                    cali_idx = f.get("cali_idx", i)
-                    profiles.append(
-                        KProfile(
-                            slot_id=cali_idx,
-                            extruder_id=int(f.get("extruder_id", 0)),
-                            nozzle_id=str(f.get("nozzle_id", "")),
-                            nozzle_diameter=str(f.get("nozzle_diameter", "0.4")),
-                            filament_id=str(f.get("filament_id", "")),
-                            name=str(f.get("name", "")),
-                            k_value=str(f.get("k_value", "0.000000")),
-                            n_coef=str(f.get("n_coef", "0.000000")),
-                            ams_id=int(f.get("ams_id", 0)),
-                            tray_id=int(f.get("tray_id", -1)),
-                            setting_id=f.get("setting_id"),
-                        )
-                    )
-                except (ValueError, TypeError) as e:
-                    logger.warning("Failed to parse K-profile: %s", e)
-
-        self.state.kprofiles = profiles
-        self._kprofile_response_data = profiles
-
-        # Signal that we received the response (only if we were waiting for one)
-        # Use thread-safe method since MQTT callbacks run in a different thread
-        # Capture in local var to avoid TOCTOU race: asyncio thread can clear
-        # self._pending_kprofile_response between the check and the .set() call
-        event = self._pending_kprofile_response
-        if event:
-            logger.info("[%s] Got %s K-profiles for nozzle=%s", self.serial_number, len(profiles), response_nozzle)
-            if self._loop and self._loop.is_running():
-                self._loop.call_soon_threadsafe(event.set)
-            else:
-                # Fallback for when loop is not available
-                event.set()
+        # Signal the waiter. Use the thread-safe path since MQTT callbacks run
+        # in a different thread than the event loop.
+        event = request["event"]
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(event.set)
+        else:
+            # Fallback for when loop is not available
+            event.set()
 
     async def get_kprofiles(
         self, nozzle_diameter: str = "0.4", timeout: float = 5.0, max_retries: int = 3
@@ -5533,11 +5557,13 @@ class BambuMQTTClient:
             return []
 
         for attempt in range(max_retries):
-            # Set up response event for this attempt
+            # Register this attempt under its own sequence_id so a concurrent
+            # request for a different nozzle size can't consume its response
+            # (#1748) — the pending map is keyed by exactly the id we send.
             self._sequence_id += 1
-            self._pending_kprofile_response = asyncio.Event()
-            self._kprofile_response_data = None
-            self._expected_kprofile_nozzle = nozzle_diameter  # Track which nozzle response we expect
+            seq_id = str(self._sequence_id)
+            request: dict = {"nozzle": nozzle_diameter, "event": asyncio.Event(), "profiles": None}
+            self._pending_kprofile_requests[seq_id] = request
 
             # Send the command with nozzle_diameter filter
             command = {
@@ -5545,20 +5571,20 @@ class BambuMQTTClient:
                     "command": "extrusion_cali_get",
                     "filament_id": "",
                     "nozzle_diameter": nozzle_diameter,
-                    "sequence_id": str(self._sequence_id),
+                    "sequence_id": seq_id,
                 }
             }
 
             logger.info(
-                f"[{self.serial_number}] Requesting K-profiles for nozzle_diameter={nozzle_diameter} (attempt {attempt + 1}/{max_retries})"
+                f"[{self.serial_number}] Requesting K-profiles for nozzle_diameter={nozzle_diameter} (attempt {attempt + 1}/{max_retries}, seq_id={seq_id})"
             )
             logger.debug("[%s] K-profile request JSON: %s", self.serial_number, json.dumps(command))
-            self._client.publish(self.topic_publish, json.dumps(command), qos=1)
 
-            # Wait for response (response handler already filters by nozzle_diameter)
+            # Wait for the response (the handler matches it back to this entry)
             try:
-                await asyncio.wait_for(self._pending_kprofile_response.wait(), timeout=timeout)
-                profiles = self._kprofile_response_data or []
+                self._client.publish(self.topic_publish, json.dumps(command), qos=1)
+                await asyncio.wait_for(request["event"].wait(), timeout=timeout)
+                profiles = request["profiles"] or []
                 logger.info(
                     f"[{self.serial_number}] Got {len(profiles)} K-profiles for nozzle={nozzle_diameter} on attempt {attempt + 1}"
                 )
@@ -5571,8 +5597,7 @@ class BambuMQTTClient:
                     # Brief delay before retry
                     await asyncio.sleep(0.5)
             finally:
-                self._pending_kprofile_response = None
-                self._expected_kprofile_nozzle = None
+                self._pending_kprofile_requests.pop(seq_id, None)
 
         logger.error("[%s] Failed to get K-profiles after %s attempts", self.serial_number, max_retries)
         return []
