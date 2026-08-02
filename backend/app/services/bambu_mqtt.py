@@ -3023,7 +3023,25 @@ class BambuMQTTClient:
                 )
 
         if "layer_num" in data:
-            new_layer = int(data["layer_num"])
+            try:
+                new_layer = int(data["layer_num"])
+            except (TypeError, ValueError):
+                # Contained for the same reason as `total_layer_num` above: an
+                # exception raised here escapes `_update_state` and paho
+                # re-raises it on the network thread. Losing this frame would
+                # also lose the print-start and completion detection further
+                # down, which is worse than losing a layer number.
+                #
+                # Held at the last known layer rather than substituted with 0:
+                # a fabricated 0 reads as the firmware's cancel reset, which
+                # would move `_last_valid_layer_num` and show layer 0 in the UI
+                # until the next good frame.
+                logger.debug(
+                    "[%s] ignoring unusable layer_num: %r",
+                    self.serial_number,
+                    data["layer_num"],
+                )
+                new_layer = self.state.layer_num
             old_layer = self.state.layer_num
             # Save last non-zero layer for usage tracking (firmware resets to 0 on cancel)
             if old_layer > 0:

@@ -280,17 +280,29 @@ class PrintScheduler:
         # event-loop thread, so this dict needs no lock.
         # item_id -> (task, printer_id)
         self._inflight: dict[int, tuple[asyncio.Task, int | None]] = {}
+        # Expected prints registered by `_start_print` that have not yet had a
+        # print command sent. Populated at registration, dropped once
+        # `start_print()` succeeds, and rolled back by `_dispatch_one` on every
+        # other exit. Same threading argument as `_inflight` above: one
+        # sequential caller, callbacks on the same loop, so no lock.
+        # item_id -> (printer_id, remote_filename, archive_id)
+        self._unconfirmed_expected_print: dict[int, tuple[int, str, int]] = {}
 
     async def run(self):
         """Main loop - check queue every interval."""
         self._running = True
         logger.info("Print scheduler started")
 
-        await self._clear_stale_dispatch_claims()
+        await self._clear_stale_dispatch_claims(at_startup=True)
 
         while self._running:
             dispatched = False
             try:
+                # No-op while any upload is in flight; on a quiet tick it releases
+                # a claim whose best-effort clear failed (e.g. the database was
+                # briefly unreachable), instead of leaving the row wedged until
+                # the next restart.
+                await self._clear_stale_dispatch_claims()
                 dispatched = await self.check_queue()
             except Exception as e:
                 logger.error("Scheduler error: %s", e)
@@ -299,14 +311,29 @@ class PrintScheduler:
             # not stall behind the idle interval; otherwise sleep normally (#2555).
             await asyncio.sleep(self._fast_check_interval if dispatched else self._check_interval)
 
-    async def _clear_stale_dispatch_claims(self) -> None:
-        """Clear dispatch claims left behind by a crash/restart mid-upload (#2615).
+    async def _clear_stale_dispatch_claims(self, *, at_startup: bool = False) -> None:
+        """Clear dispatch claims with no live dispatch coroutine behind them (#2615).
 
-        A claim is only ever held by a live dispatch coroutine, and no coroutine
-        survives a process restart — so every ``dispatching_at`` present at startup
-        is stale. Clearing them lets those still-pending rows be re-selected for a
-        fresh, consistent dispatch instead of being wedged out of the selection
-        query forever. Called once at the top of ``run()``."""
+        A claim is only ever held by a live dispatch coroutine, so when this
+        process has nothing in ``_inflight`` every ``dispatching_at`` in the table
+        is stale. At startup that is trivially true — no coroutine survives a
+        restart. It is equally true on any later tick where no upload is running,
+        which is what makes this safe to repeat rather than only run once.
+
+        Repeating it matters because ``_clear_dispatch_claim`` is best-effort: if
+        the database is briefly unreachable at exactly the moment dispatch ends,
+        the claim survives and the row is wedged out of the selection query. That
+        used to last until the next restart (#2702 follow-up, seen when
+        PostgreSQL refused a connection mid-dispatch).
+
+        ``_inflight`` is populated when the task is spawned, before the coroutine
+        claims its row, and pruned by a done-callback that cannot run before the
+        coroutine's own ``finally`` — so "claim present, nothing in flight" has no
+        race window and needs no age threshold. A size-derived upload deadline
+        (``max(600s, size/25KB/s)``) has no safe fixed bound anyway.
+        """
+        if self._inflight:
+            return
         try:
             async with async_session() as db:
                 res = await db.execute(
@@ -314,9 +341,13 @@ class PrintScheduler:
                 )
                 await db.commit()
                 if res.rowcount:
-                    logger.info("Cleared %d stale dispatch claim(s) at startup (#2615)", res.rowcount)
+                    logger.info(
+                        "Cleared %d orphaned dispatch claim(s)%s (#2615)",
+                        res.rowcount,
+                        " at startup" if at_startup else "",
+                    )
         except Exception as exc:
-            logger.error("Failed to clear stale dispatch claims at startup: %s", exc)
+            logger.error("Failed to clear orphaned dispatch claims: %s", exc)
 
     def stop(self):
         """Stop the scheduler."""
@@ -929,12 +960,44 @@ class PrintScheduler:
                     return
                 await self._start_print(item_db, item)
             finally:
+                # Undo an expected-print registration whose print command never
+                # went out. One choke point covers every way `_start_print` can
+                # end without sending: a raised exception (a DB failure mid-
+                # dispatch is the reported case), an early return, a cancel
+                # winning the #1853 CAS, or `start_print()` returning False.
+                # A confirmed send removes the entry itself, so this is a no-op
+                # on the happy path.
+                self._rollback_unconfirmed_expected_print(item_id)
                 # Release the claim on every exit. Once dispatch has finished the
                 # row's status carries the lock (printing/failed/cancelled are all
                 # != pending), so the token is only needed for the duration of the
                 # upload. A row left pending (e.g. busy-printer deferral) becomes
                 # dispatchable again on the next tick.
                 await self._clear_dispatch_claim(item_db, item_id)
+
+    def _rollback_unconfirmed_expected_print(self, item_id: int) -> None:
+        """Drop an expectation for a print command that was never sent.
+
+        Best-effort and never raises: this runs in the ``finally`` of dispatch,
+        where the interesting exception is usually the one already propagating.
+        """
+        pending = self._unconfirmed_expected_print.pop(item_id, None)
+        if pending is None:
+            return
+        printer_id, remote_filename, archive_id = pending
+        try:
+            from backend.app.main import unregister_expected_print
+
+            unregister_expected_print(printer_id, remote_filename, archive_id)
+        except Exception:
+            logger.warning(
+                "Queue item %s: failed to unregister expected print (printer=%s, file=%s, archive=%s)",
+                item_id,
+                printer_id,
+                remote_filename,
+                archive_id,
+                exc_info=True,
+            )
 
     async def _claim_for_dispatch(self, db: AsyncSession, item_id: int) -> bool:
         """Atomically stamp ``dispatching_at`` on a still-pending, unclaimed row.
@@ -954,12 +1017,39 @@ class PrintScheduler:
 
     async def _clear_dispatch_claim(self, db: AsyncSession, item_id: int) -> None:
         """Clear the dispatch claim (#2615). Best-effort: a failure here must not
-        mask the dispatch outcome, and startup reconciliation clears any leftover."""
-        try:
-            await db.execute(update(PrintQueueItem).where(PrintQueueItem.id == item_id).values(dispatching_at=None))
-            await db.commit()
-        except Exception as exc:
-            logger.warning("Queue item %s: failed to clear dispatch claim: %s", item_id, exc)
+        mask the dispatch outcome.
+
+        Retried, because the failure mode in practice is transient and narrow: a
+        database that is momentarily unreachable — PostgreSQL out of connection
+        slots is the observed case — refuses this write for a second or two while
+        the dispatch that just ended is still holding the row out of the selection
+        query. One attempt was enough to wedge the item; a couple of spaced
+        attempts clear it. Each attempt rolls back first, since a failed write
+        leaves the session needing it before it can be reused.
+
+        If every attempt fails, ``_clear_stale_dispatch_claims`` picks the row up
+        on the next quiet tick.
+        """
+        for attempt in range(1, 4):
+            try:
+                await db.execute(update(PrintQueueItem).where(PrintQueueItem.id == item_id).values(dispatching_at=None))
+                await db.commit()
+                return
+            except Exception as exc:
+                try:
+                    await db.rollback()
+                except Exception:
+                    pass
+                if attempt == 3:
+                    logger.warning(
+                        "Queue item %s: failed to clear dispatch claim after %d attempts: %s "
+                        "— a later quiet tick will release it",
+                        item_id,
+                        attempt,
+                        exc,
+                    )
+                    return
+                await asyncio.sleep(0.5 * attempt)
 
     async def _find_idle_printer_for_model(
         self,
@@ -3432,6 +3522,12 @@ class PrintScheduler:
                 created_by_id=item.created_by_id,
                 plate_id=item.plate_id,
             )
+            # Registration happens before the print command by necessity (the
+            # printer can report the print before the send returns), so record
+            # what to undo if we never get as far as sending. `_dispatch_one`
+            # rolls back anything still pending here on every exit — exception,
+            # early return, or cancel winning the CAS below.
+            self._unconfirmed_expected_print[item.id] = (item.printer_id, remote_filename, archive.id)
 
         # Propagate the queue item's owner into printer_manager so the
         # print-complete callback can credit the user in the PrintLogEntry
@@ -3556,6 +3652,10 @@ class PrintScheduler:
         )
 
         if started:
+            # The command is away, so the expectation is now legitimate and must
+            # survive. Anything still in this dict when _dispatch_one exits gets
+            # rolled back.
+            self._unconfirmed_expected_print.pop(item.id, None)
             logger.info("Queue item %s: Print started successfully - %s", item.id, filename)
             # No dispatch-toast event here: the legacy bg-dispatch path kept
             # status='processing' from upload start until the printer acked

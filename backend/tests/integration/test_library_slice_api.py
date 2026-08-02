@@ -93,15 +93,24 @@ async def _wait_for_job(client: AsyncClient, job_id: int, timeout: float = 5.0) 
 
 
 @pytest.fixture
-async def slice_test_setup(db_session, tmp_path):
-    """Source LibraryFile + 3 LocalPresets + preferred_slicer=orcaslicer."""
+async def slice_test_setup(db_session, tmp_path, monkeypatch):
+    """Source LibraryFile + 3 LocalPresets + preferred_slicer=orcaslicer.
+
+    ``base_dir`` is patched via ``monkeypatch`` rather than assigned and
+    restored by hand. ``app_settings`` is a process-wide singleton, and the
+    hand-rolled version only restored after the ``yield`` — so anything raising
+    during setup (a commit, a refresh) left ``base_dir`` pointing at a
+    ``tmp_path`` that pytest then deleted, and every later test in that xdist
+    worker which reads it failed. That was the cause of intermittent failures
+    in ``TestLibraryPathHelpers`` and ``TestArchivePlatesDesignOverrides``,
+    which share nothing with this module but land in the same worker.
+    """
     storage_dir = tmp_path / "library" / "files"
     storage_dir.mkdir(parents=True, exist_ok=True)
     src_path = storage_dir / "Cube.stl"
     src_path.write_bytes(b"solid Cube\nendsolid\n")
 
-    original_base_dir = app_settings.base_dir
-    app_settings.base_dir = tmp_path
+    monkeypatch.setattr(app_settings, "base_dir", tmp_path)
 
     src_file = LibraryFile(
         filename="Cube.stl",
@@ -137,7 +146,6 @@ async def slice_test_setup(db_session, tmp_path):
         "tmp_path": tmp_path,
     }
 
-    app_settings.base_dir = original_base_dir
     slicer_api_module.set_shared_http_client(None)
 
 
