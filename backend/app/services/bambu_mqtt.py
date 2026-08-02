@@ -566,6 +566,58 @@ def get_stage_name(stage: int) -> str:
     return STAGE_NAMES.get(stage, f"Unknown stage ({stage})")
 
 
+# #2547 end-of-print telemetry probe.
+#
+# The finish photo needs a "printing is done, toolhead parked, filament unload
+# not started yet" moment. ``stg_cur=22`` was meant to be that moment (#1721)
+# but fires on no model in the field: across 247 support bundles there is not a
+# single ``FINISH PHOTO MOMENT (stage-22)``, including the 2026-06-13..07-08
+# window where it was the only pre-FINISH trigger in the code (104 captures on
+# A1, A1 Mini, H2C, H2D, P1S, P2S, X1C, X2D — all of them the FINISH fallback).
+#
+# We can't design a replacement from bundles we already have, because out of
+# this window Bambuddy only ever parses ``stg_cur`` and ``mc_print_sub_stage``;
+# every other stage/action field is dropped unread. The obvious candidates
+# (``print_real_action``, ``mc_action``, ``mc_stage``) are also absent from
+# A1/A1 Mini/P1S payloads, so none of them can be the universal answer on its
+# own. Dumping the raw values for the window between the last object layer and
+# ``gcode_state=FINISH`` lets one debug bundle per model settle what — if
+# anything — marks that moment.
+#
+# Every field here is machine telemetry (stage codes, counters, bitfields).
+# Nothing identifying, and nothing that could carry an access code.
+_END_OF_PRINT_PROBE_FIELDS = (
+    "gcode_state",
+    "state",
+    "print_error",
+    "stg_cur",
+    "stg",
+    "stg_cd",
+    "mc_print_stage",
+    "mc_print_sub_stage",
+    "mc_action",
+    "mc_stage",
+    "print_real_action",
+    "print_gcode_action",
+    "spd_lvl",
+    "mc_percent",
+    "mc_remaining_time",
+    "layer_num",
+    "total_layer_num",
+    "home_flag",
+    "prepare_per",
+)
+
+# Frame budget for one print's probe. A long final layer can hold the window
+# open for minutes at ~1 frame/second; this stops a single print from filling
+# the log the user then has to upload.
+_END_OF_PRINT_PROBE_MAX_FRAMES = 400
+
+# States that close the window. FINISH is the interesting one — the probe's
+# whole job is to show what happened in the run-up to it.
+_END_OF_PRINT_PROBE_CLOSING_STATES = frozenset({"FINISH", "FAILED", "IDLE", "PREPARE"})
+
+
 class BambuMQTTClient:
     """MQTT client for Bambu Lab printer communication."""
 
@@ -669,6 +721,12 @@ class BambuMQTTClient:
         # and the FINISH-state fallback don't both fire on the same
         # print. Reset to False on every print start.
         self._finish_photo_captured: bool = False
+        # #2547 end-of-print telemetry probe state. `_armed` is cleared once the
+        # window has run for a print so a late FINISH re-send can't reopen it.
+        self._eop_probe_armed: bool = True
+        self._eop_probe_open: bool = False
+        self._eop_probe_frames: int = 0
+        self._eop_probe_last: dict = {}
         self._last_valid_progress: float = 0.0  # Last non-zero progress (firmware resets on cancel)
         self._last_valid_layer_num: int = 0  # Last non-zero layer (firmware resets on cancel)
         # The subtask_id minted for the most recent start_print() command. The
@@ -2790,9 +2848,107 @@ class BambuMQTTClient:
             except Exception:
                 logger.exception("[%s] on_assignment_verified callback failed", self.serial_number)
 
+    @staticmethod
+    def _probe_number(value, fallback: float | None = None) -> float | None:
+        """Coerce a telemetry field to a number, or return `fallback`.
+
+        Firmware is inconsistent about whether these arrive as ints or as
+        numeric strings, and the probe must never raise on a surprise type.
+        """
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _probe_end_of_print(self, data: dict) -> None:
+        """Log raw end-of-print telemetry for one print at DEBUG (#2547).
+
+        Opens on the first frame that looks like end-of-print (last object
+        layer reached, progress at 99+, or no remaining time), then logs each
+        frame in which any probed field changed, and closes on the transition
+        out of RUNNING. Armed once per print — see the module-level comment on
+        ``_END_OF_PRINT_PROBE_FIELDS`` for why this window is the one we can't
+        currently see into.
+
+        Read-only with respect to printer state: this is instrumentation, and
+        nothing downstream may come to depend on it.
+        """
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        if not self._eop_probe_open and not (self._eop_probe_armed and self._was_running):
+            return
+
+        present = {k: data[k] for k in _END_OF_PRINT_PROBE_FIELDS if k in data}
+        if not present:
+            return
+
+        if not self._eop_probe_open:
+            # Open on any end-of-print signal. Read from the raw frame first so
+            # the frame that *carries* the signal is itself captured — state
+            # fields are only updated further down this same call.
+            layer = self._probe_number(data.get("layer_num"), self.state.layer_num) or 0
+            total = self._probe_number(data.get("total_layer_num"), self.state.total_layers) or 0
+            percent = self._probe_number(data.get("mc_percent"), self.state.progress) or 0
+            remaining = self._probe_number(data.get("mc_remaining_time"), self.state.remaining_time)
+            at_last_layer = total > 0 and layer >= total
+            # `remaining <= 0` is only meaningful once the print has actually
+            # progressed — it reads 0 during the pre-print calibration too.
+            out_of_time = remaining is not None and remaining <= 0 and percent > 0
+            if not (at_last_layer or percent >= 99 or out_of_time):
+                return
+            self._eop_probe_open = True
+            self._eop_probe_frames = 0
+            self._eop_probe_last = {}
+            logger.debug(
+                "[%s] EOP-PROBE open — layer=%s/%s percent=%s remaining=%s",
+                self.serial_number,
+                layer,
+                total,
+                percent,
+                remaining,
+            )
+
+        closing = str(data.get("gcode_state") or "") in _END_OF_PRINT_PROBE_CLOSING_STATES
+        changed = {k: v for k, v in present.items() if self._eop_probe_last.get(k, object()) != v}
+        self._eop_probe_last.update(present)
+
+        if self._eop_probe_frames >= _END_OF_PRINT_PROBE_MAX_FRAMES and not closing:
+            if self._eop_probe_frames == _END_OF_PRINT_PROBE_MAX_FRAMES:
+                self._eop_probe_frames += 1
+                logger.debug(
+                    "[%s] EOP-PROBE frame budget (%s) reached — suppressing until FINISH",
+                    self.serial_number,
+                    _END_OF_PRINT_PROBE_MAX_FRAMES,
+                )
+            return
+
+        if changed or closing:
+            self._eop_probe_frames += 1
+            logger.debug(
+                "[%s] EOP-PROBE %s%s: %s",
+                self.serial_number,
+                self._eop_probe_frames,
+                " CLOSE" if closing else "",
+                # `changed` on a closing frame can be empty; fall back to the
+                # full picture so the last line is always self-contained.
+                changed if changed else present,
+            )
+
+        if closing:
+            self._eop_probe_open = False
+            self._eop_probe_armed = False
+            self._eop_probe_last = {}
+
     def _update_state(self, data: dict):
         """Update printer state from message data."""
         _previous_state = self.state.state
+
+        # #2547: instrumentation only — runs before any state mutation so the
+        # frame carrying an end-of-print signal is logged as it arrived.
+        try:
+            self._probe_end_of_print(data)
+        except Exception:  # pragma: no cover - a probe must never break ingest
+            logger.debug("[%s] EOP-PROBE failed", self.serial_number, exc_info=True)
 
         # Update state fields
         if "gcode_state" in data:
@@ -3938,6 +4094,11 @@ class BambuMQTTClient:
             self._completion_triggered = False
             # #1721: rearm the end-of-print finish-photo trigger for the new print
             self._finish_photo_captured = False
+            # #2547: rearm the end-of-print telemetry probe for the new print
+            self._eop_probe_armed = True
+            self._eop_probe_open = False
+            self._eop_probe_frames = 0
+            self._eop_probe_last = {}
             # Reset last valid progress/layer for usage tracking
             self._last_valid_progress = 0.0
             self._last_valid_layer_num = 0
