@@ -66,7 +66,6 @@ import { api, ApiError } from '../api/client';
 import { PipelineRunsView } from './PipelineRunsPage';
 import { type TimeFormat, formatETA, formatDuration, formatRelativeTime, parseUTCDate } from '../utils/date';
 import { getBedTypeInfo } from '../utils/bedType';
-import { formatQueueItemETA } from '../utils/queueEta';
 import type { PrintQueueItem, PrintQueueBulkUpdate, Permission, CalibrationMode } from '../api/client';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -429,6 +428,17 @@ function SortableQueueItem({
   const isPending = item.status === 'pending';
   const isHistory = ['completed', 'failed', 'skipped', 'cancelled'].includes(item.status);
 
+  // This is an "if started now" estimate, not a cumulative queue forecast.
+  // Do not show it for active, blocked, scheduled, or invalid queue items.
+  const queueItemEta =
+    isPending &&
+    !item.waiting_reason &&
+    !item.scheduled_time &&
+    item.print_time_seconds != null &&
+    item.print_time_seconds > 0
+      ? formatETA(item.print_time_seconds / 60, timeFormat, t)
+      : null;
+
   const isMobileSelectable = isPending && onToggleSelect;
 
   return (
@@ -599,20 +609,19 @@ function SortableQueueItem({
               </span>
             </span>
             {item.print_time_seconds && (
-              <>
-                <span className="flex items-center gap-1 sm:gap-1.5">
-                  <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                  {formatDuration(item.print_time_seconds)}
-                </span>
-                {!item.waiting_reason && (
-                  <span
-                    className="text-bambu-green font-medium"
-                    title={t('printers.estimatedCompletion')}
-                  >
-                    ETA {formatQueueItemETA(item.print_time_seconds, timeFormat, t)}
-                  </span>
-                )}
-              </>
+              <span className="flex items-center gap-1 sm:gap-1.5">
+                <Timer className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                {formatDuration(item.print_time_seconds)}
+              </span>
+            )}
+            {queueItemEta && (
+              <span
+                data-testid="queue-item-eta"
+                className="text-bambu-green font-medium"
+                title={t('printers.estimatedCompletion')}
+              >
+                ETA {queueItemEta}
+              </span>
             )}
             {item.filament_used_grams && (
               <span className="flex items-center gap-1 sm:gap-1.5">
