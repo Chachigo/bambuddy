@@ -1626,3 +1626,223 @@ class TestNozzleClassGuard:
         if resp.status_code == 400:
             detail = resp.json().get("detail", "")
             assert "isn't supported" not in detail, f"guard still firing on preset path: {detail!r}"
+
+
+class TestUnusedSlotSubstitutionOnSinglePlateSource:
+    """#2711: a single-plate 3MF must still get its unused slots substituted.
+
+    The SliceModal omits ``plate`` entirely for single-plate and STL sources —
+    it skips the plate picker, so ``selectedPlate`` stays null and the field
+    never reaches the body. The schema documents an absent plate as "plate 1",
+    but the substitution used to read it as "unknown plate" and skip, so every
+    single-plate project reached the CLI with the dropdown values of slots the
+    plate never paints with.
+
+    In the reported case that was a MakerWorld project declaring four filaments
+    while plate 1 paints with one, the other three carrying presets baked into
+    the source for a different printer. The CLI rejected the whole slice with
+    "filament preset ... (slot 1) is not compatible with printer ...", and the
+    modal disables unused rows so there was no way to correct it by hand.
+    """
+
+    @staticmethod
+    def _single_plate_using_only_slot_3() -> bytes:
+        """One plate, one object, painted with slot 3 — slots 1, 2 and 4 are
+        declared by the project but unused. Mirrors the reported file."""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("3D/3dmodel.model", "<model/>")
+            zf.writestr(
+                "Metadata/project_settings.config",
+                json.dumps({"filament_type": ["PLA", "PLA", "PLA", "TPU"]}),
+            )
+            zf.writestr(
+                "Metadata/model_settings.config",
+                "<?xml version='1.0'?>\n<config>"
+                '<object id="1"><metadata key="extruder" value="3"/></object>'
+                '<plate><metadata key="plater_id" value="1"/>'
+                '<model_instance><metadata key="object_id" value="1"/>'
+                '<metadata key="instance_id" value="0"/></model_instance>'
+                "</plate></config>",
+            )
+        return buf.getvalue()
+
+    @staticmethod
+    def _filament_names_sent(body: bytes) -> list[str]:
+        """Pull the ``name`` of each ``filamentProfile`` part, in slot order.
+
+        ``slice_model`` sends one repeated ``filamentProfile`` part per slot as
+        ``filament_N.json``; the parts stay in submission order, so a plain
+        scan preserves the slot mapping.
+        """
+        names: list[str] = []
+        marker = b'name="filamentProfile"; filename="filament_'
+        pos = body.find(marker)
+        while pos != -1:
+            start = body.find(b"{", pos)
+            end = body.find(b"\r\n", start)
+            names.append(json.loads(body[start:end].decode("utf-8"))["name"])
+            pos = body.find(marker, end)
+        return names
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_unused_slots_are_substituted_when_the_body_omits_plate(
+        self, async_client: AsyncClient, db_session, slice_test_setup
+    ):
+        tmp_path = slice_test_setup["tmp_path"]
+        src = tmp_path / "library" / "files" / "train.3mf"
+        src.write_bytes(self._single_plate_using_only_slot_3())
+        threemf = LibraryFile(
+            filename="train.3mf",
+            file_path=str(src.relative_to(tmp_path)),
+            file_type="3mf",
+            file_size=src.stat().st_size,
+        )
+        db_session.add(threemf)
+
+        # Four distinguishable filament presets, one per project slot. Only
+        # slot 3's is compatible with the target in the reported scenario.
+        slots = []
+        for i in range(1, 5):
+            p = LocalPreset(
+                name=f"slot{i}",
+                preset_type="filament",
+                source="orcaslicer",
+                setting=json.dumps({"name": f"slot{i}", "type": "filament"}),
+            )
+            db_session.add(p)
+            slots.append(p)
+        await db_session.commit()
+        await db_session.refresh(threemf)
+        for p in slots:
+            await db_session.refresh(p)
+
+        captured: list[list[str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(self._filament_names_sent(request.content))
+            return httpx.Response(
+                status_code=200,
+                content=_make_3mf_with_settings(),
+                headers={
+                    "x-print-time-seconds": "100",
+                    "x-filament-used-g": "1.0",
+                    "x-filament-used-mm": "100",
+                },
+            )
+
+        _install_mock_sidecar(handler)
+        response = await async_client.post(
+            f"/api/v1/library/files/{threemf.id}/slice",
+            json={
+                "printer_preset": {"source": "local", "id": str(slice_test_setup["printer_id"])},
+                "process_preset": {"source": "local", "id": str(slice_test_setup["process_id"])},
+                "filament_presets": [{"source": "local", "id": str(p.id)} for p in slots],
+                # No "plate" — exactly what the modal sends for a single-plate
+                # source. This is the whole point of the test.
+            },
+        )
+        assert response.status_code == 202, response.text
+
+        final = await _wait_for_job(async_client, response.json()["job_id"])
+        assert final["status"] == "completed", final
+
+        assert captured, "sidecar was never called"
+        # Every slot carries slot 3's profile: the array length stays intact
+        # (the source's per-slot references depend on it) while nothing the
+        # plate doesn't print with can fail the CLI's validators.
+        assert captured[0] == ["slot3", "slot3", "slot3", "slot3"], captured[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_slice_all_keeps_every_slot(self, async_client: AsyncClient, db_session, slice_test_setup):
+        """``plate=0`` is the all-plates sentinel, so nothing is unused.
+
+        It reaches the same call site, and plate ids are 1-indexed — the
+        geometry lookup for plate 0 matches nothing. Without an explicit
+        exclusion the project's support-filament slot would be the only
+        member of the used set and would be copied over every colour.
+        """
+        tmp_path = slice_test_setup["tmp_path"]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("3D/3dmodel.model", "<model/>")
+            zf.writestr(
+                "Metadata/project_settings.config",
+                json.dumps(
+                    {
+                        "enable_support": "1",
+                        "support_filament": "4",
+                        "support_interface_filament": "4",
+                        "filament_type": ["PLA", "PLA", "PLA", "PVA"],
+                    }
+                ),
+            )
+            zf.writestr(
+                "Metadata/model_settings.config",
+                "<?xml version='1.0'?>\n<config>"
+                '<object id="1"><metadata key="extruder" value="1"/></object>'
+                '<object id="2"><metadata key="extruder" value="2"/></object>'
+                '<plate><metadata key="plater_id" value="1"/>'
+                '<model_instance><metadata key="object_id" value="1"/></model_instance></plate>'
+                '<plate><metadata key="plater_id" value="2"/>'
+                '<model_instance><metadata key="object_id" value="2"/></model_instance></plate>'
+                "</config>",
+            )
+        src = tmp_path / "library" / "files" / "multi.3mf"
+        src.write_bytes(buf.getvalue())
+        threemf = LibraryFile(
+            filename="multi.3mf",
+            file_path=str(src.relative_to(tmp_path)),
+            file_type="3mf",
+            file_size=src.stat().st_size,
+        )
+        db_session.add(threemf)
+
+        slots = []
+        for i in range(1, 5):
+            p = LocalPreset(
+                name=f"slot{i}",
+                preset_type="filament",
+                source="orcaslicer",
+                setting=json.dumps({"name": f"slot{i}", "type": "filament"}),
+            )
+            db_session.add(p)
+            slots.append(p)
+        await db_session.commit()
+        await db_session.refresh(threemf)
+        for p in slots:
+            await db_session.refresh(p)
+
+        captured: list[list[str]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.append(self._filament_names_sent(request.content))
+            return httpx.Response(
+                status_code=200,
+                content=_make_3mf_with_settings(),
+                headers={
+                    "x-print-time-seconds": "100",
+                    "x-filament-used-g": "1.0",
+                    "x-filament-used-mm": "100",
+                },
+            )
+
+        _install_mock_sidecar(handler)
+        response = await async_client.post(
+            f"/api/v1/library/files/{threemf.id}/slice",
+            json={
+                "printer_preset": {"source": "local", "id": str(slice_test_setup["printer_id"])},
+                "process_preset": {"source": "local", "id": str(slice_test_setup["process_id"])},
+                "filament_presets": [{"source": "local", "id": str(p.id)} for p in slots],
+                "plate": 0,
+            },
+        )
+        assert response.status_code == 202, response.text
+
+        final = await _wait_for_job(async_client, response.json()["job_id"])
+        assert final["status"] == "completed", final
+
+        assert captured, "sidecar was never called"
+        assert captured[0] == ["slot1", "slot2", "slot3", "slot4"], captured[0]
