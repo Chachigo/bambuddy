@@ -1472,3 +1472,104 @@ class TestSanitizePushStatusValues:
 
         assert raw == before, "input was mutated"
         assert out["tag_uid"] == "[SERIAL]"  # and the copy really was redacted
+
+
+class TestProcessInfo:
+    """Bambuddy's own footprint in the bundle (#2734).
+
+    Bundles carried nothing about the process itself, so "memory climbs over
+    days until the OOM killer fires" could not be triaged from a bundle — the
+    reporter had to run shell commands by hand, and the numbers that would have
+    named the mechanism were unrecoverable afterwards.
+    """
+
+    def test_reports_the_figures_that_separate_the_mechanisms(self):
+        """RSS vs VMS, threads and children distinguish a heap that is growing
+        from address space, a thread leak, and a child-process leak."""
+        from backend.app.api.routes.support import _collect_process_info
+
+        info = _collect_process_info()
+
+        assert info["available"] is True
+        for key in ("rss_bytes", "vms_bytes", "num_threads", "children_total"):
+            assert isinstance(info[key], int), key
+
+    def test_children_are_named_but_never_quoted(self):
+        """An ffmpeg argv carries the camera URL, and with it its password. The
+        count per executable is what identifies a leak; the arguments are not
+        needed and must not travel."""
+        from backend.app.api.routes.support import _collect_process_info
+
+        info = _collect_process_info()
+
+        for name in info.get("children_by_name", {}):
+            assert " " not in name, f"looks like a command line, not a name: {name!r}"
+            assert "://" not in name
+
+    def test_heap_census_is_skipped_on_a_large_process(self):
+        """gc.get_objects() materialises every tracked object, so the census
+        costs most on the process that can least afford it. A bundle generated
+        to diagnose runaway memory must not be the allocation that tips the
+        host over."""
+        from unittest.mock import MagicMock, patch
+
+        import backend.app.api.routes.support as support_module
+
+        fake = MagicMock()
+        fake.memory_info.return_value = MagicMock(rss=8 * 1024**3, vms=12 * 1024**3)
+        fake.num_threads.return_value = 40
+        fake.create_time.return_value = 0.0
+        fake.open_files.return_value = []
+        fake.net_connections.return_value = []
+        fake.children.return_value = []
+
+        with patch("psutil.Process", return_value=fake):
+            info = support_module._collect_process_info()
+
+        assert "gc_top_types" not in info
+        assert "skipped" in info["gc_census"]
+        # The discriminating numbers still come through — those are the point.
+        assert info["rss_bytes"] == 8 * 1024**3
+        assert info["num_threads"] == 40
+
+    def test_heap_census_runs_on_a_normal_process(self):
+        from backend.app.api.routes.support import _collect_process_info
+
+        info = _collect_process_info()
+
+        assert info["gc_tracked_objects"] > 0
+        assert len(info["gc_top_types"]) <= 15
+
+    def test_survives_a_hostile_psutil(self):
+        """psutil raises on hardened kernels and in restricted containers. A
+        support bundle must still be produced when it does — the bundle is how
+        someone reports the problem in the first place."""
+        from unittest.mock import patch
+
+        import backend.app.api.routes.support as support_module
+
+        with patch("psutil.Process", side_effect=RuntimeError("no /proc for you")):
+            info = support_module._collect_process_info()
+
+        assert info == {"available": False}
+
+    def test_partial_failures_do_not_lose_the_rest(self):
+        """One inaccessible metric must not cost the others."""
+        from unittest.mock import MagicMock, patch
+
+        import backend.app.api.routes.support as support_module
+
+        fake = MagicMock()
+        fake.memory_info.return_value = MagicMock(rss=100, vms=200)
+        fake.num_threads.side_effect = PermissionError("denied")
+        fake.create_time.return_value = 0.0
+        fake.open_files.side_effect = PermissionError("denied")
+        fake.net_connections.side_effect = PermissionError("denied")
+        fake.children.return_value = []
+
+        with patch("psutil.Process", return_value=fake):
+            info = support_module._collect_process_info()
+
+        assert info["rss_bytes"] == 100
+        assert "num_threads" not in info
+        assert info["children_total"] == 0

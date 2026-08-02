@@ -9,6 +9,7 @@ import logging
 import os
 import platform
 import re
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -298,6 +299,115 @@ def _get_container_memory_limit() -> int | None:
         except Exception:
             pass
     return None
+
+
+# Above this RSS the heap census is skipped — see _collect_process_info.
+_GC_CENSUS_RSS_LIMIT = 2 * 1024**3
+
+
+def _collect_process_info() -> dict:
+    """Snapshot this process's resource usage, for reports about it growing.
+
+    Bundles used to carry nothing about Bambuddy's own footprint, which made
+    "memory climbs over days until the OOM killer fires" impossible to triage
+    from a bundle alone — the reporter of #2734 had to be asked to run commands
+    by hand, and the numbers that would have identified the mechanism could not
+    be recovered after the fact.
+
+    The four figures below separate the mechanisms that look identical from
+    outside:
+
+    * ``rss_bytes`` vs ``vms_bytes`` — a large virtual size against a modest
+      resident one is address space, not live data: thread stacks or allocator
+      arenas rather than a heap that keeps growing.
+    * ``num_threads`` — every leaked MQTT client reconnect would leave a paho
+      network thread behind, each reserving its stack.
+    * ``children`` — the ffmpeg-per-camera-stream leak class (#776).
+    * ``open_files`` / ``connections`` — descriptors held by streams or sockets
+      that were never closed.
+
+    Everything is best-effort: psutil raises on hardened kernels and inside
+    restricted containers, and a support bundle must still be produced when it
+    does. Child command lines are reduced to the executable name — a full
+    ffmpeg argv carries the camera URL, and with it the camera's password.
+    """
+    import psutil
+
+    out: dict = {}
+    try:
+        proc = psutil.Process()
+    except Exception:
+        return {"available": False}
+
+    out["available"] = True
+    try:
+        mem = proc.memory_info()
+        out["rss_bytes"] = mem.rss
+        out["rss_formatted"] = _format_bytes(mem.rss)
+        out["vms_bytes"] = mem.vms
+        out["vms_formatted"] = _format_bytes(mem.vms)
+    except Exception:
+        pass
+    try:
+        out["num_threads"] = proc.num_threads()
+    except Exception:
+        pass
+    try:
+        out["uptime_seconds"] = int(time.time() - proc.create_time())
+    except Exception:
+        pass
+    try:
+        out["open_files"] = len(proc.open_files())
+    except Exception:
+        pass
+    try:
+        out["connections"] = len(proc.net_connections(kind="inet"))
+    except Exception:
+        pass
+
+    # Children by executable name only. The count per name is what identifies a
+    # leak; the arguments would leak credentials.
+    try:
+        names: dict[str, int] = {}
+        for child in proc.children(recursive=True):
+            try:
+                names[child.name()] = names.get(child.name(), 0) + 1
+            except Exception:
+                names["<unknown>"] = names.get("<unknown>", 0) + 1
+        out["children_total"] = sum(names.values())
+        out["children_by_name"] = dict(sorted(names.items(), key=lambda kv: -kv[1]))
+    except Exception:
+        pass
+
+    # Live object counts by type, top 15. Identifies a heap that is growing and
+    # what it is growing with — the one thing RSS alone cannot say.
+    #
+    # Skipped above _GC_CENSUS_RSS_LIMIT. gc.get_objects() materialises a list
+    # of every tracked object, so the census costs most on exactly the process
+    # that can least afford it: a bundle generated to diagnose runaway memory
+    # must not be the allocation that tips the host over. The numbers that
+    # actually separate the mechanisms — RSS vs VMS, threads, children — are
+    # collected above and unaffected.
+    rss = out.get("rss_bytes")
+    if rss is not None and rss > _GC_CENSUS_RSS_LIMIT:
+        out["gc_census"] = (
+            f"skipped: process is using {_format_bytes(rss)}, above the "
+            f"{_format_bytes(_GC_CENSUS_RSS_LIMIT)} limit for walking the heap"
+        )
+        return out
+    try:
+        import gc
+
+        counts: dict[str, int] = {}
+        for obj in gc.get_objects():
+            name = type(obj).__name__
+            counts[name] = counts.get(name, 0) + 1
+        out["gc_tracked_objects"] = sum(counts.values())
+        out["gc_top_types"] = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:15])
+    except Exception:
+        pass
+
+    return out
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -699,6 +809,12 @@ async def _collect_support_info() -> dict:
         "database": {},
         "printers": [],
         "settings": {},
+        # Bambuddy's own footprint. Cheap to collect and the only thing that
+        # makes a "memory grows over days" report triageable from the bundle
+        # rather than a round trip of shell commands (#2734). Off the event
+        # loop: the heap census walks every tracked object, and a bundle
+        # request must not stall status ingest while it does.
+        "process": await asyncio.to_thread(_collect_process_info),
     }
 
     # Docker-specific info
