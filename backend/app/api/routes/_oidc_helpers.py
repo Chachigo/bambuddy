@@ -1,9 +1,11 @@
 """Pure helper functions for OIDC routes.
 
-Hosts the SSRF guard for admin-supplied icon URLs. Stricter than
-``_spoolman_helpers.assert_safe_spoolman_url`` — Spoolman intentionally allows
-loopback/RFC-1918 (same-LAN topology) while OIDC icons must be reachable on
-the public internet (IdP-hosted), so private addresses there are SSRF probes.
+Hosts the public-internet SSRF guard, used for both admin-supplied icon URLs
+and OIDC issuer URLs (via ``schemas.auth._validate_issuer_url``). Stricter
+than ``_url_safety.assert_safe_lan_service_url`` — LAN services intentionally
+allow loopback/RFC-1918 (same-host/same-LAN topology) while an IdP must be
+reachable on the public internet, so a private address there is an SSRF probe
+rather than a configuration.
 """
 
 from __future__ import annotations
@@ -17,9 +19,10 @@ from backend.app.api.routes._url_safety import CLOUD_METADATA_IPS, NUMERIC_IP_RE
 def assert_safe_public_https_url(url: str) -> None:
     """Raise ValueError if *url* is unsafe to fetch as a public HTTPS resource.
 
-    Used for OIDC provider icon URLs (#1333). Stricter than the Spoolman SSRF
-    guard: also rejects loopback, private (RFC-1918), and link-local addresses
-    because an OIDC icon legitimately lives only on the public internet.
+    Used for OIDC provider icon URLs (#1333) and OIDC issuer URLs. Stricter
+    than the LAN-service SSRF guard: also rejects loopback, private
+    (RFC-1918), and link-local addresses because an IdP and its icon
+    legitimately live only on the public internet.
 
     Checks performed:
     - Scheme must be ``https`` (no ``http://``, ``file://``, ``gopher://``, …).
@@ -35,9 +38,10 @@ def assert_safe_public_https_url(url: str) -> None:
     - IPv4-mapped IPv6 (``::ffff:127.0.0.1``) — unwrapped before the IP-class
       check so an attacker can't bypass via IPv6 encoding.
 
-    Hostname-based addresses are accepted without DNS resolution (consistent
-    with ``_validate_issuer_url`` policy — the operator is trusted to
-    configure a sensible IdP host).
+    Hostname-based addresses are accepted without DNS resolution — the
+    operator is trusted to configure a sensible IdP host, and resolving here
+    would both add a TOCTOU gap (DNS can change between validation and
+    request) and make the validator issue network requests of its own.
     """
     parsed = urlparse(url)
     if parsed.scheme.lower() != "https":

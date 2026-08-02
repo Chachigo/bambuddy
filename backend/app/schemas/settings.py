@@ -1,8 +1,22 @@
 import json
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from backend.app.schemas.print_queue import TriState
+
+# Outbound service URLs validated on save, so a bad value is rejected at
+# configuration time with a clear message rather than failing opaquely at
+# request time. Every one of these services is commonly self-hosted on the same
+# host or LAN as Bambuddy, so the LAN-service policy applies: loopback and
+# RFC-1918 stay permitted, while cloud-metadata endpoints, numeric-encoded IPs,
+# IPv4-mapped IPv6 and non-HTTP schemes are rejected. See
+# ``_url_safety.assert_safe_lan_service_url``.
+#
+# Module-level rather than a class attribute so the CI backstop in
+# tests/unit/test_outbound_url_ssrf_guards.py can import the real list and
+# cannot drift from it. Any new outbound-URL setting belongs here (or, if it
+# must be reachable on the public internet, on the stricter OIDC guard).
+LAN_SERVICE_URL_SETTINGS = ("ha_url", "obico_ml_url", "orcaslicer_api_url", "bambu_studio_api_url")
 
 
 class AppSettings(BaseModel):
@@ -599,6 +613,47 @@ class AppSettingsUpdate(BaseModel):
     obico_enabled_printers: str | None = None
     default_sidebar_order: str | None = None
     forecast_global_lead_time_days: int | None = Field(default=None, ge=0)
+
+    @field_validator(*LAN_SERVICE_URL_SETTINGS)
+    @classmethod
+    def validate_lan_service_url(cls, v: str | None, info: ValidationInfo) -> str | None:
+        """Reject SSRF-unsafe outbound service URLs on save.
+
+        Empty (and whitespace-only) is the documented "not configured / fall
+        back to the env var" value for all four fields and must keep passing.
+
+        Values that are not absolute URLs at all ("192.168.1.10:3333",
+        "localhost:3333") are left alone rather than rejected. Two reasons:
+
+        - They are inert. Every consumer of these four settings goes through
+          httpx, which raises UnsupportedProtocol for a URL with no scheme, so
+          no request is ever issued and there is nothing to guard against.
+        - They were storable before this validator existed, and the settings
+          UI is a plain text input with no scheme enforcement. Newly rejecting
+          them would break saves that have nothing to do with the URL: the
+          Obico panel, for one, sends obico_ml_url with every change and
+          auto-saves, so one legacy value would block toggling detection on or
+          off. A pre-existing misconfiguration should keep failing where it
+          already failed (at request time), not spread to unrelated fields.
+
+        ``urlparse`` is no help in telling the two apart — it reads
+        "localhost:3333" as scheme "localhost" — so the test is the literal
+        "://" that makes a string an absolute URL.
+        """
+        if v is None or not v.strip():
+            return v
+        candidate = v.strip()
+        if "://" not in candidate:
+            return v
+        # Lazy-imported: schemas avoid top-level imports from api/routes,
+        # matching the existing pattern in auth.py's _validate_icon_url.
+        from backend.app.api.routes._url_safety import assert_safe_lan_service_url
+
+        try:
+            assert_safe_lan_service_url(candidate, label=info.field_name or "URL")
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return v
 
     @field_validator("gcode_snippets")
     @classmethod

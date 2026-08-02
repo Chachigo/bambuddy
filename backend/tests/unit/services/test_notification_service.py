@@ -1168,16 +1168,24 @@ class TestBarkProvider:
         mock_client.post.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_send_bark_error_in_200_body(self, service):
-        """bark-server can wrap a failure in HTTP 200; the body code must win."""
+    async def test_send_bark_error_in_200_body(self, service, caplog):
+        """bark-server can wrap a failure in HTTP 200; the body code must win.
+
+        Only the numeric code is returned — the server is caller-supplied
+        (bark is self-hostable), so its free-text message is the same read
+        channel the HTTP-failure path closes. The text goes to the debug log.
+        """
         mock_client = self._client_returning(200, {"code": 400, "message": "device token invalid"})
 
         with patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get_client:
             mock_get_client.return_value = mock_client
-            success, message = await service._send_bark({"device_key": "bad"}, "Title", "Body")
+            with caplog.at_level("DEBUG", logger="backend.app.services.notification_service"):
+                success, message = await service._send_bark({"device_key": "bad"}, "Title", "Body")
 
         assert success is False
-        assert "device token invalid" in message
+        assert "Bark error 400" in message
+        assert "device token invalid" not in message
+        assert "device token invalid" in caplog.text
 
     @pytest.mark.asyncio
     async def test_send_bark_http_error(self, service):
@@ -2476,10 +2484,15 @@ class TestNtfyOutbound:
         assert "<!DOCTYPE" not in detail
 
     @pytest.mark.asyncio
-    async def test_ntfy_normal_403_still_surfaces_body(self, service):
-        """A non-Cloudflare 403 (e.g. ntfy auth fail) must keep showing
-        the original body so the user can debug the real error — we
-        only intercept the Cloudflare-challenge shape."""
+    async def test_ntfy_normal_403_is_not_misread_as_a_cloudflare_challenge(self, service, caplog):
+        """A non-Cloudflare 403 (e.g. ntfy auth fail) must report the real
+        status rather than the Cloudflare-challenge advice — we only intercept
+        the challenge shape.
+
+        The origin's body is no longer returned to the API caller: the ntfy
+        server URL is caller-supplied, so echoing it made this an SSRF read
+        primitive. It goes to the debug log instead.
+        """
         import httpx
 
         mock_response = httpx.Response(
@@ -2491,7 +2504,10 @@ class TestNtfyOutbound:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch.object(service, "_get_client", AsyncMock(return_value=mock_client)):
+        with (
+            patch.object(service, "_get_client", AsyncMock(return_value=mock_client)),
+            caplog.at_level("DEBUG", logger="backend.app.services.notification_service"),
+        ):
             ok, detail = await service._send_ntfy(
                 {"server": "https://ntfy.sh", "topic": "alerts", "auth_token": "bad"},
                 title="t",
@@ -2500,16 +2516,19 @@ class TestNtfyOutbound:
 
         assert ok is False
         assert "Cloudflare" not in detail
-        assert "invalid auth token" in detail
-        assert detail.startswith("HTTP 403:")
+        assert detail.startswith("HTTP 403")
+        assert "invalid auth token" not in detail
+        assert "invalid auth token" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_ntfy_origin_error_through_cloudflare_is_not_misclassified(self, service):
+    async def test_ntfy_origin_error_through_cloudflare_is_not_misclassified(self, service, caplog):
         """Cloudflare adds Server: cloudflare to EVERY proxied response,
         including legitimate origin errors. A real 401 "wrong token"
         from an ntfy server that happens to sit behind Cloudflare must
-        still surface the origin's actual error body — we must not flip
+        still be reported as the origin's status — we must not flip
         every CF-fronted 4xx into a "your Cloudflare is blocking" message.
+
+        As above, the origin body reaches the debug log rather than the caller.
         """
         import httpx
 
@@ -2527,7 +2546,10 @@ class TestNtfyOutbound:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch.object(service, "_get_client", AsyncMock(return_value=mock_client)):
+        with (
+            patch.object(service, "_get_client", AsyncMock(return_value=mock_client)),
+            caplog.at_level("DEBUG", logger="backend.app.services.notification_service"),
+        ):
             ok, detail = await service._send_ntfy(
                 {"server": "https://ntfy.example", "topic": "alerts", "auth_token": "wrong"},
                 title="t",
@@ -2536,8 +2558,9 @@ class TestNtfyOutbound:
 
         assert ok is False
         assert "Cloudflare" not in detail
-        assert "unauthorized" in detail
-        assert detail.startswith("HTTP 401:")
+        assert detail.startswith("HTTP 401")
+        assert "unauthorized" not in detail
+        assert "unauthorized" in caplog.text
 
     @pytest.mark.asyncio
     async def test_ntfy_cloudflare_cf_mitigated_header_alone_triggers(self, service):
