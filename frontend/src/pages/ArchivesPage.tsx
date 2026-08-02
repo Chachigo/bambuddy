@@ -65,6 +65,7 @@ import { openInSlicer, type SlicerType } from '../utils/slicer';
 import { formatDateTime, formatDateOnly, parseUTCDate, type TimeFormat, formatDuration } from '../utils/date';
 import { getCurrencySymbol } from '../utils/currency';
 import { getBedTypeInfo } from '../utils/bedType';
+import { invalidateArchiveAndProjectViews } from '../utils/projectQueries';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import type { Archive, PrintLogEntry, ProjectListItem } from '../api/client';
@@ -360,7 +361,9 @@ function ArchiveCard({
   const deleteMutation = useMutation({
     mutationFn: (purgeStats: boolean) => api.deleteArchive(archive.id, purgeStats),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archives'] });
+      // A deleted archive leaves its project too, so the project views have to
+      // be refreshed alongside the archive list (#2731).
+      invalidateArchiveAndProjectViews(queryClient);
       showToast(t('archives.toast.archiveDeleted'));
     },
     onError: () => {
@@ -385,8 +388,7 @@ function ArchiveCard({
   const assignProjectMutation = useMutation({
     mutationFn: (projectId: number | null) => api.updateArchive(archive.id, { project_id: projectId }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archives'] });
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      invalidateArchiveAndProjectViews(queryClient);
       showToast(t('archives.toast.projectUpdated'));
     },
     onError: () => {
@@ -1761,7 +1763,9 @@ function ArchiveListRow({
   const deleteMutation = useMutation({
     mutationFn: (purgeStats: boolean) => api.deleteArchive(archive.id, purgeStats),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archives'] });
+      // A deleted archive leaves its project too, so the project views have to
+      // be refreshed alongside the archive list (#2731).
+      invalidateArchiveAndProjectViews(queryClient);
       showToast(t('archives.toast.archiveDeleted'));
     },
     onError: () => {
@@ -1786,8 +1790,7 @@ function ArchiveListRow({
   const assignProjectMutation = useMutation({
     mutationFn: (projectId: number | null) => api.updateArchive(archive.id, { project_id: projectId }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archives'] });
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      invalidateArchiveAndProjectViews(queryClient);
       showToast(t('archives.toast.projectUpdated'));
     },
     onError: () => {
@@ -2813,7 +2816,7 @@ export function ArchivesPage() {
       return ids.length;
     },
     onSuccess: (count) => {
-      queryClient.invalidateQueries({ queryKey: ['archives'] });
+      invalidateArchiveAndProjectViews(queryClient);
       setSelectedIds(new Set());
       showToast(`${count} archive${count !== 1 ? 's' : ''} deleted`);
     },

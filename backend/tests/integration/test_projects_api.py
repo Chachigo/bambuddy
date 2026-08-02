@@ -1617,3 +1617,206 @@ class TestProjectFileProgress:
         projects_by_file = dict(result.all())
         assert projects_by_file[linked_file.id] == project.id
         assert projects_by_file[root_file.id] is None
+
+
+class TestSoftDeletedArchivesLeaveTheProject:
+    """Deleting a print removes it from its project, everywhere (#2731).
+
+    The default archive delete is soft (#1343): the files go, the row stays so
+    global Quick Stats keeps counting its filament / time / cost. Nothing in the
+    projects module filtered on that, so a deleted print stayed listed on the
+    project with a thumbnail pointing at a file that no longer existed — and
+    could not be unassigned, because the only unassign UI lives on the Archives
+    page, which correctly hides it.
+
+    Unlike Quick Stats, project *counts* exclude it too. A project is a piece of
+    work with a definite membership, not a lifetime total, so a project that
+    lists one print must not claim two.
+    """
+
+    @pytest.fixture
+    async def project_factory(self, db_session):
+        async def _create_project(**kwargs):
+            from backend.app.models.project import Project
+
+            defaults = {"name": "Deleted Archive Project", "color": "#FF0000"}
+            defaults.update(kwargs)
+            project = Project(**defaults)
+            db_session.add(project)
+            await db_session.commit()
+            await db_session.refresh(project)
+            return project
+
+        return _create_project
+
+    @pytest.fixture
+    async def archive_factory(self, db_session):
+        """Archive + matching PrintLogEntry, as production always writes both."""
+
+        async def _create_archive(**kwargs):
+            from backend.app.models.archive import PrintArchive
+            from backend.app.models.print_log import PrintLogEntry
+
+            defaults = {
+                "filename": "test.3mf",
+                "file_path": "test/test.3mf",
+                "file_size": 1000,
+                "print_name": "Test Print",
+                "status": "completed",
+                "quantity": 1,
+                "thumbnail_path": "test/thumb.png",
+            }
+            defaults.update(kwargs)
+            archive = PrintArchive(**defaults)
+            db_session.add(archive)
+            await db_session.commit()
+            await db_session.refresh(archive)
+
+            db_session.add(
+                PrintLogEntry(
+                    archive_id=archive.id,
+                    print_name=archive.print_name,
+                    status=archive.status,
+                    filament_used_grams=10.0,
+                )
+            )
+            await db_session.commit()
+            return archive
+
+        return _create_archive
+
+    @staticmethod
+    async def _soft_delete(db_session, archive) -> int:
+        """Soft-delete *archive* and return its id.
+
+        The commit expires the instance, so reading an attribute off it
+        afterwards is lazy IO outside the greenlet context (MissingGreenlet).
+        Callers take the id from here instead.
+        """
+        from datetime import datetime, timezone
+
+        archive_id = archive.id
+        archive.deleted_at = datetime.now(timezone.utc)
+        await db_session.commit()
+        return archive_id
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleted_archive_is_not_listed_on_the_project(
+        self, async_client: AsyncClient, project_factory, archive_factory, db_session
+    ):
+        """The reported symptom: a card with a broken preview image."""
+        project = await project_factory()
+        await archive_factory(project_id=project.id, print_name="Kept")
+        gone = await archive_factory(project_id=project.id, print_name="Deleted")
+        await self._soft_delete(db_session, gone)
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}/archives")
+        assert response.status_code == 200
+        assert [a["print_name"] for a in response.json()] == ["Kept"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleted_archive_is_not_a_preview_on_the_project_card(
+        self, async_client: AsyncClient, project_factory, archive_factory, db_session
+    ):
+        """The overview page renders these as thumbnails too, so it broke there
+        as well — not just on the detail page."""
+        project = await project_factory()
+        gone = await archive_factory(project_id=project.id, print_name="Deleted")
+        await self._soft_delete(db_session, gone)
+
+        response = await async_client.get("/api/v1/projects/")
+        assert response.status_code == 200
+        row = next(p for p in response.json() if p["id"] == project.id)
+        assert row["archives"] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_project_counts_exclude_the_deleted_archive(
+        self, async_client: AsyncClient, project_factory, archive_factory, db_session
+    ):
+        """The list shows one print, so the count must say one."""
+        project = await project_factory()
+        await archive_factory(project_id=project.id, print_name="Kept")
+        gone = await archive_factory(project_id=project.id, print_name="Deleted")
+        await self._soft_delete(db_session, gone)
+
+        response = await async_client.get("/api/v1/projects/")
+        row = next(p for p in response.json() if p["id"] == project.id)
+        assert row["archive_count"] == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_project_stats_exclude_the_deleted_archive(
+        self, async_client: AsyncClient, project_factory, archive_factory, db_session
+    ):
+        """Deliberate divergence from #1343: the contribution leaves the project
+        even though it stays in global Quick Stats."""
+        project = await project_factory()
+        await archive_factory(project_id=project.id, print_name="Kept")
+        gone = await archive_factory(project_id=project.id, print_name="Deleted")
+        await self._soft_delete(db_session, gone)
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}")
+        assert response.status_code == 200
+        stats = response.json()["stats"]
+        assert stats["total_archives"] == 1
+        assert stats["total_filament_grams"] == pytest.approx(10.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_deleted_archive_is_not_in_the_project_timeline(
+        self, async_client: AsyncClient, project_factory, archive_factory, db_session
+    ):
+        """A timeline entry for it links to an archive that 404s when clicked."""
+        project = await project_factory()
+        gone = await archive_factory(project_id=project.id, print_name="Deleted")
+        await self._soft_delete(db_session, gone)
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}/timeline")
+        assert response.status_code == 200
+        assert not any(e.get("description") == "Deleted" for e in response.json())
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_live_archive_is_untouched_by_all_of_this(
+        self, async_client: AsyncClient, project_factory, archive_factory
+    ):
+        """The filter must not cost a project its actual prints."""
+        project = await project_factory()
+        await archive_factory(project_id=project.id, print_name="Kept")
+
+        listing = await async_client.get(f"/api/v1/projects/{project.id}/archives")
+        assert [a["print_name"] for a in listing.json()] == ["Kept"]
+
+        stats = await async_client.get(f"/api/v1/projects/{project.id}")
+        assert stats.json()["stats"]["total_archives"] == 1
+
+        row = next(p for p in (await async_client.get("/api/v1/projects/")).json() if p["id"] == project.id)
+        assert row["archive_count"] == 1
+        assert len(row["archives"]) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_unassigning_an_already_orphaned_link_still_works(
+        self, async_client: AsyncClient, project_factory, archive_factory, db_session
+    ):
+        """The listings hide it, but the API must still be able to clear the
+        link — that is the repair path for rows written before this fix."""
+        from sqlalchemy import select
+
+        from backend.app.models.archive import PrintArchive
+
+        project = await project_factory()
+        gone = await archive_factory(project_id=project.id, print_name="Deleted")
+        gone_id = await self._soft_delete(db_session, gone)
+
+        response = await async_client.post(
+            f"/api/v1/projects/{project.id}/remove-archives", json={"archive_ids": [gone_id]}
+        )
+        assert response.status_code == 200
+
+        db_session.expire_all()
+        result = await db_session.execute(select(PrintArchive.project_id).where(PrintArchive.id == gone_id))
+        assert result.scalar_one() is None

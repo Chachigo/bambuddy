@@ -52,6 +52,21 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 _FAILURE_STATUSES = ("failed", "aborted", "cancelled", "stopped")
 
+# Soft-deleted archives (#1343) keep their row — and therefore their
+# ``project_id`` — after their files have been removed from disk, so that global
+# Quick Stats can still count their filament / time / cost. Nothing in this
+# module filtered on that, which left deleted prints listed on the project with
+# thumbnails pointing at files that no longer exist, and no way to unassign them
+# (the only unassign UI lives on the Archives page, which correctly hides them)
+# — #2731.
+#
+# Every project-scoped query filters them out, counts included: a project that
+# lists 11 prints must not claim 12. That is a deliberate divergence from the
+# global Quick Stats behaviour, where the whole point of the soft delete is that
+# the contribution survives. A project is a piece of work with a definite
+# membership, not a lifetime total, so a print the user deleted has left it.
+_LIVE_ARCHIVE = PrintArchive.deleted_at.is_(None)
+
 
 async def compute_project_stats(
     db: AsyncSession, project_id: int, target_count: int | None = None, target_parts_count: int | None = None
@@ -83,7 +98,7 @@ async def compute_project_stats(
             func.coalesce(func.sum(PrintLogEntry.energy_cost), 0).label("total_energy_cost"),
         )
         .join(PrintArchive, PrintArchive.id == PrintLogEntry.archive_id)
-        .where(PrintArchive.project_id == project_id)
+        .where(PrintArchive.project_id == project_id, _LIVE_ARCHIVE)
     )
     log_stats = log_stats_result.first()
     total_archives = int(log_stats.total_runs or 0)
@@ -104,7 +119,7 @@ async def compute_project_stats(
             ).label("failed_runs"),
         )
         .join(PrintArchive, PrintArchive.id == PrintLogEntry.archive_id)
-        .where(PrintArchive.project_id == project_id)
+        .where(PrintArchive.project_id == project_id, _LIVE_ARCHIVE)
     )
     items_split = items_split_result.first()
     total_items = int(items_split.total_items or 0)
@@ -212,7 +227,7 @@ async def list_projects(
                 ).label("failed_count"),
             )
             .join(PrintArchive, PrintArchive.id == PrintLogEntry.archive_id)
-            .where(PrintArchive.project_id == project.id)
+            .where(PrintArchive.project_id == project.id, _LIVE_ARCHIVE)
         )
         log_quick = log_quick_result.first()
         archive_count = int(log_quick.archive_count or 0)
@@ -237,7 +252,7 @@ async def list_projects(
         # Get archive previews (up to 6 most recent)
         archives_result = await db.execute(
             select(PrintArchive)
-            .where(PrintArchive.project_id == project.id)
+            .where(PrintArchive.project_id == project.id, _LIVE_ARCHIVE)
             .order_by(PrintArchive.created_at.desc())
             .limit(6)
         )
@@ -365,7 +380,7 @@ async def list_templates(
     for project in templates:
         # Get archive count
         archive_count_result = await db.execute(
-            select(func.count(PrintArchive.id)).where(PrintArchive.project_id == project.id)
+            select(func.count(PrintArchive.id)).where(PrintArchive.project_id == project.id, _LIVE_ARCHIVE)
         )
         archive_count = archive_count_result.scalar() or 0
 
@@ -498,6 +513,7 @@ async def get_child_previews(db: AsyncSession, parent_id: int) -> list[ProjectCh
             select(func.coalesce(func.sum(PrintArchive.quantity), 0)).where(
                 PrintArchive.project_id == child.id,
                 PrintArchive.status == "completed",
+                _LIVE_ARCHIVE,
             )
         )
         completed_count = completed_result.scalar() or 0
@@ -715,7 +731,7 @@ async def list_project_archives(
     query = (
         select(PrintArchive)
         .options(selectinload(PrintArchive.project), selectinload(PrintArchive.created_by))
-        .where(PrintArchive.project_id == project_id)
+        .where(PrintArchive.project_id == project_id, _LIVE_ARCHIVE)
         .order_by(PrintArchive.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -804,7 +820,7 @@ async def get_project_file_progress(
             func.count(PrintLogEntry.id),
         )
         .join(PrintArchive, PrintArchive.id == PrintLogEntry.archive_id)
-        .where(PrintArchive.project_id == project_id, PrintLogEntry.status == "completed")
+        .where(PrintArchive.project_id == project_id, PrintLogEntry.status == "completed", _LIVE_ARCHIVE)
         .group_by(PrintArchive.library_file_id, PrintArchive.content_hash, PrintArchive.filename)
     )
 
@@ -1580,7 +1596,7 @@ async def get_project_timeline(
     # Get archives and add events
     archives_result = await db.execute(
         select(PrintArchive)
-        .where(PrintArchive.project_id == project_id)
+        .where(PrintArchive.project_id == project_id, _LIVE_ARCHIVE)
         .order_by(PrintArchive.created_at.desc())
         .limit(limit)
     )
