@@ -668,6 +668,8 @@ export default {
     fans: {
       partCooling: 'Bauteilkühlung',
       auxiliary: 'Hilfsventilator',
+      leftAuxiliary: 'Linker Hilfsventilator',
+      exhaust: 'Abluft',
       chamber: 'Kammerventilator',
     },
     // HMS errors

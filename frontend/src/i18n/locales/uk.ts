@@ -672,6 +672,8 @@ export default {
     fans: {
       partCooling: "Вентилятор охолодження моделі",
       auxiliary: "Допоміжний вентилятор",
+      leftAuxiliary: "Лівий допоміжний вентилятор",
+      exhaust: "Витяжка",
       chamber: "Камерний вентилятор",
     },
     // HMS errors

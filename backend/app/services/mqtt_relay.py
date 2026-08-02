@@ -282,6 +282,8 @@ class MQTTRelayService:
             "big_fan1_speed": state.big_fan1_speed,
             "big_fan2_speed": state.big_fan2_speed,
             "heatbreak_fan_speed": state.heatbreak_fan_speed,
+            "left_aux_fan_speed": state.left_aux_fan_speed,
+            "exhaust_fan_present": state.exhaust_fan_present,
             # Bambuddy-side gate, not printer telemetry (#2525). Mirrors what the
             # Web UI already receives via printer_state_to_dict, so an external
             # automation can tell "finished" from "finished and still waiting for
