@@ -23,6 +23,7 @@ from backend.app.models.settings import Settings
 from backend.app.models.smart_plug import SmartPlug
 from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
+from backend.app.services import print_dispatch_context
 from backend.app.services.bambu_ftp import (
     UploadCancelled,
     cache_3mf_download,
@@ -3336,6 +3337,10 @@ class PrintScheduler:
 
         # G-code injection for auto-print systems (#422)
         injected_path = None
+        # #2547: tracked separately from `injected_path`, which is also set when
+        # only a START snippet was injected. Only an END snippet changes what the
+        # camera sees at print completion.
+        end_gcode_injected = False
         if item.gcode_injection:
             try:
                 snippets_raw = await self._get_setting(db, "gcode_snippets")
@@ -3352,6 +3357,7 @@ class PrintScheduler:
                         )
                         if injected_path:
                             file_path = injected_path
+                            end_gcode_injected = bool(end_gc)
                             logger.info("Queue item %s: G-code injected for model %s", item.id, printer.model)
                         else:
                             logger.warning(
@@ -3359,6 +3365,13 @@ class PrintScheduler:
                             )
             except Exception as e:
                 logger.warning("Queue item %s: G-code injection failed, using original: %s", item.id, e)
+
+        # #2547: the finish-photo path can't learn from telemetry that this print
+        # ends with user End G-code — which means the plate may be gone by the
+        # time FINISH arrives (#1867). Flag it here; `on_print_start` binds it to
+        # the print once the printer confirms it running.
+        if end_gcode_injected:
+            print_dispatch_context.mark_pending(printer.id)
 
         # Upload to root directory (not /cache/) - the start_print command references
         # files by name only (ftp://{filename}), so they must be in the root

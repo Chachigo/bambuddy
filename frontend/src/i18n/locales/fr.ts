@@ -2406,6 +2406,8 @@ export default {
     autoArchiveDescription: 'Sauvegarder automatiquement les fichiers 3MF à la fin des impressions',
     saveThumbnailsDescription: 'Extraire et sauvegarder les images d\'aperçu des fichiers 3MF',
     captureFinishPhotoDescription: 'Prendre une photo avec la caméra de l\'imprimante à la fin de l\'impression. Bambuddy enregistre un court timelapse pendant l\'impression afin que la photo puisse provenir du moment précédant l\'abaissement du plateau ; le fichier du timelapse est conservé si vous avez activé le timelapse pour cette impression, sinon il est supprimé automatiquement après la capture de la photo.',
+    finishPhotoRestorePlate: 'Remonter le plateau pour la photo finale',
+    finishPhotoRestorePlateDescription: 'L\'imprimante abaisse le plateau d\'environ 100 mm à la fin d\'une impression, plaçant l\'objet terminé sous le cadrage de la caméra. Bambuddy le remonte juste au-dessus de la dernière couche imprimée, prend la photo, puis le rabaisse. Ignoré si la hauteur d\'impression est inconnue ou si un autre travail est en file d\'attente.',
     ffmpegNotInstalled: 'ffmpeg non installé',
     ffmpegRequired: 'La capture caméra nécessite ffmpeg. Installez-le via <brew>brew install ffmpeg</brew> (macOS) ou <apt>apt install ffmpeg</apt> (Linux).',
     camera: 'Caméra',

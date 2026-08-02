@@ -164,6 +164,7 @@ async def _build_settings_response(db: AsyncSession, is_api_key: bool = False) -
             "auto_archive",
             "save_thumbnails",
             "capture_finish_photo",
+            "finish_photo_restore_plate",
             "spoolman_enabled",
             "spoolman_disable_weight_sync",
             "spoolman_report_partial_usage",

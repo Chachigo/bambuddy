@@ -1185,6 +1185,7 @@ export interface AppSettings {
   auto_archive: boolean;
   save_thumbnails: boolean;
   capture_finish_photo: boolean;
+  finish_photo_restore_plate: boolean;
   default_filament_cost: number;
   currency: string;
   energy_cost_per_kwh: number;

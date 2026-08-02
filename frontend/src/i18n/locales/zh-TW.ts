@@ -2450,6 +2450,8 @@ export default {
     autoArchiveDescription: '列印完成時自動儲存3MF檔案',
     saveThumbnailsDescription: '從3MF檔案中提取並儲存預覽影像',
     captureFinishPhotoDescription: '列印完成時從印表機攝影機拍照。Bambuddy 會在列印期間錄製一段短縮時攝影，以便從熱床下降前的瞬間取得照片；如果您為本次列印啟用了縮時攝影，檔案將保留，否則會在拍照完成後自動刪除。',
+    finishPhotoRestorePlate: '為完成照片抬升熱床',
+    finishPhotoRestorePlateDescription: '列印結束時印表機會將熱床下降約 100 mm，使完成的模型落在相機取景範圍之下。Bambuddy 會將熱床抬回到最後一層列印高度略上方，拍攝照片後再次下降。若列印高度未知或佇列中還有其他任務，則跳過此步驟。',
     ffmpegNotInstalled: '未安裝ffmpeg',
     ffmpegRequired: '攝影機捕獲需要ffmpeg。透過 <brew>brew install ffmpeg</brew>（macOS）或 <apt>apt install ffmpeg</apt>（Linux）安裝。',
     camera: '攝影機',

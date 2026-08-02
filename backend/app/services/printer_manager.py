@@ -325,6 +325,7 @@ class PrinterManager:
         self._on_status_change: Callable[[int, PrinterState], None] | None = None
         self._on_ams_change: Callable[[int, list], None] | None = None
         self._on_layer_change: Callable[[int, int], None] | None = None
+        self._on_print_progress: Callable[[int, int], None] | None = None
         self._on_bed_temp_update: Callable[[int, float], None] | None = None
         self._on_drying_complete: Callable[[int, int], None] | None = None
         self._on_assignment_verified: Callable[[int, int, int, bool, dict], None] | None = None
@@ -548,6 +549,15 @@ class PrinterManager:
         """Set callback for layer change events. Receives (printer_id, layer_num)."""
         self._on_layer_change = callback
 
+    def set_print_progress_callback(self, callback: Callable[[int, int], None]):
+        """Set callback for print-progress advances (#2547).
+
+        Receives (printer_id, percent) each time `mc_percent` increases during a
+        running print — including the final layer, where layer-change events
+        have already stopped.
+        """
+        self._on_print_progress = callback
+
     def set_bed_temp_update_callback(self, callback: Callable[[int, float], None]):
         """Set callback for bed temperature updates. Receives (printer_id, bed_temp)."""
         self._on_bed_temp_update = callback
@@ -624,6 +634,10 @@ class PrinterManager:
             if self._on_layer_change:
                 self._schedule_async(self._on_layer_change(printer_id, layer_num))
 
+        def on_print_progress(percent: int):
+            if self._on_print_progress:
+                self._schedule_async(self._on_print_progress(printer_id, percent))
+
         def on_bed_temp_update(bed_temp: float):
             if self._on_bed_temp_update:
                 self._schedule_async(self._on_bed_temp_update(printer_id, bed_temp))
@@ -646,6 +660,7 @@ class PrinterManager:
             on_print_complete=on_print_complete,
             on_ams_change=on_ams_change,
             on_layer_change=on_layer_change,
+            on_print_progress=on_print_progress,
             on_bed_temp_update=on_bed_temp_update,
             on_drying_complete=on_drying_complete,
             on_print_running_observed=on_print_running_observed,

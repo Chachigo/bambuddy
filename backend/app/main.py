@@ -81,6 +81,7 @@ from backend.app.core.database import async_session, engine, init_db
 from backend.app.core.tasks import spawn_background_task
 from backend.app.core.websocket import ws_manager
 from backend.app.models.smart_plug import SmartPlug
+from backend.app.services import print_dispatch_context
 from backend.app.services.archive import ArchiveService, peek_plate_index_in_3mf, swap_plate_suffix
 from backend.app.services.archive_purge import archive_purge_service
 from backend.app.services.bambu_ftp import (
@@ -365,14 +366,17 @@ _stage22_finish_frames: dict[int, bytes] = {}
 _stage22_finish_in_flight: dict[int, asyncio.Event] = {}
 
 # #1867: rolling "last in-print camera frame" per printer. Refreshed on
-# layer-change while the model is still printing, then consumed by the
-# FINISH-state finish-photo path. Firmware that never emits `stg_cur=22`
-# (A1 Mini, confirmed) only reaches `on_finish_photo_moment` at the
-# gcode_state=FINISH transition — which Bambu reports AFTER the user End
-# G-code (e.g. SwapMod plate-swap) has run, so a live grab there captures the
-# swapped/empty plate. Banking is layer-driven, so it naturally freezes at the
-# final object layer: the End G-code emits no further layer_num increases, so
-# the last banked frame is always the finished print before the swap.
+# layer-change and on print-progress advances (#2547) while the model is still
+# printing, then consumed by the FINISH-state finish-photo path when the
+# dispatcher recorded that it injected End G-code into this print. Bambu
+# reports gcode_state=FINISH AFTER the user End G-code (e.g. SwapMod
+# plate-swap) has run, so a live grab there would capture the swapped/empty
+# plate.
+#
+# The load-bearing property: both drivers are print telemetry that stops before
+# the End G-code executes — no further layer_num increases, and mc_percent
+# freezes — so the last banked frame is always the finished print before the
+# swap. Anything added as a third driver must hold that same property.
 _inprint_frame_bank: dict[int, bytes] = {}
 # Monotonic timestamp of the last banked frame per printer — throttles banking
 # so tall prints don't add a camera grab on every layer.
@@ -2275,13 +2279,21 @@ async def _capture_snapshot_for_notification(printer_id: int, printer, logger) -
 async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
     """#1867: bank a recent in-print camera frame for the finish photo.
 
-    Called on every layer change. Grabs one frame (throttled) into
-    ``_inprint_frame_bank`` so the FINISH-state finish-photo path has a
-    pre-swap image on firmware that never emits ``stg_cur=22``. Because it is
-    driven by layer_num increases, banking stops the instant printing ends and
-    the End G-code (e.g. SwapMod plate swap) runs — no further layer changes
-    arrive — so the last banked frame is the finished print, not the swapped
-    plate. Best-effort: any failure just leaves the previous banked frame.
+    Called on every layer change and (#2547) on every print-progress advance.
+    Grabs one frame (throttled) into ``_inprint_frame_bank`` so the finish-photo
+    path has a pre-End-G-code image for prints that end with a plate swap.
+
+    Both drivers are print telemetry that stops the instant printing ends: no
+    further layers, and progress freezes before the End G-code (e.g. SwapMod
+    plate swap) executes. So the last banked frame is always the finished print,
+    never the swapped plate — that property is what the #1867 path relies on and
+    it must survive any change to the throttle below.
+
+    Layer changes alone were not enough: they stop when the *final* layer
+    begins, which on a three-minute last layer left the bank stale by the whole
+    length of that layer (#2547). Progress keeps ticking through it.
+
+    Best-effort: any failure just leaves the previous banked frame.
     """
     logger = logging.getLogger(__name__)
     client = printer_manager.get_client(printer_id)
@@ -2293,12 +2305,16 @@ async def _maybe_bank_inprint_frame(printer_id: int, layer_num: int) -> None:
     if state.mc_print_sub_stage not in (None, 0):
         return
 
-    total = state.total_layers or 0
-    is_last_layer = total > 0 and layer_num >= total
+    # #2547: throttled uniformly, with no last-layer exemption. The old code
+    # bypassed the throttle on the final layer to guarantee a fresh frame there;
+    # now that progress advances also drive banking, that exemption would fire a
+    # camera grab on every percent tick of the last layer. Bambu printers accept
+    # one RTSP client at a time, so each grab contends with the live view.
     now = time.monotonic()
     last = _inprint_frame_bank_ts.get(printer_id, 0.0)
-    if not is_last_layer and (now - last) < _INPRINT_BANK_MIN_INTERVAL:
+    if (now - last) < _INPRINT_BANK_MIN_INTERVAL:
         return
+    total = state.total_layers or 0
 
     try:
         async with async_session() as db:
@@ -2455,6 +2471,10 @@ async def on_print_start(printer_id: int, data: dict):
     # the previous job's banked frame.
     _inprint_frame_bank.pop(printer_id, None)
     _inprint_frame_bank_ts.pop(printer_id, None)
+    # #2547: bind (or clear) the "this print ends with injected End G-code" flag.
+    # Unconditional, so a print Bambuddy didn't dispatch drops the previous
+    # print's flag instead of inheriting it.
+    print_dispatch_context.adopt(printer_id)
 
     # Cancel any active bed cooldown waiter for this printer
     if _bed_cool_waiters.pop(printer_id, None):
@@ -4304,6 +4324,207 @@ async def reconcile_stale_active_prints(printer_id: int) -> int:
     return reconciled
 
 
+# #2547: clearance left between the nozzle and the top of the print when the
+# plate is commanded back into camera framing. The nozzle is parked away from
+# the part by then, so this is belt-and-braces against a max_z_height that
+# under-reports (e.g. a slicer that excludes a final Z hop).
+_PLATE_RESTORE_CLEARANCE_MM = 10.0
+# How far below the restored position to drop the plate again afterwards, so
+# the print is as reachable as Bambu's own end G-code leaves it. Matches the
+# stock `G1 Z{max_layer_z + 100}`; the firmware clamps it to the travel limit
+# on machines with less headroom.
+_PLATE_PARK_DROP_MM = 100.0
+# Feedrate for both moves. F600 is exactly what Bambu's own end G-code uses on
+# this axis, so it is a proven-safe speed for the full travel.
+_PLATE_RESTORE_FEEDRATE = 600
+# Time allowed for the plate to reach the restored position before the camera
+# grab. Sized for the ~100 mm the stock end G-code drops at F600 (10 mm/s).
+_PLATE_RESTORE_SETTLE_SECONDS = 12.0
+# How long `_background_finish_photo` waits for this producer. Must cover the
+# settle window plus a worst-case RTSP grab (15s), and stay below the
+# notification path's own photo wait so a slow producer degrades to a
+# photo-less notification rather than a missed one.
+_FINISH_PHOTO_PRODUCER_WAIT_SECONDS = _PLATE_RESTORE_SETTLE_SECONDS + 23.0
+
+
+async def _max_z_for_current_print(printer_id: int, data: dict, logger) -> float | None:
+    """Height of the print that just finished on ``printer_id``, or None (#2547).
+
+    This number becomes the target of a real Z move, so every step here refuses
+    rather than guesses. A height belonging to some *other* print is the one
+    failure that could drive the nozzle into the model: 20 mm carried onto a
+    200 mm print would command the plate up through the part.
+
+    Two independent things therefore have to agree before a height is returned:
+
+    1. **Identity.** The archive is matched by the finished print's own
+       ``subtask_name``, by equality rather than a ``LIKE``, so "Cube" can never
+       resolve to "Cube v2". Matching on "most recent archive for this printer"
+       is not good enough — ``on_print_complete`` pops the ``_active_prints``
+       binding concurrently with us, and a print Bambuddy failed to archive
+       would silently resolve to its predecessor.
+    2. **Corroboration.** The archive's layer count (parsed from the 3MF) has to
+       match the layer count the printer itself reported over MQTT for the print
+       that just ended. These come from genuinely different sources, so a
+       mismatch means the row is not this print, whatever its name says.
+
+    ``completed`` is accepted alongside ``printing`` only because
+    ``on_print_complete`` may already have flipped the status by the time we
+    run; the identity check above is what actually selects the row.
+    """
+    subtask_name = (data.get("subtask_name") or "").strip()
+    if not subtask_name:
+        # Nothing to identify the print by — refuse rather than fall back to
+        # "whatever ran last on this printer".
+        logger.info("[PLATE-RESTORE] printer %s: print has no name to match on — skipping", printer_id)
+        return None
+
+    try:
+        from backend.app.models.archive import PrintArchive
+        from backend.app.utils.threemf_tools import extract_max_z_height_from_3mf
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(PrintArchive)
+                .where(
+                    PrintArchive.printer_id == printer_id,
+                    PrintArchive.status.in_(("printing", "completed")),
+                    PrintArchive.deleted_at.is_(None),
+                    or_(
+                        PrintArchive.print_name == subtask_name,
+                        PrintArchive.filename == subtask_name,
+                        PrintArchive.filename == f"{subtask_name}.3mf",
+                        PrintArchive.filename == f"{subtask_name}.gcode.3mf",
+                    ),
+                )
+                .order_by(PrintArchive.id.desc())
+                .limit(1)
+            )
+            archive = result.scalar_one_or_none()
+        if archive is None or not archive.file_path:
+            logger.info("[PLATE-RESTORE] printer %s: no archive matches %r — skipping", printer_id, subtask_name)
+            return None
+
+        client = printer_manager.get_client(printer_id)
+        reported_layers = getattr(getattr(client, "state", None), "total_layers", None)
+        if reported_layers and archive.total_layers and reported_layers != archive.total_layers:
+            logger.warning(
+                "[PLATE-RESTORE] printer %s: archive %s says %s layers but the printer reported %s "
+                "— refusing to move the plate on a height that may not be this print's",
+                printer_id,
+                archive.id,
+                archive.total_layers,
+                reported_layers,
+            )
+            return None
+
+        path = Path(archive.file_path)
+        if not path.is_absolute():
+            path = Path(app_settings.data_dir) / path
+        return await asyncio.to_thread(extract_max_z_height_from_3mf, path, archive.plate_id or 1)
+    except Exception as e:
+        logger.debug("[PLATE-RESTORE] printer %s: no usable print height: %s", printer_id, e)
+        return None
+
+
+async def _restore_plate_for_finish_photo(printer_id: int, max_z_height: float, logger) -> bool:
+    """Raise the plate back into camera framing before the finish photo (#2547).
+
+    Bambu's end G-code drops the plate ~100 mm as the last thing it does, so by
+    the time ``gcode_state`` reaches FINISH the finished print sits far below
+    the camera's natural framing — the complaint behind #1145, #1397 and #1565.
+    This commands an absolute ``G1 Z`` back to just above the last printed
+    layer.
+
+    Absolute, not relative, is the whole safety argument. ``max_z_height +
+    clearance`` is a height the toolhead was physically at seconds earlier, so
+    it is inside the travel limits by construction and leaves the nozzle above
+    the part. It is also unambiguous across model families: Z is the
+    nozzle-to-bed gap whether the bed moves (X1/P1/H2) or the toolhead does
+    (A1), so unlike the relative bed-jog path (#1334) there is no sign to get
+    wrong. ``M211`` is never touched — see the bed-jog docstring for why
+    (#2579).
+
+    Returns True if the move was sent and waited out, False if it was skipped.
+    """
+    client = printer_manager.get_client(printer_id)
+    if client is None:
+        return False
+
+    # Re-read state immediately before commanding motion. If the queue has
+    # already started the next print, the printer is no longer ours to move.
+    state = getattr(client, "state", None)
+    if state is None or state.state != "FINISH":
+        logger.info(
+            "[PLATE-RESTORE] printer %s is in state %s, not FINISH — skipping",
+            printer_id,
+            getattr(state, "state", "unknown"),
+        )
+        return False
+
+    target_z = max_z_height + _PLATE_RESTORE_CLEARANCE_MM
+    if not client.send_gcode(f"G90\nG1 Z{target_z:.2f} F{_PLATE_RESTORE_FEEDRATE}"):
+        logger.warning("[PLATE-RESTORE] printer %s: send failed — capturing where it is", printer_id)
+        return False
+
+    logger.info(
+        "[PLATE-RESTORE] printer %s: plate to Z%.2f (print top %.2f + %.1f clearance), settling %.0fs",
+        printer_id,
+        target_z,
+        max_z_height,
+        _PLATE_RESTORE_CLEARANCE_MM,
+        _PLATE_RESTORE_SETTLE_SECONDS,
+    )
+    await asyncio.sleep(_PLATE_RESTORE_SETTLE_SECONDS)
+    return True
+
+
+def _park_plate_after_finish_photo(printer_id: int, max_z_height: float, logger) -> None:
+    """Drop the plate again after the finish photo (#2547).
+
+    Without this the user walks up to a finished print sitting just under the
+    nozzle, which is exactly the position Bambu's end G-code goes out of its way
+    to avoid — awkward to lift the plate out, and easy to knock the toolhead.
+    Fire-and-forget: if it doesn't land, the plate is merely high, and the next
+    print homes anyway.
+    """
+    client = printer_manager.get_client(printer_id)
+    state = getattr(client, "state", None) if client else None
+    if client is None or state is None or state.state != "FINISH":
+        return
+    client.send_gcode(f"G90\nG1 Z{max_z_height + _PLATE_PARK_DROP_MM:.2f} F{_PLATE_RESTORE_FEEDRATE}")
+    logger.debug("[PLATE-RESTORE] printer %s: plate returned to unload height", printer_id)
+
+
+async def _plate_restore_is_blocked_by_queue(printer_id: int) -> bool:
+    """True if a queue item is about to take this printer (#2547).
+
+    The scheduler dispatches the next job the moment a print completes, and a
+    plate move interleaved with a print start is not a race worth having. The
+    state re-check in ``_restore_plate_for_finish_photo`` closes the tail of
+    this window; this closes the head of it.
+    """
+    try:
+        from backend.app.models.print_queue import PrintQueueItem
+
+        async with async_session() as db:
+            result = await db.execute(
+                select(PrintQueueItem.id)
+                .where(
+                    PrintQueueItem.printer_id == printer_id,
+                    PrintQueueItem.status.in_(("pending", "printing")),
+                )
+                .limit(1)
+            )
+            return result.scalar_one_or_none() is not None
+    except Exception as e:
+        # Fail closed: if we can't tell, don't move the plate.
+        logging.getLogger(__name__).debug(
+            "[PLATE-RESTORE] queue check failed for printer %s: %s — skipping restore", printer_id, e
+        )
+        return True
+
+
 async def on_finish_photo_moment(printer_id: int, data: dict):
     """Pre-capture a finish photo when the printer enters stage 22 / FINISH (#1721).
 
@@ -4349,6 +4570,11 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
     producer_done = asyncio.Event()
     _stage22_finish_in_flight[printer_id] = producer_done
 
+    # #2547: set once the plate has actually been raised, and read by the
+    # `finally` below. Declared out here so a failure anywhere after the move —
+    # a camera timeout, a DB error — still lowers the plate again.
+    restore_max_z: float | None = None
+
     try:
         async with async_session() as db:
             from backend.app.api.routes.settings import get_setting
@@ -4358,6 +4584,9 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
             if capture_setting is not None and capture_setting.lower() != "true":
                 logger.info("[FINISH-PHOTO-MOMENT] capture_finish_photo disabled — skipping pre-capture")
                 return
+
+            restore_setting = await get_setting(db, "finish_photo_restore_plate")
+            restore_plate_enabled = restore_setting is None or restore_setting.lower() == "true"
 
             result = await db.execute(select(Printer).where(Printer.id == printer_id))
             printer = result.scalar_one_or_none()
@@ -4375,22 +4604,64 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
         # exactly one rotation in `_stage22_finish_frames` either way.
         frame_already_rotated = False
 
-        # #1867: on the FINISH-state fallback the End G-code (e.g. SwapMod
-        # plate-swap) has already run, so a live grab now captures the swapped
-        # or empty plate. Prefer the banked in-print frame — the finished
-        # print from the last object layer, before the swap. Only for
-        # `finish_state`: the `stage_22` and `last_layer` triggers fire before
-        # the swap and give cleaner (parked-toolhead) framing via a live grab.
-        if trigger == "finish_state":
+        # On the FINISH-state path the End G-code has already run, and two very
+        # different situations arrive here needing opposite answers.
+        #
+        # #1867: if Bambuddy injected End G-code into this print, a SwapMod
+        # snippet may have ejected the plate — the scene in front of the camera
+        # is no longer the finished print, and no amount of moving the plate
+        # brings it back. Use the banked in-print frame instead.
+        #
+        # #2547: otherwise the print is still sitting there, just ~100 mm lower
+        # than the camera frames well, and the toolhead is parked out of the
+        # way. That is the *best* moment available on firmware that never emits
+        # stage 22 (H2C, A1 Mini) — so capture live, after putting the plate
+        # back. Preferring the bank here unconditionally, as this code used to,
+        # is what shipped a mid-print photo with the toolhead over the part.
+        if trigger == "finish_state" and print_dispatch_context.end_gcode_injected(printer_id):
             banked = _inprint_frame_bank.get(printer_id)
             if banked:
                 frame_bytes = banked
                 frame_already_rotated = True
                 logger.info(
-                    "[FINISH-PHOTO-MOMENT] using banked in-print frame (%d bytes) — "
-                    "avoids post-swap live grab on stage-22-less firmware",
+                    "[FINISH-PHOTO-MOMENT] End G-code was injected — using banked in-print "
+                    "frame (%d bytes) instead of a post-swap live grab",
                     len(banked),
                 )
+            else:
+                logger.warning(
+                    "[FINISH-PHOTO-MOMENT] End G-code was injected for printer %s but the "
+                    "in-print bank is empty — falling back to a live grab, which may show a "
+                    "swapped or empty plate",
+                    printer_id,
+                )
+
+        # `restore_max_z` is set only once the plate is actually up, because the
+        # `finally` reads it to decide whether it owes a move back down.
+        #
+        # Never on a print whose End G-code Bambuddy injected, even when the bank
+        # came up empty above: that machine may have just ejected its plate, and
+        # driving Z into whatever a swap mechanism is doing is not a risk worth
+        # taking for a photo of a bed we already know may be bare.
+        if (
+            frame_bytes is None
+            and trigger == "finish_state"
+            and restore_plate_enabled
+            and not print_dispatch_context.end_gcode_injected(printer_id)
+        ):
+            wants_restore = await _max_z_for_current_print(printer_id, data, logger)
+            if wants_restore is None:
+                logger.info(
+                    "[PLATE-RESTORE] printer %s: print height unknown — capturing without restore",
+                    printer_id,
+                )
+            elif await _plate_restore_is_blocked_by_queue(printer_id):
+                logger.info(
+                    "[PLATE-RESTORE] printer %s has queued work — skipping plate restore",
+                    printer_id,
+                )
+            elif await _restore_plate_for_finish_photo(printer_id, wants_restore, logger):
+                restore_max_z = wants_restore
 
         if frame_bytes is None and printer.external_camera_enabled and printer.external_camera_url:
             from backend.app.api.routes.camera import live_frame_for_capture
@@ -4447,6 +4718,7 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
                 "[FINISH-PHOTO-MOMENT] no frame captured for printer %s — post-completion fallback will retry",
                 printer_id,
             )
+
     except Exception as e:
         logger.warning(
             "[FINISH-PHOTO-MOMENT] pre-capture failed for printer %s: %s",
@@ -4454,6 +4726,13 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
             e,
         )
     finally:
+        # #2547: we raised the plate, so we own lowering it — including when the
+        # capture above failed or threw partway through.
+        if restore_max_z is not None:
+            try:
+                _park_plate_after_finish_photo(printer_id, restore_max_z, logger)
+            except Exception as e:
+                logger.warning("[PLATE-RESTORE] printer %s: could not lower plate: %s", printer_id, e)
         # #1790: always unblock the consumer's bounded wait — whether we stored
         # a frame, gave up, or hit an exception. Local ref means cleanup of the
         # dict entry by the consumer doesn't affect signalling.
@@ -5270,6 +5549,11 @@ async def on_print_complete(printer_id: int, data: dict):
 
     async def _background_finish_photo() -> str | None:
         """Capture finish photo in background. Returns photo filename if captured."""
+        # #2547: set once this function has raised the plate itself (the
+        # timelapse path, where the moment producer returned without doing it).
+        # Declared out here so the `finally` can lower it again no matter where
+        # the capture below fails.
+        plate_restored_z: float | None = None
         try:
             logger.info("[PHOTO-BG] Starting finish photo capture for archive %s", archive_id)
 
@@ -5345,10 +5629,16 @@ async def on_print_complete(printer_id: int, data: dict):
                 # producer's still-in-flight grab (single-client RTSP
                 # on Bambu printers). Wait for the producer to finish
                 # or give up before touching the cache.
+                #
+                # #2547: 20s was enough when the producer only ever grabbed a
+                # frame. It now also raises the plate first, which costs the
+                # settle window before the grab even starts — so the budget has
+                # to cover settle + a worst-case 15s RTSP timeout, and still sit
+                # under the notification's own photo wait below.
                 in_flight = _stage22_finish_in_flight.pop(printer_id, None)
                 if in_flight is not None:
                     try:
-                        await asyncio.wait_for(in_flight.wait(), timeout=20.0)
+                        await asyncio.wait_for(in_flight.wait(), timeout=_FINISH_PHOTO_PRODUCER_WAIT_SECONDS)
                     except asyncio.TimeoutError:
                         logger.warning(
                             "[PHOTO-BG] timed out waiting for stage-22 producer for printer %s — proceeding to fallback",
@@ -5370,6 +5660,37 @@ async def on_print_complete(printer_id: int, data: dict):
                         photo_filename,
                         len(cached_frame),
                     )
+
+            # #2547: the timelapse path reaches the live grab below whenever the
+            # video hasn't landed in time — the documented usual outcome on
+            # P1-series, where transfers are slowest. `on_finish_photo_moment`
+            # returned early for those prints without raising the plate, so
+            # without this the photo that actually ships in the notification is
+            # of an already-dropped plate: exactly the framing #1145/#1397/#1565
+            # asked us to fix. The archive still gets the better video frame
+            # later; this is about the image the user is sent.
+            #
+            # Gated on `timelapse_was_active` precisely because that is the
+            # condition under which the producer skipped. On every other path it
+            # has already raised and lowered the plate, and repeating that here
+            # would be a second pointless round trip.
+            if (
+                not photo_filename
+                and data.get("timelapse_was_active")
+                and not print_dispatch_context.end_gcode_injected(printer_id)
+            ):
+                try:
+                    async with async_session() as db:
+                        from backend.app.api.routes.settings import get_setting
+
+                        restore_setting = await get_setting(db, "finish_photo_restore_plate")
+                    if restore_setting is None or restore_setting.lower() == "true":
+                        max_z = await _max_z_for_current_print(printer_id, data, logger)
+                        if max_z is not None and not await _plate_restore_is_blocked_by_queue(printer_id):
+                            if await _restore_plate_for_finish_photo(printer_id, max_z, logger):
+                                plate_restored_z = max_z
+                except Exception as e:
+                    logger.warning("[PLATE-RESTORE] printer %s: restore failed: %s", printer_id, e)
 
             # Fallback chain: external camera → buffered live frame →
             # fresh RTSP capture. Only runs if the timelapse path above
@@ -5471,6 +5792,15 @@ async def on_print_complete(printer_id: int, data: dict):
         except Exception as e:
             logger.warning("[PHOTO-BG] Failed: %s", e)
             return None
+        finally:
+            # #2547: we raised the plate, so we owe the move back down — even if
+            # the capture in between threw. Otherwise the user finds the print
+            # pinned under the nozzle.
+            if plate_restored_z is not None:
+                try:
+                    _park_plate_after_finish_photo(printer_id, plate_restored_z, logger)
+                except Exception as e:
+                    logger.warning("[PLATE-RESTORE] printer %s: could not lower plate: %s", printer_id, e)
 
     spawn_background_task(_background_energy_calculation(), name="background-energy-calc")
     # Photo capture task - result will be used by notifications
@@ -5673,7 +6003,22 @@ async def on_print_complete(printer_id: int, data: dict):
     # timelapse for up to 60s (#1397) — extend the budget so the notification
     # carries the correct bed-up photo instead of falling through to the
     # live-cam grab. Adds ~30s of notification latency at worst on slow links.
-    photo_wait_timeout = 75 if data.get("timelapse_was_active") else 45
+    #
+    # #2547: both budgets now have to cover a plate restore as well.
+    #
+    # Without timelapse, the wait is on the moment producer, which raises the
+    # plate before its grab — so this has to outlast that producer's own budget.
+    #
+    # With timelapse, the capture polls up to
+    # `_FINISH_PHOTO_TIMELAPSE_POLL_TIMEOUT_SECONDS` for the video and only then
+    # falls back to a live grab, which is the case that raises the plate. At the
+    # old flat 75s that fallback was guaranteed to be cut off mid-settle, so the
+    # restore would have moved the plate for a photo nobody waited for.
+    photo_wait_timeout = (
+        _FINISH_PHOTO_TIMELAPSE_POLL_TIMEOUT_SECONDS + _FINISH_PHOTO_PRODUCER_WAIT_SECONDS
+        if data.get("timelapse_was_active")
+        else _FINISH_PHOTO_PRODUCER_WAIT_SECONDS + 15
+    )
 
     async def _photo_then_notify():
         """Wait for photo capture, then send notification with photo URL."""
@@ -6590,10 +6935,10 @@ async def lifespan(app: FastAPI):
 
         await tl_layer_change(printer_id, layer_num)
 
-        # #1867: bank a recent in-print frame so the FINISH-state finish-photo
-        # path (firmware that never emits stg_cur=22, e.g. A1 Mini) has a
-        # pre-swap image to fall back on instead of a live grab of the swapped
-        # plate. Layer-driven, so it freezes at the final object layer.
+        # #1867: bank a recent in-print frame so the finish-photo path has a
+        # pre-End-G-code image to use instead of a live grab of a swapped plate.
+        # #2547 added `on_print_progress` as a second driver — this one alone
+        # stops firing once the final layer begins.
         await _maybe_bank_inprint_frame(printer_id, layer_num)
 
         # First layer complete notification (layer_num >= 2 means layer 1 is done).
@@ -6636,6 +6981,21 @@ async def lifespan(app: FastAPI):
                 logging.getLogger(__name__).warning("First layer notification failed: %s", e)
 
     printer_manager.set_layer_change_callback(on_layer_change)
+
+    async def on_print_progress(printer_id: int, percent: int):
+        """#2547: keep the in-print frame bank fresh through the final layer.
+
+        `on_layer_change` stops the moment the last layer starts, which on the
+        H2C capture that closed #2547 left the bank stale for the three minutes
+        that layer took. Progress is the only field that keeps advancing there,
+        and it freezes before the End G-code runs — so banking on it stays
+        inside the print and never sees a swapped plate.
+        """
+        client = printer_manager.get_client(printer_id)
+        state = client.state if client else None
+        await _maybe_bank_inprint_frame(printer_id, state.layer_num if state else 0)
+
+    printer_manager.set_print_progress_callback(on_print_progress)
 
     # Event-driven bed cooldown: fires whenever bed_temper arrives via MQTT
     async def on_bed_temp_update(printer_id: int, bed_temp: float):

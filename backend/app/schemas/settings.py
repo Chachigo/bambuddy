@@ -33,6 +33,16 @@ class AppSettings(BaseModel):
             "this print, otherwise it is deleted automatically after the photo is captured."
         ),
     )
+    finish_photo_restore_plate: bool = Field(
+        default=True,
+        description=(
+            "Raise the build plate back into camera framing before taking the finish photo. "
+            "Bambu's end G-code drops the plate ~100mm as the last thing it does, leaving the "
+            "finished print far below the camera's natural framing. Bambuddy moves it back to "
+            "just above the last printed layer, takes the photo, then lowers it again. Skipped "
+            "when the print height is unknown or another job is queued for the printer."
+        ),
+    )
     default_filament_cost: float = Field(default=25.0, description="Default filament cost per kg")
     currency: str = Field(default="USD", description="Currency for cost tracking")
     energy_cost_per_kwh: float = Field(default=0.15, description="Electricity cost per kWh for energy tracking")
@@ -496,6 +506,7 @@ class AppSettingsUpdate(BaseModel):
     auto_archive: bool | None = None
     save_thumbnails: bool | None = None
     capture_finish_photo: bool | None = None
+    finish_photo_restore_plate: bool | None = None
     default_filament_cost: float | None = None
     currency: str | None = None
     energy_cost_per_kwh: float | None = None

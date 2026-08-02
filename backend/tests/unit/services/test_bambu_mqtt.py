@@ -6327,14 +6327,19 @@ class TestTrayNowH2SExternalSpoolOverride:
         assert mqtt_client.state.tray_now == 255
 
 
-class TestLastLayerFinishPhotoTrigger:
-    """Tests for #1867: layer_num→total_layer_num edge fires the finish-photo
-    moment before user End G-code (e.g. SwapMod) executes.
+class TestNoLastLayerFinishPhotoTrigger:
+    """#2547: the layer_num→total_layer_num edge must NOT trigger a photo.
 
-    A1 Mini firmware skips stg_cur=22 entirely, so the FINISH-state fallback
-    fires after end G-code has already moved the plate. The last-layer edge
-    is the earliest reliable "print finished" signal available across all
-    Bambu printer variants.
+    That edge is the moment the printer *starts* the final layer. On the H2C
+    capture that closed #2547 it arrived at 92% with `mc_remaining_time=2`,
+    three minutes and one filament change before the print actually ended, so
+    the photo showed the toolhead mid-print over the part. It also latched
+    `_finish_photo_captured`, which locked out the two triggers that fire at a
+    real end-of-print — so these tests pin both halves: the edge is silent, and
+    the later triggers still work after it has passed.
+
+    #1867 (End G-code ejecting the plate before FINISH) is handled in
+    `on_finish_photo_moment` via `print_dispatch_context`, not here.
     """
 
     @pytest.fixture
@@ -6351,79 +6356,31 @@ class TestLastLayerFinishPhotoTrigger:
         client.state.layer_num = 99
         return client
 
-    def test_fires_when_layer_reaches_total(self, mqtt_client):
+    def test_reaching_the_last_layer_fires_nothing(self, mqtt_client):
         events = []
         mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
 
         mqtt_client._process_message({"print": {"layer_num": 100}})
-
-        assert len(events) == 1
-        assert events[0]["trigger"] == "last_layer"
-        assert mqtt_client._finish_photo_captured is True
-
-    def test_does_not_fire_when_layer_still_below_total(self, mqtt_client):
-        events = []
-        mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
-
-        mqtt_client._process_message({"print": {"layer_num": 99}})
 
         assert events == []
         assert mqtt_client._finish_photo_captured is False
 
-    def test_edge_only_no_double_fire(self, mqtt_client):
-        """Once fired, subsequent messages at layer_num == total must not
-        re-fire (the guard flips _finish_photo_captured to True)."""
+    def test_stage_22_still_fires_after_the_last_layer_started(self, mqtt_client):
+        """The regression the removed trigger caused: stage 22 is the good
+        moment on firmware that emits it, and it arrives *after* the last-layer
+        edge. The old latch swallowed it."""
         events = []
         mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
 
         mqtt_client._process_message({"print": {"layer_num": 100}})
-        mqtt_client._process_message({"print": {"layer_num": 100}})
-        mqtt_client._process_message({"print": {"layer_num": 100}})
-
-        assert len(events) == 1
-
-    def test_does_not_fire_when_not_running(self, mqtt_client):
-        """If the print never went through RUNNING (Bambuddy restart mid-print,
-        firmware replay), _was_running is False and no photo trigger fires."""
-        mqtt_client._was_running = False
-        events = []
-        mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
-
-        mqtt_client._process_message({"print": {"layer_num": 100}})
-
-        assert events == []
-
-    def test_does_not_fire_when_total_layers_unknown(self, mqtt_client):
-        """total=0 (before slicer metadata arrives) must never satisfy the
-        `new_layer >= total` condition."""
-        mqtt_client.state.total_layers = 0
-        mqtt_client.state.layer_num = 0
-        events = []
-        mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
-
-        mqtt_client._process_message({"print": {"layer_num": 0}})
-
-        assert events == []
-
-    def test_stage_22_skipped_after_last_layer_already_fired(self, mqtt_client):
-        """Once the last-layer trigger has set _finish_photo_captured, the
-        stage-22 hook that runs later on AMS printers must be a no-op."""
-        events = []
-        mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
-
-        mqtt_client._process_message({"print": {"layer_num": 100}})
-        assert len(events) == 1
-
         mqtt_client.state.progress = 100
         mqtt_client._process_message({"print": {"stg_cur": 22}})
 
-        assert len(events) == 1
+        assert [e["trigger"] for e in events] == ["stage_22"]
 
-    def test_finish_state_fallback_skipped_after_last_layer_fired(self, mqtt_client):
-        """The gcode_state=FINISH fallback (which fires after end G-code on
-        every printer) must be suppressed once the last-layer edge fired.
-        This is the #1867 regression check — SwapMod plate must be captured
-        by last_layer, NOT by the post-End-G-code FINISH fallback."""
+    def test_finish_state_still_fires_after_the_last_layer_started(self, mqtt_client):
+        """H2C/A1 Mini never emit stage 22, so FINISH is their only moment —
+        and it is now reachable, where the latch used to block it."""
         events = []
         completion_events = []
         mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
@@ -6431,12 +6388,91 @@ class TestLastLayerFinishPhotoTrigger:
         mqtt_client._previous_gcode_state = "RUNNING"
 
         mqtt_client._process_message({"print": {"layer_num": 100}})
-        assert events[0]["trigger"] == "last_layer"
-
         mqtt_client._process_message({"print": {"gcode_state": "FINISH"}})
 
-        assert len(events) == 1
+        assert [e["trigger"] for e in events] == ["finish_state"]
         assert len(completion_events) == 1
+
+    def test_no_photo_trigger_fires_repeatedly_across_the_last_layer(self, mqtt_client):
+        """A three-minute last layer publishes many frames at layer_num ==
+        total. None of them may produce a moment."""
+        events = []
+        mqtt_client.on_finish_photo_moment = lambda data: events.append(data)
+
+        for percent in (92, 93, 94, 95, 97, 98, 99):
+            mqtt_client._process_message({"print": {"layer_num": 100, "mc_percent": percent}})
+
+        assert events == []
+
+
+class TestPrintProgressCallback:
+    """#2547: `on_print_progress` keeps the finish-photo frame bank fresh.
+
+    Layer changes stop firing the instant the final layer begins, so the bank
+    would otherwise stay stale for the whole length of that layer. Progress is
+    the field that keeps advancing there — and it freezes before the End G-code
+    runs, which is what keeps a swapped plate out of the bank (#1867).
+    """
+
+    @pytest.fixture
+    def mqtt_client(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        client = BambuMQTTClient(
+            ip_address="192.168.1.100",
+            serial_number="TEST123",
+            access_code="12345678",
+        )
+        client._was_running = True
+        return client
+
+    def test_fires_on_each_advance(self, mqtt_client):
+        seen = []
+        mqtt_client.on_print_progress = seen.append
+
+        for percent in (92, 93, 94):
+            mqtt_client._process_message({"print": {"mc_percent": percent}})
+
+        assert seen == [92, 93, 94]
+
+    def test_does_not_fire_when_progress_is_unchanged(self, mqtt_client):
+        """Most frames repeat the same percent; each one would otherwise cost a
+        camera grab that contends with the live view."""
+        seen = []
+        mqtt_client.on_print_progress = seen.append
+
+        mqtt_client._process_message({"print": {"mc_percent": 92}})
+        mqtt_client._process_message({"print": {"mc_percent": 92}})
+        mqtt_client._process_message({"print": {"mc_percent": 92}})
+
+        assert seen == [92]
+
+    def test_does_not_fire_when_progress_goes_backwards(self, mqtt_client):
+        """Firmware resets progress to 0 on cancel — that is not the print
+        advancing, and banking a frame there would be banking a cancelled bed."""
+        seen = []
+        mqtt_client.on_print_progress = seen.append
+
+        mqtt_client._process_message({"print": {"mc_percent": 92}})
+        mqtt_client._process_message({"print": {"mc_percent": 0}})
+
+        assert seen == [92]
+
+    def test_does_not_fire_when_no_print_is_running(self, mqtt_client):
+        mqtt_client._was_running = False
+        seen = []
+        mqtt_client.on_print_progress = seen.append
+
+        mqtt_client._process_message({"print": {"mc_percent": 92}})
+
+        assert seen == []
+
+    def test_absent_callback_is_not_an_error(self, mqtt_client):
+        mqtt_client.on_print_progress = None
+
+        mqtt_client._process_message({"print": {"mc_percent": 92}})
+
+        assert mqtt_client.state.progress == 92
 
 
 class TestPresumedPowerOffRecovery:

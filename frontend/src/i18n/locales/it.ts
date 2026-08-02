@@ -2405,6 +2405,8 @@ export default {
     autoArchiveDescription: 'Salva automaticamente i file 3MF al completamento delle stampe',
     saveThumbnailsDescription: 'Estrai e salva le immagini di anteprima dai file 3MF',
     captureFinishPhotoDescription: 'Scatta una foto dalla fotocamera della stampante al completamento della stampa. Bambuddy registra un breve timelapse durante la stampa in modo che la foto possa essere ricavata dal momento precedente all\'abbassamento del piatto; il file del timelapse viene mantenuto se hai abilitato il timelapse per questa stampa, altrimenti viene eliminato automaticamente dopo l\'acquisizione della foto.',
+    finishPhotoRestorePlate: 'Solleva il piatto per la foto finale',
+    finishPhotoRestorePlateDescription: 'La stampante abbassa il piatto di circa 100 mm al termine di una stampa, lasciando l\'oggetto finito sotto l\'inquadratura della fotocamera. Bambuddy lo risolleva fino a poco sopra l\'ultimo strato stampato, scatta la foto e poi lo riabbassa. Ignorato se l\'altezza di stampa è sconosciuta o se un altro lavoro è in coda.',
     ffmpegNotInstalled: 'ffmpeg non installato',
     ffmpegRequired: 'L\'acquisizione dalla fotocamera richiede ffmpeg. Installalo tramite <brew>brew install ffmpeg</brew> (macOS) o <apt>apt install ffmpeg</apt> (Linux).',
     camera: 'Fotocamera',

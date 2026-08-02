@@ -661,6 +661,7 @@ class BambuMQTTClient:
         on_print_complete: Callable[[dict], None] | None = None,
         on_ams_change: Callable[[list], None] | None = None,
         on_layer_change: Callable[[int], None] | None = None,
+        on_print_progress: Callable[[int], None] | None = None,
         on_bed_temp_update: Callable[[float], None] | None = None,
         on_drying_complete: Callable[[int], None] | None = None,
         on_print_running_observed: Callable[[dict], None] | None = None,
@@ -678,6 +679,13 @@ class BambuMQTTClient:
         self.on_print_complete = on_print_complete
         self.on_ams_change = on_ams_change
         self.on_layer_change = on_layer_change
+        # #2547: fired when `mc_percent` advances during a running print.
+        # `on_layer_change` stops firing the instant the final layer starts, so
+        # it is blind to the last few percent of a print — which is exactly the
+        # window the finish-photo frame bank needs to keep refreshing through.
+        # Progress is the one field that keeps ticking there and then freezes
+        # before the end G-code runs, so banking on it stays inside the print.
+        self.on_print_progress = on_print_progress
         self.on_bed_temp_update = on_bed_temp_update
         # #1349: fired when an AMS unit's dry_time falls from >0 to 0 — i.e.
         # the drying cycle just finished (auto- or manually-triggered).
@@ -2988,7 +2996,14 @@ class BambuMQTTClient:
             # Save last non-zero progress for usage tracking (firmware resets to 0 on cancel)
             if self.state.progress > 0:
                 self._last_valid_progress = self.state.progress
+            previous_progress = self.state.progress
             self.state.progress = float(data["mc_percent"])
+            # #2547: strictly-increasing only. The firmware resets progress to 0
+            # on cancel and re-reports the same percent on most frames; neither
+            # is the print advancing, and both would make the frame bank grab a
+            # camera frame for nothing.
+            if self.state.progress > previous_progress and self._was_running and self.on_print_progress:
+                self.on_print_progress(int(self.state.progress))
         if "mc_remaining_time" in data:
             self.state.remaining_time = int(data["mc_remaining_time"])
         if "mc_print_sub_stage" in data:
@@ -3069,35 +3084,20 @@ class BambuMQTTClient:
                     new_layer,
                 )
                 self._request_push_all()
-            # #1867 last-layer finish-photo trigger. A1 Mini (and other
-            # firmware variants) skips `stg_cur=22`, so the fallback fires
-            # at gcode_state=FINISH — which runs AFTER user End G-code
-            # (e.g. SwapMod plate-swap) and captures the wrong plate.
-            # Firing on the layer_num→total_layer_num edge captures the
-            # last object layer before any end G-code executes.
-            total = self.state.total_layers or 0
-            if (
-                total > 0
-                and new_layer >= total
-                and old_layer < total
-                and self._was_running
-                and not self._finish_photo_captured
-                and self.on_finish_photo_moment
-            ):
-                self._finish_photo_captured = True
-                logger.info(
-                    f"[{self.serial_number}] FINISH PHOTO MOMENT (last-layer) — "
-                    f"layer={new_layer}/{total}, "
-                    f"timelapse_active={self._timelapse_during_print}"
-                )
-                self.on_finish_photo_moment(
-                    {
-                        "trigger": "last_layer",
-                        "filename": self._previous_gcode_file or self.state.gcode_file,
-                        "subtask_name": self.state.subtask_name,
-                        "timelapse_was_active": self._timelapse_during_print,
-                    }
-                )
+            # #2547: there is deliberately NO finish-photo trigger on the
+            # last-layer edge. `layer_num` reaching `total_layer_num` is the
+            # moment the printer *starts* the final layer, not the moment it
+            # finishes it — on the H2C capture that closed #2547 the edge
+            # arrived at 92% with `mc_remaining_time=2`, three minutes and a
+            # filament change before the print actually ended, so the photo
+            # showed the toolhead mid-print over the part. Worse, the trigger
+            # latched `_finish_photo_captured`, locking out both the stage-22
+            # and FINISH triggers below for the rest of the print.
+            #
+            # #1867 (End G-code ejects the plate before FINISH) is handled
+            # where it belongs instead: `on_finish_photo_moment` prefers the
+            # in-print frame bank when the dispatcher recorded that it injected
+            # End G-code into this print. See services/print_dispatch_context.
         if total_from_this_frame:
             # Firmware (P1S observed) resets `total_layer_num` to 0 at print
             # end — same shape as the `layer_num` reset guarded above. Applying

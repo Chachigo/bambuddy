@@ -14,6 +14,7 @@ from backend.app.utils.threemf_tools import (
     extract_bed_type_from_3mf,
     extract_embedded_presets_from_3mf,
     extract_filament_usage_from_3mf,
+    extract_max_z_height_from_3mf,
     extract_plate_extruder_set_from_3mf,
     extract_print_time_from_3mf,
     extract_project_filaments_from_3mf,
@@ -1304,3 +1305,90 @@ class TestExtractPlateMetadataFrom3mf:
         assert meta.filament_usage == []
         # Missing file must not create a sticky cache entry (it may appear later).
         assert spy.call_count == 2
+
+
+def _make_plate_3mf(tmp_path, gcode_by_name: dict[str, str], name: str = "print.3mf"):
+    """Write a 3MF containing the given plate G-code members."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        for member, content in gcode_by_name.items():
+            zf.writestr(member, content)
+    buffer.seek(0)
+    path = tmp_path / name
+    path.write_bytes(buffer.read())
+    return path
+
+
+def _header(**values: str) -> str:
+    lines = ["; HEADER_BLOCK_START"]
+    lines += [f"; {key.replace('_', ' ')}: {value}" for key, value in values.items()]
+    lines.append("; HEADER_BLOCK_END")
+    lines.append("G1 X0 Y0")
+    return "\n".join(lines)
+
+
+class TestExtractMaxZHeightFrom3mf:
+    """#2547: the print's top Z, used to command the plate back into camera
+    framing before the finish photo.
+
+    This value becomes the target of a real Z move, so "don't know" has to be
+    reported as None rather than defaulted — a wrong height would drive the
+    nozzle into the part.
+    """
+
+    def test_reads_max_z_height_from_the_plate_header(self, tmp_path):
+        path = _make_plate_3mf(
+            tmp_path,
+            {"Metadata/plate_1.gcode": _header(max_z_height="16.00", total_layer_number="80")},
+        )
+        assert extract_max_z_height_from_3mf(path, 1) == 16.0
+
+    def test_picks_the_requested_plate(self, tmp_path):
+        path = _make_plate_3mf(
+            tmp_path,
+            {
+                "Metadata/plate_1.gcode": _header(max_z_height="16.00"),
+                "Metadata/plate_2.gcode": _header(max_z_height="42.50"),
+            },
+        )
+        assert extract_max_z_height_from_3mf(path, 2) == 42.5
+
+    def test_falls_back_to_the_only_gcode_when_the_plate_name_does_not_match(self, tmp_path):
+        """Files from slicers that don't use Bambu's plate naming still resolve."""
+        path = _make_plate_3mf(tmp_path, {"whatever.gcode": _header(max_z_height="7.25")})
+        assert extract_max_z_height_from_3mf(path, 3) == 7.25
+
+    def test_missing_header_key_returns_none(self, tmp_path):
+        path = _make_plate_3mf(tmp_path, {"Metadata/plate_1.gcode": _header(total_layer_number="80")})
+        assert extract_max_z_height_from_3mf(path, 1) is None
+
+    def test_non_numeric_value_returns_none(self, tmp_path):
+        path = _make_plate_3mf(tmp_path, {"Metadata/plate_1.gcode": _header(max_z_height="tall")})
+        assert extract_max_z_height_from_3mf(path, 1) is None
+
+    def test_zero_and_negative_are_treated_as_unknown(self, tmp_path):
+        """Passed through, either would become a Z move toward the bed."""
+        zero = _make_plate_3mf(tmp_path, {"Metadata/plate_1.gcode": _header(max_z_height="0")}, "z.3mf")
+        negative = _make_plate_3mf(tmp_path, {"Metadata/plate_1.gcode": _header(max_z_height="-3")}, "n.3mf")
+        assert extract_max_z_height_from_3mf(zero, 1) is None
+        assert extract_max_z_height_from_3mf(negative, 1) is None
+
+    def test_no_gcode_member_returns_none(self, tmp_path):
+        path = _make_plate_3mf(tmp_path, {"Metadata/slice_info.config": "<config/>"})
+        assert extract_max_z_height_from_3mf(path, 1) is None
+
+    def test_unreadable_file_returns_none(self, tmp_path):
+        path = tmp_path / "broken.3mf"
+        path.write_text("not a zip")
+        assert extract_max_z_height_from_3mf(path, 1) is None
+
+    def test_missing_file_returns_none(self, tmp_path):
+        assert extract_max_z_height_from_3mf(tmp_path / "nope.3mf", 1) is None
+
+    def test_only_the_header_is_inflated(self, tmp_path):
+        """A sliced plate is routinely tens of MB; reading it whole to reach ~40
+        header lines would stall the finish-photo path. The header is read from
+        a bounded prefix, so a huge body must not change the answer."""
+        gcode = _header(max_z_height="99.9") + "\n" + ("G1 X1 Y1 E0.1\n" * 400_000)
+        path = _make_plate_3mf(tmp_path, {"Metadata/plate_1.gcode": gcode})
+        assert extract_max_z_height_from_3mf(path, 1) == 99.9

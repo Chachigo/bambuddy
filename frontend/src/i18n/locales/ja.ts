@@ -2451,6 +2451,8 @@ export default {
     autoArchiveDescription: '印刷完了時に3MFファイルを自動保存',
     saveThumbnailsDescription: '3MFファイルからプレビュー画像を抽出して保存',
     captureFinishPhotoDescription: '印刷完了時にプリンターカメラから写真を撮影します。Bambuddy は印刷中に短いタイムラプスを記録し、ベッドが下がる前の瞬間から写真を取得できるようにします。この印刷でタイムラプスを有効にしていた場合はタイムラプスファイルが保存され、それ以外の場合は写真の取得後に自動的に削除されます。',
+    finishPhotoRestorePlate: '完了写真のためにプレートを戻す',
+    finishPhotoRestorePlateDescription: 'プリンターは印刷終了時にビルドプレートを約 100 mm 下降させるため、完成した造形物がカメラの画角より下に来ます。Bambuddy はプレートを最終印刷レイヤーのすぐ上まで戻して写真を撮影し、その後再び下降させます。造形高さが不明な場合や次のジョブがキューにある場合はスキップされます。',
     ffmpegNotInstalled: 'ffmpegがインストールされていません',
     ffmpegRequired: 'カメラ撮影にはffmpegが必要です。<brew>brew install ffmpeg</brew>（macOS）または<apt>apt install ffmpeg</apt>（Linux）でインストールしてください。',
     // Camera

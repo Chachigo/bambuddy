@@ -702,6 +702,68 @@ def _parse_3mf_gcode_header(content: str) -> dict[str, str]:
     return header
 
 
+def _select_plate_gcode_name(names: list[str], plate_id: int | None) -> str | None:
+    """Pick a plate's ``.gcode`` member out of a 3MF namelist.
+
+    Prefers ``plate_<id>.gcode``, then falls back to the first ``.gcode``
+    member so single-plate files — and files from slicers that don't use the
+    plate naming convention — still resolve.
+    """
+    gcodes = [n for n in names if n.endswith(".gcode")]
+    if not gcodes:
+        return None
+    if plate_id is not None:
+        suffix = f"plate_{plate_id}.gcode"
+        for name in gcodes:
+            if name.endswith(suffix):
+                return name
+    return gcodes[0]
+
+
+# The header block sits at the very top of the plate G-code. Read only that
+# much: a sliced plate is routinely tens of megabytes and `ZipFile.read()`
+# would inflate all of it to reach ~40 lines.
+_HEADER_READ_LIMIT_BYTES = 64 * 1024
+
+
+def extract_max_z_height_from_3mf(file_path: Path, plate_id: int | None = None) -> float | None:
+    """Return the plate's ``max_z_height`` in mm, or None if not knowable.
+
+    This is the Z the toolhead sat at for the final layer — the same value
+    Bambu's own end G-code adds its bed-drop offset to (``G1 Z{max_layer_z +
+    100}``). #2547 uses it to put the plate back into camera framing before the
+    finish photo, which is only safe because it is a height the printer was
+    physically at seconds earlier.
+
+    None means "don't know" and callers must treat it as such rather than
+    substituting a default: the file may be unreadable, carry no plate G-code,
+    or come from a slicer that writes no ``max_z_height`` header. Guessing a
+    height here would command a Z move to somewhere the nozzle has never been.
+    """
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            target = _select_plate_gcode_name(zf.namelist(), plate_id)
+            if target is None:
+                return None
+            with zf.open(target, "r") as fh:
+                head = fh.read(_HEADER_READ_LIMIT_BYTES)
+    except (OSError, zipfile.BadZipFile, KeyError) as e:
+        logger.debug("max_z_height: cannot read %s: %s", file_path, e)
+        return None
+
+    raw = _parse_3mf_gcode_header(head.decode("utf-8", errors="ignore")).get("max_z_height")
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.debug("max_z_height: unusable value %r in %s", raw, file_path)
+        return None
+    # Zero or negative means the header key is present but meaningless. Passed
+    # on as a height it would become a move *toward* the bed, so drop it.
+    return value if value > 0 else None
+
+
 def _substitute_placeholders(snippet: str, header: dict[str, str]) -> str:
     """Replace `{var}` placeholders with header values, leaving unknowns intact."""
 
@@ -802,21 +864,10 @@ def inject_gcode_into_3mf(
     try:
         # Find the target gcode file inside the 3MF
         with zipfile.ZipFile(source_path, "r") as zf:
-            all_gcode = [f for f in zf.namelist() if f.endswith(".gcode")]
-            if not all_gcode:
-                return None
-
-            # Try plate-specific gcode file first
-            target_gcode = None
-            plate_pattern = f"plate_{plate_id}.gcode"
-            for f in all_gcode:
-                if f.endswith(plate_pattern):
-                    target_gcode = f
-                    break
-
-            # Fall back to first gcode file
+            # Plate-specific gcode first, else the first one in the file.
+            target_gcode = _select_plate_gcode_name(zf.namelist(), plate_id)
             if target_gcode is None:
-                target_gcode = all_gcode[0]
+                return None
 
             # Read and modify gcode content
             gcode_content = zf.read(target_gcode).decode("utf-8", errors="ignore")
