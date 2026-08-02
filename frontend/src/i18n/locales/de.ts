@@ -2302,6 +2302,7 @@ export default {
       connectionFailed: 'Verbindung fehlgeschlagen',
       testFailed: 'Test fehlgeschlagen',
       cameraConnected: 'Kamera verbunden{{resolution}}',
+      cameraConnectedCoalesced: 'Kamera verbunden{{resolution}} (geteilt mit einer bereits laufenden Aufnahme)',
     },
     testConnection: 'Verbindung testen',
     catalog: {

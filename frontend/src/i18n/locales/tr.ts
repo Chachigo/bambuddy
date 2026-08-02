@@ -2306,6 +2306,7 @@ export default {
       connectionFailed: 'Bağlantı başarısız',
       testFailed: 'Test başarısız',
       cameraConnected: 'Kamera bağlandı{{resolution}}',
+      cameraConnectedCoalesced: 'Kamera bağlandı{{resolution}} (hâlihazırda süren bir yakalamayla paylaşıldı)',
     },
     testConnection: 'Bağlantıyı Test Et',
     catalog: {

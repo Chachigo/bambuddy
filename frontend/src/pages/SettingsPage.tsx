@@ -1164,7 +1164,15 @@ export function SettingsPage() {
       const result = await api.testExternalCamera(printerId, url, cameraType);
       setExtCameraTestResults(prev => ({ ...prev, [printerId]: result }));
       if (result.success) {
-        showToast(t('settings.toast.cameraConnected', { resolution: result.resolution || '' }), 'success');
+        // A shared capture means the frame is real but was not fetched over a
+        // connection this test opened, so say so rather than implying the
+        // camera was just reached.
+        showToast(
+          result.coalesced
+            ? t('settings.toast.cameraConnectedCoalesced', { resolution: result.resolution || '' })
+            : t('settings.toast.cameraConnected', { resolution: result.resolution || '' }),
+          'success'
+        );
       } else {
         showToast(result.error || t('settings.toast.connectionFailed'), 'error');
       }

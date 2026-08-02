@@ -2301,6 +2301,7 @@ export default {
       connectionFailed: '接続失敗',
       testFailed: 'テスト通知の送信に失敗しました',
       cameraConnected: 'カメラ接続{{resolution}}',
+      cameraConnectedCoalesced: 'カメラ接続{{resolution}}（実行中のキャプチャと共有）',
     },
     testConnection: '接続テスト',
     catalog: {

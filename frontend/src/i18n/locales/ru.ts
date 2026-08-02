@@ -2175,6 +2175,7 @@ export default {
       connectionFailed: "Не удалось подключиться",
       testFailed: "Проверка завершилась ошибкой",
       cameraConnected: "Камера подключена{{resolution}}",
+      cameraConnectedCoalesced: "Камера подключена{{resolution}} (используется уже выполняющийся захват)",
     },
     testConnection: "Проверить подключение",
     catalog: {

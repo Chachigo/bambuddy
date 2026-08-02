@@ -2303,6 +2303,7 @@ export default {
       connectionFailed: '连接失败',
       testFailed: '测试失败',
       cameraConnected: '摄像头已连接{{resolution}}',
+      cameraConnectedCoalesced: '摄像头已连接{{resolution}}（与正在进行的抓取共享）',
     },
     testConnection: '测试连接',
     catalog: {

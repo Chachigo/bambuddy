@@ -306,3 +306,188 @@ async def test_capture_in_flight_reports_the_window(patch_capture):
     await asyncio.sleep(0)
 
     assert capture_in_flight("/dev/video1", "usb") is False
+
+
+# ---------------------------------------------------------------------------
+# Failure must arrive as None, never as an exception
+# ---------------------------------------------------------------------------
+#
+# `test_failed_leader_does_not_poison_its_followers` above covers a leader that
+# RETURNS None. A leader that RAISES is a different path: the wrapper's retry
+# loop only catches TimeoutError and CancelledError, so an escaping exception
+# would reach every follower at once and none of them would take a turn of
+# their own — one caller's failure becoming N. The per-type helpers catch
+# narrowly (aiohttp.ClientError / OSError / timeouts), so the guarantee lives
+# in _capture_frame_uncoalesced's own blanket catch.
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_error_is_reported_as_a_failed_capture():
+    """Not every failure is an OSError. An IncompleteReadError is an EOFError,
+    which none of the per-type helpers catch."""
+
+    async def raising(url, timeout):
+        raise asyncio.IncompleteReadError(partial=b"", expected=4)
+
+    import backend.app.services.external_camera as ec
+
+    original = ec._capture_snapshot
+    ec._capture_snapshot = raising
+    try:
+        result = await ec._capture_frame_uncoalesced("http://cam/snap", "snapshot", 5, None)
+    finally:
+        ec._capture_snapshot = original
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_a_raising_leader_does_not_take_its_followers_down_with_it(monkeypatch):
+    """The whole point of coalescing is that one caller's connection serves
+    several. It must not also mean one caller's crash fails several.
+
+    Patches the per-type helper rather than ``_capture_frame_uncoalesced``,
+    deliberately: the guarantee lives in that function's blanket catch, so a
+    stand-in installed in its place would test the wrapper against a shape the
+    wrapper can no longer be handed.
+    """
+    gate = asyncio.Event()
+    attempts: list[str] = []
+
+    async def raise_then_succeed(url, timeout):
+        attempts.append(url)
+        if len(attempts) == 1:
+            await gate.wait()
+            raise RuntimeError("ffmpeg died in a way nobody catches")
+        return FRAME_B
+
+    monkeypatch.setattr(ec_module, "_capture_rtsp_frame", raise_then_succeed)
+
+    leader = asyncio.create_task(capture_frame("rtsp://cam/1", "rtsp", timeout=5))
+    await asyncio.sleep(0)
+    follower = asyncio.create_task(capture_frame("rtsp://cam/1", "rtsp", timeout=5))
+    await asyncio.sleep(0)
+    gate.set()
+
+    leader_result, follower_result = await asyncio.gather(leader, follower, return_exceptions=True)
+
+    assert not isinstance(leader_result, BaseException), f"leader raised {leader_result!r}"
+    assert not isinstance(follower_result, BaseException), f"follower raised {follower_result!r}"
+    assert leader_result is None, "the leader's own capture failed, so it gets None"
+    assert follower_result == FRAME_B, "the follower took its own turn and succeeded"
+
+
+# ---------------------------------------------------------------------------
+# The connection test must not claim a connection it never opened
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_connection_reports_when_it_shared_someone_elses_capture(patch_capture):
+    """A test landing while Obico is mid-poll gets that frame back. Reporting a
+    bare success would credit a connection this test never made — and forcing
+    its own would open the second handle the coalescing exists to prevent."""
+    from backend.app.services.external_camera import test_connection
+
+    gate = asyncio.Event()
+    capture = patch_capture(RecordingCapture(frames=(FRAME_A,), gate=gate))
+
+    other = asyncio.create_task(capture_frame("rtsp://cam/1", "rtsp", timeout=5))
+    await _let_leader_start(capture)
+
+    tested = asyncio.create_task(test_connection("rtsp://cam/1", "rtsp"))
+    await asyncio.sleep(0)
+    gate.set()
+
+    result = await tested
+    await other
+
+    assert result["success"] is True
+    assert result["coalesced"] is True
+    assert capture.count == 1, "no second connection was opened"
+
+
+@pytest.mark.asyncio
+async def test_connection_reports_its_own_capture_as_not_coalesced(patch_capture):
+    from backend.app.services.external_camera import test_connection
+
+    capture = patch_capture(RecordingCapture(frames=(FRAME_A,)))
+    result = await test_connection("rtsp://cam/1", "rtsp")
+
+    assert result["success"] is True
+    assert result["coalesced"] is False
+    assert capture.count == 1
+
+
+@pytest.mark.asyncio
+async def test_connection_reports_coalesced_on_the_failure_path_too(patch_capture):
+    """The flag describes where the answer came from, not whether it was good."""
+    from backend.app.services.external_camera import test_connection
+
+    capture = patch_capture(RecordingCapture(frames=(None,)))
+    result = await test_connection("rtsp://cam/1", "rtsp")
+
+    assert result["success"] is False
+    assert result["coalesced"] is False
+    assert capture.count == 1
+
+
+# ---------------------------------------------------------------------------
+# Credentials must not reach the log
+# ---------------------------------------------------------------------------
+#
+# camera.py's coalescing is keyed by IP address and has nothing to redact.
+# These keys carry the camera URL, and an RTSP camera URL routinely embeds
+# user:pass@ — which is why every other URL log in the module redacts.
+
+CREDENTIALED_URL = "rtsp://admin:hunter2@192.168.1.50:554/Streaming/Channels/101"
+
+
+@pytest.mark.asyncio
+async def test_the_reuse_log_line_redacts_the_password(patch_capture, caplog):
+    gate = asyncio.Event()
+    capture = patch_capture(RecordingCapture(frames=(FRAME_A,), gate=gate))
+
+    with caplog.at_level("DEBUG", logger=ec_module.__name__):
+        leader = asyncio.create_task(capture_frame(CREDENTIALED_URL, "rtsp", timeout=5))
+        await _let_leader_start(capture)
+        follower = asyncio.create_task(capture_frame(CREDENTIALED_URL, "rtsp", timeout=5))
+        await asyncio.sleep(0)
+        gate.set()
+        await asyncio.gather(leader, follower)
+
+    assert not [r.getMessage() for r in caplog.records if "hunter2" in r.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_the_gave_up_waiting_log_line_redacts_the_password(patch_capture, caplog):
+    """This one is a warning, so it shows at the default level and lands in
+    support bundles."""
+    gate = asyncio.Event()
+    capture = patch_capture(RecordingCapture(frames=(FRAME_A,), gate=gate))
+
+    with caplog.at_level("DEBUG", logger=ec_module.__name__):
+        leader = asyncio.create_task(capture_frame(CREDENTIALED_URL, "rtsp", timeout=5))
+        await _let_leader_start(capture)
+        assert await capture_frame(CREDENTIALED_URL, "rtsp", timeout=0) is None
+        gate.set()
+        await leader
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Gave up waiting" in m for m in messages), "the timeout path did not run"
+    assert not [m for m in messages if "hunter2" in m]
+
+
+@pytest.mark.asyncio
+async def test_the_failed_capture_log_line_redacts_the_password(patch_capture, caplog):
+    gate = asyncio.Event()
+    capture = patch_capture(RecordingCapture(frames=(None, FRAME_B), gate=gate))
+
+    with caplog.at_level("DEBUG", logger=ec_module.__name__):
+        leader = asyncio.create_task(capture_frame(CREDENTIALED_URL, "rtsp", timeout=5))
+        await _let_leader_start(capture)
+        follower = asyncio.create_task(capture_frame(CREDENTIALED_URL, "rtsp", timeout=5))
+        await asyncio.sleep(0)
+        gate.set()
+        await asyncio.gather(leader, follower)
+
+    assert not [r.getMessage() for r in caplog.records if "hunter2" in r.getMessage()]

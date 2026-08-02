@@ -224,7 +224,20 @@ def _discard_inflight_capture(key: tuple[str, str, str | None], task: asyncio.Ta
     if _inflight_captures.get(key) is task:
         del _inflight_captures[key]
     if not task.cancelled() and task.exception() is not None:
-        logger.debug("In-flight external-camera capture for %s ended in an exception", key[0])
+        logger.debug("In-flight external-camera capture for %s ended in an exception", _log_key(key))
+
+
+def _log_key(key: tuple[str, str, str | None]) -> str:
+    """Render an in-flight key for a log line, with credentials redacted.
+
+    Unlike camera.py's coalescing — which is keyed by IP address and so has
+    nothing to hide — these keys carry the camera URL, and an RTSP camera URL
+    routinely embeds ``user:pass@``. Redact before truncating: slicing first
+    can cut the URL short of the ``@`` the pattern anchors on and leave the
+    password in the log, which is why every other URL log in this module does
+    it in this order.
+    """
+    return redact_url_credentials(key[0])[:50] if key[0] else "None"
 
 
 async def capture_frame(
@@ -277,23 +290,25 @@ async def capture_frame(
         except TimeoutError:
             # shield() keeps the capture running for whoever else is still
             # waiting on it - giving up is this caller's decision alone.
-            logger.warning("Gave up waiting %ss on the in-flight external-camera capture for %s", timeout, key[0])
+            logger.warning(
+                "Gave up waiting %ss on the in-flight external-camera capture for %s", timeout, _log_key(key)
+            )
             return None
         except asyncio.CancelledError:
             # Distinguish "the capture I joined was cancelled" from "I was
             # cancelled". Only the former is ours to recover from.
             if not leader.cancelled():
                 raise
-            logger.info("In-flight external-camera capture for %s was cancelled; capturing our own", key[0])
+            logger.info("In-flight external-camera capture for %s was cancelled; capturing our own", _log_key(key))
             continue
         if frame is not None:
             logger.debug(
                 "Reusing in-flight external-camera capture for %s: %d bytes (no second connection opened)",
-                key[0],
+                _log_key(key),
                 len(frame),
             )
             return frame
-        logger.debug("In-flight external-camera capture for %s failed; capturing our own", key[0])
+        logger.debug("In-flight external-camera capture for %s failed; capturing our own", _log_key(key))
     else:
         return None
 
@@ -320,27 +335,48 @@ async def _capture_frame_uncoalesced(
 
     Callers want that wrapper, not this: it opens a connection
     unconditionally, which is the collision #2705/#2707 are about.
+
+    Failure is reported as ``None``, never as an exception. That is load-
+    bearing now that captures are shared: the coalescing wrapper hands one
+    task's outcome to every caller waiting on it, and it can only give a
+    follower its own turn for an outcome it can recognise. An exception
+    escaping here would instead propagate to every follower at once —
+    turning one caller's failure into N — and none of them would retry.
+    The per-type helpers below each catch what they expect and return None,
+    but they catch narrowly (``aiohttp.ClientError``/``OSError``/timeouts),
+    so this is the structural guarantee rather than one contingent on their
+    coverage. Mirrors ``_capture_camera_frame_bytes_uncoalesced`` in
+    camera.py, which ends in the same blanket catch for the same reason.
     """
-    if snapshot_url:
-        # Redact before truncating — slicing first can cut the URL short of the
-        # ``@`` the pattern anchors on and leave the password in the log.
-        logger.debug("capture_frame using snapshot override url=%s...", redact_url_credentials(snapshot_url)[:50])
-        return await _capture_snapshot(snapshot_url, timeout)
-    logger.debug(
-        "capture_frame called: type=%s, url=%s...",
-        camera_type,
-        redact_url_credentials(url)[:50] if url else "None",
-    )
-    if camera_type == "mjpeg":
-        return await _capture_mjpeg_frame(url, timeout)
-    elif camera_type == "rtsp":
-        return await _capture_rtsp_frame(url, timeout)
-    elif camera_type == "snapshot":
-        return await _capture_snapshot(url, timeout)
-    elif camera_type == "usb":
-        return await _capture_usb_frame(url, timeout)
-    else:
-        logger.warning("Unknown camera type: %s", camera_type)
+    try:
+        if snapshot_url:
+            # Redact before truncating — slicing first can cut the URL short of the
+            # ``@`` the pattern anchors on and leave the password in the log.
+            logger.debug("capture_frame using snapshot override url=%s...", redact_url_credentials(snapshot_url)[:50])
+            return await _capture_snapshot(snapshot_url, timeout)
+        logger.debug(
+            "capture_frame called: type=%s, url=%s...",
+            camera_type,
+            redact_url_credentials(url)[:50] if url else "None",
+        )
+        if camera_type == "mjpeg":
+            return await _capture_mjpeg_frame(url, timeout)
+        elif camera_type == "rtsp":
+            return await _capture_rtsp_frame(url, timeout)
+        elif camera_type == "snapshot":
+            return await _capture_snapshot(url, timeout)
+        elif camera_type == "usb":
+            return await _capture_usb_frame(url, timeout)
+        else:
+            logger.warning("Unknown camera type: %s", camera_type)
+            return None
+    except asyncio.CancelledError:
+        # Cancellation is not a capture failure and must stay distinguishable:
+        # the wrapper checks ``leader.cancelled()`` to decide whether a
+        # follower may take its own turn.
+        raise
+    except Exception:
+        logger.exception("External camera capture failed for %s", redact_url_credentials(url)[:50] if url else "None")
         return None
 
 
@@ -691,12 +727,26 @@ async def test_connection(url: str, camera_type: str) -> dict:
     """Test camera connection.
 
     Returns:
-        Dict with {success: bool, error?: str, resolution?: str}
+        Dict with {success: bool, error?: str, resolution?: str, coalesced: bool}
+
+    ``coalesced`` is True when the frame came from a capture that was already
+    running rather than from a connection this test opened. Captures are shared
+    (see ``capture_frame``), so a test that lands while Obico is polling — or
+    while any other one-shot consumer is mid-capture — gets that frame back and
+    would otherwise report a healthy connection it never made, which is the one
+    answer a *connection test* must not give silently. Forcing an uncoalesced
+    capture here would be worse: it would open the second handle to a
+    single-reader device that this whole mechanism exists to prevent. So the
+    test still shares, and says so. Mirrors the ``coalesced_capture`` code the
+    built-in diagnostic reports for the same situation (camera_diagnose.py).
     """
     logger.info("Testing camera connection: type=%s, url=%s...", camera_type, redact_url_credentials(url)[:50])
+    # Sampled before the call, while it can still distinguish "someone else is
+    # mid-capture" from "I am the one capturing".
+    coalesced = capture_in_flight(url, camera_type)
     try:
         frame = await capture_frame(url, camera_type, timeout=10)
-        logger.info("Capture result: %s bytes", len(frame) if frame else 0)
+        logger.info("Capture result: %s bytes%s", len(frame) if frame else 0, " (coalesced)" if coalesced else "")
 
         if frame:
             # Try to get resolution from JPEG header
@@ -715,15 +765,15 @@ async def test_connection(url: str, camera_type: str) -> dict:
             except (IndexError, ValueError):
                 pass  # Resolution detection is optional; fall back to default
 
-            return {"success": True, "resolution": resolution}
+            return {"success": True, "resolution": resolution, "coalesced": coalesced}
         else:
-            return {"success": False, "error": "Failed to capture frame from camera"}
+            return {"success": False, "error": "Failed to capture frame from camera", "coalesced": coalesced}
 
     except Exception as e:
         # Sanitize error message - don't expose internal details
         error_type = type(e).__name__
         logger.error("Camera connection test failed: %s", e)
-        return {"success": False, "error": f"Connection failed: {error_type}"}
+        return {"success": False, "error": f"Connection failed: {error_type}", "coalesced": coalesced}
 
 
 async def generate_mjpeg_stream(
