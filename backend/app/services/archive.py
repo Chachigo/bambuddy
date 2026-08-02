@@ -1143,6 +1143,7 @@ class ArchiveService:
         subtask_id: str | None = None,
         prefer_filename_for_name: bool = False,
         plate_id: int | None = None,
+        library_file_id: int | None = None,
     ) -> PrintArchive | None:
         """Archive a 3MF file with metadata.
 
@@ -1155,6 +1156,8 @@ class ArchiveService:
                 stored with UUID names)
             project_id: Project to associate this archive with (optional, set when triggered
                 from the project view)
+            library_file_id: Library file this run was dispatched from (optional,
+                set by the queue scheduler — powers per-file project progress, #1897)
             subtask_id: MQTT-provided task identifier (optional). Used to match an
                 existing archive across a backend restart mid-print so the
                 original row can be resumed instead of cancelled (#972).
@@ -1314,6 +1317,7 @@ class ArchiveService:
             extra_data=metadata,
             created_by_id=created_by_id,
             project_id=project_id,
+            library_file_id=library_file_id,
             subtask_id=subtask_id,
             plate_id=plate_id,
         )

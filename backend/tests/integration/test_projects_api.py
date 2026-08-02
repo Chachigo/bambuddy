@@ -1393,3 +1393,227 @@ class TestProjectListEditableFields:
         result = response.json()
         assert result["tags"] is None
         assert result["due_date"] is None
+
+
+class TestProjectFileProgress:
+    """Per-file print progress inside a project (#1897).
+
+    Covers GET /projects/{id}/file-progress (attribution: library_file_id →
+    content hash → filename, completed runs only, project-scoped), the
+    target_sets field round-trip, and the add-to-queue project inheritance
+    that feeds the attribution chain.
+    """
+
+    @pytest.fixture
+    async def project_factory(self, db_session):
+        _counter = [0]
+
+        async def _create_project(**kwargs):
+            from backend.app.models.project import Project
+
+            _counter[0] += 1
+            defaults = {"name": f"Progress Project {_counter[0]}"}
+            defaults.update(kwargs)
+            project = Project(**defaults)
+            db_session.add(project)
+            await db_session.commit()
+            await db_session.refresh(project)
+            return project
+
+        return _create_project
+
+    @pytest.fixture
+    async def folder_factory(self, db_session):
+        _counter = [0]
+
+        async def _create_folder(**kwargs):
+            from backend.app.models.library import LibraryFolder
+
+            _counter[0] += 1
+            defaults = {"name": f"ProgressFolder {_counter[0]}"}
+            defaults.update(kwargs)
+            folder = LibraryFolder(**defaults)
+            db_session.add(folder)
+            await db_session.commit()
+            await db_session.refresh(folder)
+            return folder
+
+        return _create_folder
+
+    @pytest.fixture
+    async def file_factory(self, db_session):
+        _counter = [0]
+
+        async def _create_file(**kwargs):
+            from backend.app.models.library import LibraryFile
+
+            _counter[0] += 1
+            counter = _counter[0]
+            defaults = {
+                "filename": f"plate_{counter}.gcode.3mf",
+                "file_path": f"library/plate_{counter}.gcode.3mf",
+                "file_size": 1024,
+                "file_type": "3mf",
+            }
+            defaults.update(kwargs)
+            lib_file = LibraryFile(**defaults)
+            db_session.add(lib_file)
+            await db_session.commit()
+            await db_session.refresh(lib_file)
+            return lib_file
+
+        return _create_file
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_counts_by_library_file_id(
+        self, async_client: AsyncClient, project_factory, folder_factory, file_factory, printer_factory, archive_factory
+    ):
+        """Runs stamped with library_file_id count toward that file even when
+        the archive's filename differs (rename after dispatch)."""
+        project = await project_factory()
+        folder = await folder_factory(project_id=project.id)
+        file_a = await file_factory(folder_id=folder.id)
+        file_b = await file_factory(folder_id=folder.id)
+        printer = await printer_factory()
+
+        for _ in range(2):
+            await archive_factory(
+                printer.id,
+                project_id=project.id,
+                library_file_id=file_a.id,
+                filename="renamed_on_dispatch.gcode.3mf",
+            )
+        await archive_factory(printer.id, project_id=project.id, library_file_id=file_b.id)
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}/file-progress")
+        assert response.status_code == 200
+        counts = {row["file_id"]: row["completed_count"] for row in response.json()}
+        assert counts == {file_a.id: 2, file_b.id: 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_hash_and_filename_fallback(
+        self, async_client: AsyncClient, project_factory, folder_factory, file_factory, printer_factory, archive_factory
+    ):
+        """Historical archives without library_file_id match by content hash,
+        then by filename."""
+        project = await project_factory()
+        folder = await folder_factory(project_id=project.id)
+        hashed_file = await file_factory(folder_id=folder.id, file_hash="a" * 64)
+        named_file = await file_factory(folder_id=folder.id, filename="unique_name.gcode.3mf")
+        printer = await printer_factory()
+
+        # Hash match despite a different filename
+        await archive_factory(
+            printer.id, project_id=project.id, content_hash="a" * 64, filename="printer_copy.gcode.3mf"
+        )
+        # Filename match with no hash on either side
+        await archive_factory(printer.id, project_id=project.id, filename="unique_name.gcode.3mf")
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}/file-progress")
+        counts = {row["file_id"]: row["completed_count"] for row in response.json()}
+        assert counts == {hashed_file.id: 1, named_file.id: 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_only_completed_runs_count(
+        self, async_client: AsyncClient, project_factory, folder_factory, file_factory, printer_factory, archive_factory
+    ):
+        """Failed runs and never-printed archives do not advance the count."""
+        project = await project_factory()
+        folder = await folder_factory(project_id=project.id)
+        lib_file = await file_factory(folder_id=folder.id)
+        printer = await printer_factory()
+
+        await archive_factory(printer.id, project_id=project.id, library_file_id=lib_file.id)
+        await archive_factory(
+            printer.id, project_id=project.id, library_file_id=lib_file.id, status="failed", run_status="failed"
+        )
+        await archive_factory(printer.id, project_id=project.id, library_file_id=lib_file.id, with_run=False)
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}/file-progress")
+        counts = {row["file_id"]: row["completed_count"] for row in response.json()}
+        assert counts == {lib_file.id: 1}
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_scoped_to_project(
+        self, async_client: AsyncClient, project_factory, folder_factory, file_factory, printer_factory, archive_factory
+    ):
+        """Runs of the same file outside the project (no project / another
+        project) are excluded."""
+        project = await project_factory()
+        other_project = await project_factory()
+        folder = await folder_factory(project_id=project.id)
+        lib_file = await file_factory(folder_id=folder.id)
+        printer = await printer_factory()
+
+        await archive_factory(printer.id, project_id=None, library_file_id=lib_file.id)
+        await archive_factory(printer.id, project_id=other_project.id, library_file_id=lib_file.id)
+
+        response = await async_client.get(f"/api/v1/projects/{project.id}/file-progress")
+        assert response.json() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_unknown_project_404(self, async_client: AsyncClient):
+        response = await async_client.get("/api/v1/projects/999999/file-progress")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_target_sets_roundtrip(self, async_client: AsyncClient):
+        """target_sets survives create, update, and explicit-null clearing."""
+        create = await async_client.post("/api/v1/projects/", json={"name": "Sets Project", "target_sets": 10})
+        assert create.status_code == 200
+        project = create.json()
+        assert project["target_sets"] == 10
+
+        update = await async_client.patch(f"/api/v1/projects/{project['id']}", json={"target_sets": 4})
+        assert update.status_code == 200, update.json()
+        assert update.json()["target_sets"] == 4
+
+        cleared = await async_client.patch(f"/api/v1/projects/{project['id']}", json={"target_sets": None})
+        assert cleared.json()["target_sets"] is None
+
+        untouched = await async_client.patch(f"/api/v1/projects/{project['id']}", json={"name": "Renamed"})
+        assert untouched.json()["target_sets"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_add_to_queue_inherits_folder_project(
+        self, async_client: AsyncClient, project_factory, folder_factory, file_factory, db_session, tmp_path
+    ):
+        """Queueing a file from a project-linked folder attributes the queue
+        item (and thus the later archive) to that project; a root file stays
+        unattributed."""
+        from sqlalchemy import select
+
+        from backend.app.models.print_queue import PrintQueueItem
+
+        project = await project_factory()
+        folder = await folder_factory(project_id=project.id)
+
+        on_disk = tmp_path / "linked.gcode.3mf"
+        on_disk.write_bytes(b"fake sliced content")
+        linked_file = await file_factory(folder_id=folder.id, file_path=str(on_disk))
+
+        root_disk = tmp_path / "root.gcode.3mf"
+        root_disk.write_bytes(b"fake sliced content")
+        root_file = await file_factory(folder_id=None, file_path=str(root_disk))
+
+        response = await async_client.post(
+            "/api/v1/library/files/add-to-queue", json={"file_ids": [linked_file.id, root_file.id]}
+        )
+        assert response.status_code == 200
+        assert len(response.json()["added"]) == 2
+
+        result = await db_session.execute(
+            select(PrintQueueItem.library_file_id, PrintQueueItem.project_id).where(
+                PrintQueueItem.library_file_id.in_([linked_file.id, root_file.id])
+            )
+        )
+        projects_by_file = dict(result.all())
+        assert projects_by_file[linked_file.id] == project.id
+        assert projects_by_file[root_file.id] is None

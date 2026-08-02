@@ -225,6 +225,8 @@ class NotificationService:
                 return await self._send_webhook(config, title, message)
             elif provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
+            elif provider_type == "bark":
+                return await self._send_bark(config, title, message)
             else:
                 return False, f"Unknown provider type: {provider_type}"
         except Exception as e:
@@ -250,6 +252,48 @@ class NotificationService:
             return True, "Message sent successfully"
         else:
             return False, f"HTTP {response.status_code}: {response.text[:200]}"
+
+    async def _send_bark(self, config: dict, title: str, message: str) -> tuple[bool, str]:
+        """Send notification via Bark, the self-hostable iOS push service (#1495).
+
+        POSTs JSON to {server}/push. Defaults to the official api.day.app
+        relay; a self-hosted bark-server works by overriding the server URL.
+        """
+        server = (config.get("server") or "https://api.day.app").strip().rstrip("/")
+        device_key = (config.get("device_key") or "").strip()
+
+        if not device_key:
+            return False, "Device key is required"
+
+        payload: dict[str, Any] = {
+            "device_key": device_key,
+            "title": title,
+            "body": message,
+        }
+        group = (config.get("group") or "").strip()
+        if group:
+            payload["group"] = group
+        sound = (config.get("sound") or "").strip()
+        if sound:
+            payload["sound"] = sound
+        level = (config.get("level") or "").strip()
+        if level in ("active", "timeSensitive", "critical", "passive"):
+            payload["level"] = level
+
+        client = await self._get_client()
+        response = await client.post(f"{server}/push", json=payload)
+
+        if response.status_code == 200:
+            # bark-server can report failures inside an HTTP 200 body
+            # ({"code": 400, "message": ...}), so the status alone isn't proof.
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and body.get("code") not in (200, None):
+                return False, f"Bark error {body.get('code')}: {str(body.get('message'))[:200]}"
+            return True, "Message sent successfully"
+        return False, f"HTTP {response.status_code}: {response.text[:200]}"
 
     async def _send_ntfy(
         self,
@@ -741,6 +785,24 @@ class NotificationService:
             "message": message,
         }
 
+        # Optional custom service-data (#1441), forwarded as HA's nested "data"
+        # object so mobile-app push options (priority, ttl, channel, group, ...)
+        # reach the notify service. Only included when configured — the default
+        # persistent_notification.create schema rejects unknown keys.
+        raw_data = config.get("data")
+        if raw_data:
+            if isinstance(raw_data, str):
+                try:
+                    parsed_data = json.loads(raw_data)
+                except json.JSONDecodeError as e:
+                    return False, f"Invalid JSON in the Data field: {e}"
+            else:
+                parsed_data = raw_data
+            if not isinstance(parsed_data, dict):
+                return False, 'The Data field must be a JSON object, e.g. {"priority": "high", "ttl": 0}'
+            if parsed_data:
+                payload["data"] = parsed_data
+
         client = await self._get_client()
         response = await client.post(url, json=payload, headers=headers)
 
@@ -794,6 +856,8 @@ class NotificationService:
                 )
             elif provider.provider_type == "homeassistant":
                 return await self._send_homeassistant(config, title, message, db=db)
+            elif provider.provider_type == "bark":
+                return await self._send_bark(config, title, message)
             else:
                 return False, f"Unknown provider type: {provider.provider_type}"
         except Exception as e:
@@ -1314,6 +1378,39 @@ class NotificationService:
             printer_id,
             printer_name,
             force_immediate=True,
+            variables=variables,
+        )
+
+    async def on_plate_clear_required(
+        self,
+        printer_id: int,
+        printer_name: str,
+        db: AsyncSession,
+    ):
+        """Handle plate-clear-required event — a print ended and the queue is gated (#2525).
+
+        Distinct from ``on_plate_not_empty``, which is the camera check *before* a
+        print starts. This one fires on the rising edge of the Bambuddy-side
+        awaiting-plate-clear flag, i.e. whenever a print reaches a terminal state
+        and the next queued job can't dispatch until someone confirms the bed is
+        free. Off by default on every provider: it lands at the same moment as the
+        print-complete notification, so opting in is a deliberate choice.
+        """
+        providers = await self._get_providers_for_event(db, "on_plate_clear_required", printer_id)
+        if not providers:
+            return
+
+        variables = {"printer": printer_name}
+
+        title, message = await self._build_message_from_template(db, "plate_clear_required", variables)
+        await self._send_to_providers(
+            providers,
+            title,
+            message,
+            db,
+            "plate_clear_required",
+            printer_id,
+            printer_name,
             variables=variables,
         )
 

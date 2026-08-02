@@ -628,6 +628,21 @@ export default {
       chamber: '챔버 팬'
     },
     clickToViewHmsErrors: 'HMS 오류 보기 클릭',
+    aiDetection: {
+      safe: '안전',
+      warning: '경고',
+      failure: '실패',
+      idle: '대기 중',
+      tooltip: 'AI 실패 감지: {{status}} (점수 {{score}}) - 클릭하여 자세히 보기',
+      tooltipIdle: 'AI 실패 감지 활성화됨 - 다음 인쇄부터 모니터링을 시작합니다 - 클릭하여 자세히 보기',
+      modalTitle: 'AI 실패 감지 - {{name}}',
+      currentStatus: '상태',
+      score: '점수',
+      framesAnalyzed: '분석된 프레임',
+      idleHint: '현재 모니터링 중인 인쇄가 없습니다. 다음 인쇄부터 자동으로 모니터링을 시작합니다.',
+      lastError: '마지막 오류',
+      openSettings: '설정 열기'
+    },
     estimatedCompletion: '예상 완료 시간',
     plateNumber: '플레이트 {{number}}',
     slotOptions: '슬롯 옵션',
@@ -1398,6 +1413,7 @@ export default {
     periodCost: '기간 비용',
     avgPerPrint: '인쇄당 평균',
     usageOverTime: '시간별 사용량',
+    energyOverTime: '시간별 에너지 사용량',
     filamentByWeight: '무게',
     printDuration: '인쇄 시간',
     printerUtilization: '프린터 사용률',
@@ -3489,6 +3505,7 @@ export default {
     noPermissionRenameFolder: '폴더 이름 변경 권한이 없습니다',
     noPermissionLinkFolder: '폴더 연결 권한이 없습니다',
     noPermissionDeleteFolder: '폴더 삭제 권한이 없습니다',
+    onlyEmptyFoldersDeletable: '빈 폴더만 삭제할 수 있습니다',
     noPermissionPrint: '인쇄 권한이 없습니다',
     noPermissionAddToQueue: '대기열 추가 권한이 없습니다',
     noPermissionSlice: '파일 슬라이싱 권한이 없습니다',
@@ -3575,6 +3592,9 @@ export default {
     targetParts: '목표 부품',
     targetPartsPlaceholder: '예: 150',
     targetPartsHelp: '필요한 총 개체 수',
+    targetSets: '파일당 복사본 수',
+    targetSetsPlaceholder: '예: 10',
+    targetSetsHelp: '각 인쇄 가능한 파일을 인쇄할 횟수',
     tagsLabel: '태그 (쉼표로 구분)',
     tagsPlaceholder: '예: voron, 기능성, 선물',
     dueDate: '마감일',
@@ -3643,6 +3663,9 @@ export default {
     progress: {
       platesProgress: '플레이트 진행률',
       partsProgress: '부품 진행률',
+      setsProgress: '완성된 세트',
+      sets: '세트',
+      setsHint: '모든 인쇄 가능한 파일이 이 횟수에 도달하면 세트가 완성됩니다',
       printJobs: '인쇄 작업',
       parts: '부품',
       percentComplete: '{{percent}}% 완료',
@@ -3681,6 +3704,8 @@ export default {
       forQuickAccess: '빠른 접근을 위해 이 프로젝트에 연결합니다.',
       fileCount: '{{count}}개 파일',
       empty: '연결된 폴더가 없습니다. 파일 관리자로 이동하여 폴더를 이 프로젝트에 연결하세요.',
+      printedCount: '{{count}}회 인쇄됨',
+      progressTooltip: '{{target}}회 중 {{done}}회 인쇄 완료',
       noFiles: '이 폴더에 파일이 없습니다.'
     },
     bom: {
@@ -3836,6 +3861,11 @@ export default {
     allPresetsRequired: '모든 프리셋을 선택해야 합니다',
     useEmbedded: '파일에 포함된 설정 사용',
     useEmbeddedHint: '위 프로필 대신 디자이너가 설정한 대로(벽, 내부 채움, 필라멘트) 슬라이싱합니다. 프린터가 파일과 일치하여 사용할 수 있습니다.',
+    designSettings: '디자이너 설정 유지',
+    designSettingsHint: '이 파일은 기본 프로파일에서 {{count}}개의 출력 설정을 변경합니다.',
+    designSettingsSelected: '{{total}}개 중 {{selected}}개 선택됨',
+    designSettingsPrinterCoupled: '프린터 전용',
+    designSettingsPrinterCoupledHint: '이 파일이 대상으로 한 프린터에 맞춘 값입니다. 사용 중인 프린터에서는 잘못되었거나 범위를 벗어날 수 있습니다.',
     enqueuing: '슬라이싱 작업 제출 중…',
     queued: '대기 중…',
     failed: '슬라이싱 실패. 슬라이서 사이드카 로그를 확인하세요.',
@@ -4094,6 +4124,8 @@ export default {
     searchBrand: '브랜드 검색...',
     useCustomBrand: '"{{brand}}" 사용',
     useCustomMaterial: '사용자 지정 재료 사용: {{material}}',
+    suggestedOptions: '추천',
+    allOptions: '전체',
     colorName: '색상 이름',
     colorNamePlaceholder: '제이드 화이트, 파이어 레드...',
     color: '색상',
@@ -5145,7 +5177,8 @@ export default {
       email: '이메일',
       discord: 'Discord',
       webhook: 'Webhook',
-      homeassistant: 'Home Assistant'
+      homeassistant: 'Home Assistant',
+      bark: 'Bark'
     },
     providerDescriptions: {
       email: 'SMTP 이메일 알림',
@@ -5155,7 +5188,8 @@ export default {
       pushover: '간단하고 신뢰할 수 있는 푸시 알림',
       callmebot: 'CallMeBot을 통한 무료 WhatsApp 알림',
       webhook: '모든 URL에 일반 HTTP POST',
-      homeassistant: 'Home Assistant 대시보드의 지속적인 알림'
+      homeassistant: 'Home Assistant 대시보드의 지속적인 알림',
+      bark: 'Bark를 통한 iOS 푸시 알림(셀프 호스팅 가능)'
     },
     lastSuccess: '마지막: {{date}}',
     error: '오류',
@@ -5190,6 +5224,9 @@ export default {
     printStarted: '인쇄 시작됨',
     plateNotEmpty: '플레이트 비어 있지 않음',
     plateNotEmptyDescription: '인쇄 전 개체 감지됨',
+    plateClearRequired: '플레이트 비움 확인 필요',
+    plateClearRequiredDescription: '인쇄 완료, 대기열이 플레이트 확인을 기다림',
+    plateClear: '플레이트 확인',
     printCompleted: '인쇄 완료됨',
     bedCooledLabel: '베드 냉각됨',
     bedCooledDescription: '인쇄 후 베드가 임계값 이하로 냉각됨',
@@ -5278,6 +5315,7 @@ export default {
     add: '추가',
     nameRequired: '이름이 필요합니다',
     fieldRequired: '{{field}}이(가) 필요합니다',
+    haDataInvalid: 'Data 필드는 유효한 JSON 객체여야 합니다(예: {"priority": "high", "ttl": 0})',
     phoneNumber: '전화번호',
     apiKey: 'API 키',
     serverUrl: '서버 URL',
@@ -6385,7 +6423,8 @@ export default {
       mqtt_auth: {
         title: '프린터 자격증명',
         pass: '프린터가 연결을 수락했습니다.',
-        fail: '프린터에 연결됐지만 연결을 거부했습니다. 액세스 코드 또는 시리얼 번호가 잘못됐을 가능성이 높습니다. 개발자 모드를 토글할 때마다 액세스 코드가 변경됩니다 — 프린터 화면에서 다시 복사하세요.',
+        fail: '프린터에 도달할 수 있지만 Bambuddy가 연결되지 않았습니다. 액세스 코드 또는 시리얼 번호가 잘못됐을 가능성이 높습니다 — LAN 전용 모드나 개발자 모드를 토글할 때마다 액세스 코드가 변경되므로 프린터 화면에서 다시 복사하세요. 재부팅 중이거나 이미 동시 연결 한도에 도달한 프린터도 똑같이 보입니다.',
+        fail_auth_rejected: '프린터가 Bambuddy의 자격증명을 거부했습니다. 액세스 코드 또는 시리얼 번호가 잘못됐습니다 — LAN 전용 모드나 개발자 모드를 토글할 때마다 액세스 코드가 변경됩니다. 프린터 화면에서 다시 복사한 뒤 프린터 설정에 저장하세요.',
         skip: '확인하지 않음 — 프린터에 연결할 수 없었습니다.'
       },
       developer_mode: {

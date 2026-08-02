@@ -568,6 +568,17 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
   const hasChildren = folder.children.length > 0;
   const isLinked = folder.project_id || folder.archive_id;
   const isExternal = folder.is_external;
+  // #1781: users with only library:delete_own may delete empty, unlinked,
+  // non-external folders. The backend enforces the same rule and additionally
+  // counts trashed files (invisible here), so a 403 can still come back.
+  const canDeleteFolder =
+    hasPermission('library:delete_all') ||
+    (hasPermission('library:delete_own') && folder.file_count === 0 && !hasChildren && !isExternal && !isLinked);
+  const deleteDisabledTooltip = canDeleteFolder
+    ? undefined
+    : hasPermission('library:delete_own') && !isExternal && !isLinked
+      ? t('fileManager.onlyEmptyFoldersDeletable')
+      : t('fileManager.noPermissionDeleteFolder');
 
   return (
     <div>
@@ -669,11 +680,11 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
                 </button>
                 <button
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    hasPermission('library:delete_all') ? 'text-red-700 dark:text-red-400 hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
+                    canDeleteFolder ? 'text-red-700 dark:text-red-400 hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (hasPermission('library:delete_all')) { onDelete(folder.id); setShowActions(false); } }}
-                  disabled={!hasPermission('library:delete_all')}
-                  title={!hasPermission('library:delete_all') ? t('fileManager.noPermissionDeleteFolder') : undefined}
+                  onClick={() => { if (canDeleteFolder) { onDelete(folder.id); setShowActions(false); } }}
+                  disabled={!canDeleteFolder}
+                  title={deleteDisabledTooltip}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   {t('common.delete')}

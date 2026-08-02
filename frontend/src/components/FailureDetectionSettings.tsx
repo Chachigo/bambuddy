@@ -71,6 +71,9 @@ export function FailureDetectionSettings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
       queryClient.invalidateQueries({ queryKey: ['obico-status'] });
+      // Printer-card AI badges (#1546) — refresh immediately on toggle instead
+      // of waiting for the cards' 10s poll.
+      queryClient.invalidateQueries({ queryKey: ['obico-printer-status'] });
       showToast(t('settings.toast.settingsSaved'));
     },
   });

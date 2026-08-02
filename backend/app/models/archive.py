@@ -12,6 +12,12 @@ class PrintArchive(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     printer_id: Mapped[int | None] = mapped_column(ForeignKey("printers.id"), nullable=True)
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    # Which library file this run was dispatched from (#1897). Set by the queue
+    # scheduler when it archives a library-file print; older rows are matched by
+    # content_hash/filename instead. SET NULL so deleting a file keeps history.
+    library_file_id: Mapped[int | None] = mapped_column(
+        ForeignKey("library_files.id", ondelete="SET NULL"), nullable=True
+    )
 
     # File info
     filename: Mapped[str] = mapped_column(String(255))

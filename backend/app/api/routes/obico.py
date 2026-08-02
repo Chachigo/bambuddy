@@ -37,6 +37,29 @@ async def get_status(
     }
 
 
+@router.get("/printer-status")
+async def get_printer_status(
+    user: User | None = RequirePermissionIfAuthEnabled(Permission.PRINTERS_READ),
+):
+    """Per-printer live classification for the printer cards (#1546).
+
+    Deliberately excludes configuration (ML URL, action, history) so users
+    with printers:read but no settings:read can still render the badge.
+    """
+    settings = await obico_detection_service._load_settings()
+    enabled_printers = settings["enabled_printers"]
+    # Error strings can embed configured URLs (ML API base, external URL), so
+    # they stay behind settings:read like the rest of the configuration.
+    can_see_error = user is None or user.has_permission(Permission.SETTINGS_READ.value)
+    return {
+        "enabled": settings["enabled"],
+        # None = all printers are monitored
+        "monitored_printers": sorted(enabled_printers) if enabled_printers is not None else None,
+        "per_printer": obico_detection_service.get_per_printer(),
+        "last_error": obico_detection_service._last_error if can_see_error else None,
+    }
+
+
 @router.post("/test-connection")
 async def test_connection(
     req: TestConnectionRequest,

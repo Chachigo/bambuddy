@@ -304,6 +304,31 @@ export function findPresetOption(
   return option;
 }
 
+// Keep the value a spool already carries selectable in its own dropdown (#1905).
+// A brand or material entered as a custom value isn't part of the color catalog
+// or any slicer preset, so without this the edit form offered no way back to it
+// once the user opened the dropdown.
+export function withCurrentValue(options: string[], current: string): string[] {
+  const trimmed = current.trim();
+  if (!trimmed || options.some(o => o.toLowerCase() === trimmed.toLowerCase())) return options;
+  return [...options, trimmed].sort((a, b) => a.localeCompare(b));
+}
+
+// Brands/materials the catalog and slicer presets pair with the other field's
+// current value (#1905). Used to rank the dropdown, never to filter it — the
+// pairs are incomplete (Elegoo ships ASA even though the catalog only knows its
+// PLA), and hiding the rest made valid entries look impossible.
+export function pairedOptions(
+  options: string[],
+  counterpart: string,
+  pairMap: Map<string, Set<string>>,
+): string[] {
+  if (!counterpart) return [];
+  const keys = pairMap.get(counterpart.toLowerCase());
+  if (!keys || keys.size === 0) return [];
+  return options.filter(o => keys.has(o.toLowerCase()));
+}
+
 // Recent colors management
 export function loadRecentColors(): ColorPreset[] {
   try {
