@@ -2172,13 +2172,21 @@ async def _capture_snapshot_for_notification(printer_id: int, printer, logger) -
         # Try external camera first
         if printer.external_camera_enabled and printer.external_camera_url:
             logger.info("[SNAPSHOT] Capturing from external camera for printer %s", printer_id)
+            from backend.app.api.routes.camera import live_frame_for_capture
             from backend.app.services.external_camera import capture_frame
 
-            frame_data = await capture_frame(
-                printer.external_camera_url,
-                printer.external_camera_type or "mjpeg",
-                snapshot_url=printer.external_camera_snapshot_url,
-            )
+            # An external camera allows one reader, so capturing while a viewer
+            # is attached fails (#2707). A None here falls through to the paths
+            # below exactly as a failed capture did.
+            defer, buffered = live_frame_for_capture(printer_id)
+            if defer:
+                frame_data = buffered
+            else:
+                frame_data = await capture_frame(
+                    printer.external_camera_url,
+                    printer.external_camera_type or "mjpeg",
+                    snapshot_url=printer.external_camera_snapshot_url,
+                )
             if frame_data and len(frame_data) <= 2_500_000:
                 logger.info("[SNAPSHOT] External camera frame: %s bytes", len(frame_data))
                 return _apply_camera_rotation(frame_data, printer, logger)
@@ -4337,13 +4345,21 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
                 )
 
         if frame_bytes is None and printer.external_camera_enabled and printer.external_camera_url:
+            from backend.app.api.routes.camera import live_frame_for_capture
             from backend.app.services.external_camera import capture_frame
 
-            frame_bytes = await capture_frame(
-                printer.external_camera_url,
-                printer.external_camera_type or "mjpeg",
-                snapshot_url=printer.external_camera_snapshot_url,
-            )
+            # #2707: this used to collide with the live view and fail, which is
+            # how finish-photo notifications went out with no image attached.
+            # Leaving frame_bytes None keeps the rest of the fallback chain.
+            defer, buffered = live_frame_for_capture(printer_id)
+            if defer:
+                frame_bytes = buffered
+            else:
+                frame_bytes = await capture_frame(
+                    printer.external_camera_url,
+                    printer.external_camera_type or "mjpeg",
+                    snapshot_url=printer.external_camera_snapshot_url,
+                )
             if frame_bytes:
                 logger.info(
                     "[FINISH-PHOTO-MOMENT] captured external-camera frame (%d bytes)",
@@ -5307,13 +5323,21 @@ async def on_print_complete(printer_id: int, data: dict):
             if not photo_filename:
                 if printer.external_camera_enabled and printer.external_camera_url:
                     logger.info("[PHOTO-BG] Using external camera")
+                    from backend.app.api.routes.camera import live_frame_for_capture
                     from backend.app.services.external_camera import capture_frame
 
-                    frame_data = await capture_frame(
-                        printer.external_camera_url,
-                        printer.external_camera_type or "mjpeg",
-                        snapshot_url=printer.external_camera_snapshot_url,
-                    )
+                    # #2707: the second half of the finish-photo failure — the
+                    # pre-capture and this fallback both collided with the live
+                    # view. None here continues down the fallback chain.
+                    defer, buffered = live_frame_for_capture(printer_id)
+                    if defer:
+                        frame_data = buffered
+                    else:
+                        frame_data = await capture_frame(
+                            printer.external_camera_url,
+                            printer.external_camera_type or "mjpeg",
+                            snapshot_url=printer.external_camera_snapshot_url,
+                        )
                     if frame_data:
                         photos_dir = archive_dir / "photos"
                         photos_dir.mkdir(parents=True, exist_ok=True)

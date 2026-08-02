@@ -276,6 +276,29 @@ def _new_fanout_stream_id(printer_id: int) -> str:
     return f"{printer_id}-fanout-{uuid.uuid4().hex[:8]}"
 
 
+def live_frame_for_capture(printer_id: int) -> tuple[bool, bytes | None]:
+    """Should a one-shot capture stand down for the live view, and to what frame?
+
+    Returns ``(defer, frame)``. ``defer`` True means DO NOT open a capture of
+    your own: use ``frame`` when it isn't None, and otherwise skip this attempt
+    rather than competing.
+
+    Both camera kinds allow exactly one reader — Bambu firmware permits one
+    connection, and a USB camera permits one V4L2 handle — so a capture that
+    races the live view doesn't degrade, it fails outright. #2707 measured 0 of
+    87 and 0 of 105 layer-timelapse captures on prints watched throughout, and
+    finish photos going out with no image attached.
+
+    Skipping when the buffer is momentarily empty (stream starting, mid-
+    reconnect) rather than falling through to a capture is the #1348 rule:
+    opening a competing handle kicks the viewer off, which is a worse outcome
+    than missing one frame.
+    """
+    if not is_stream_active(printer_id):
+        return False, None
+    return True, _last_frames.get(printer_id)
+
+
 def _release_printer_frame_state(printer_id: int | None) -> None:
     """Drop a printer's buffered frame and timings — unless a stream still owns them.
 
@@ -926,6 +949,18 @@ async def camera_stream(
             _spawned_ffmpeg_pids[proc.pid] = time.time()
             _stream_last_frame_times[stream_id] = time.time()
 
+        def _publish_external_frame(frame: bytes) -> None:
+            """Make the live frame reusable by one-shot consumers (#2707).
+
+            Only the built-in camera paths populated _last_frames, so every
+            external-camera consumer — layer timelapse, finish photo, Obico,
+            plate check — found an empty buffer and opened its own handle on a
+            device that allows exactly one reader, which simply failed while a
+            viewer was attached. Raw frame, not the multipart-wrapped chunk the
+            generator yields, because that is what those consumers expect.
+            """
+            _last_frames[printer_id] = frame
+
         async def external_stream_wrapper():
             """Wrap external stream to track start/stop and update frame times."""
             try:
@@ -934,6 +969,7 @@ async def camera_stream(
                     printer.external_camera_type,
                     fps,
                     on_process=_register_external_process,
+                    on_frame=_publish_external_frame,
                     stop_event=stop_event,
                 ):
                     # generate_mjpeg_stream already handles rate limiting;
@@ -954,6 +990,11 @@ async def camera_stream(
                 _disconnect_events.pop(stream_id, None)
                 _stream_last_frame_times.pop(stream_id, None)
                 _active_external_streams.discard(printer_id)
+                # Now that this path publishes a buffered frame, it has to
+                # retract it too — ownership-checked, so a concurrent viewer of
+                # the same printer keeps its own. Also clears the per-printer
+                # timings this path used to leave behind.
+                _release_printer_frame_state(printer_id)
                 logger.info("External camera stream ended for printer %s", printer_id)
 
         return StreamingResponse(
