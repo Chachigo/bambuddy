@@ -647,20 +647,29 @@ async def _collect_slicer_api_info() -> dict:
     return info
 
 
-def _parse_obico_enabled_printers(raw: str) -> set[int]:
-    """Parse the comma-separated `obico_enabled_printers` setting. Same shape as
-    obico_detection.py uses but tolerant of legacy formats."""
+def _parse_obico_enabled_printers(raw: str | None) -> set[int] | None:
+    """Parse the `obico_enabled_printers` setting the way the detection service does.
+
+    The setting is a JSON array of printer IDs and an empty value means *all*
+    printers — see ``ObicoDetectionService._load_settings``. This used to split
+    on commas and treat empty as *none*, so a bundle from a default Obico setup
+    reported every printer as unmonitored while the service was in fact polling
+    all of them. Returns ``None`` for "all printers"; a comma-separated fallback
+    is kept in case an install ever stored the legacy shape.
+    """
     if not raw or not raw.strip():
-        return set()
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, list):
+        return {int(item) for item in parsed if isinstance(item, (int, str)) and str(item).strip().isdigit()}
     result: set[int] = set()
     for token in raw.split(","):
         token = token.strip()
-        if not token:
-            continue
-        try:
+        if token.isdigit():
             result.add(int(token))
-        except ValueError:
-            continue
     return result
 
 
@@ -729,18 +738,27 @@ async def _collect_support_info() -> dict:
         printers = result.scalars().all()
         statuses = printer_manager.get_all_statuses()
 
-        # Pre-load the obico per-printer enabled-list. Settings are loaded later
-        # in this function (and would overwrite this key in info["settings"]),
-        # so do a targeted query here for the per-printer flag below.
-        obico_enabled_set: set[int] = set()
+        # Pre-load the obico settings that decide which printers are monitored.
+        # Settings are loaded later in this function (and would overwrite these
+        # keys in info["settings"]), so do a targeted query here for the
+        # per-printer flag below. ``None`` means every printer is monitored.
+        obico_enabled_set: set[int] | None = None
+        obico_globally_enabled = False
         try:
-            obico_row = (
-                await db.execute(select(Settings).where(Settings.key == "obico_enabled_printers"))
-            ).scalar_one_or_none()
-            if obico_row is not None:
-                obico_enabled_set = _parse_obico_enabled_printers(obico_row.value)
+            obico_rows = {
+                row.key: row.value
+                for row in (
+                    await db.execute(
+                        select(Settings).where(Settings.key.in_(["obico_enabled_printers", "obico_enabled"]))
+                    )
+                )
+                .scalars()
+                .all()
+            }
+            obico_enabled_set = _parse_obico_enabled_printers(obico_rows.get("obico_enabled_printers"))
+            obico_globally_enabled = (obico_rows.get("obico_enabled") or "false").lower() == "true"
         except Exception:
-            logger.debug("Failed to load obico_enabled_printers", exc_info=True)
+            logger.debug("Failed to load obico settings", exc_info=True)
 
         # Check reachability in parallel
         reachability_tasks = [_check_port(p.ip_address, 8883) for p in printers]
@@ -784,7 +802,8 @@ async def _collect_support_info() -> dict:
                     "has_vt_tray": has_vt_tray,
                     "external_camera_configured": bool(printer.external_camera_url),
                     "plate_detection_enabled": printer.plate_detection_enabled,
-                    "obico_enabled": printer.id in obico_enabled_set,
+                    "obico_enabled": obico_globally_enabled
+                    and (obico_enabled_set is None or printer.id in obico_enabled_set),
                     "hms_error_count": len(state.hms_errors) if state else 0,
                     "developer_mode": state.developer_mode if state else None,
                     "nozzle_rack_count": len(state.nozzle_rack) if state else 0,

@@ -32,6 +32,7 @@ from backend.app.services.bambu_ftp import (
     upload_file_async,
     with_ftp_retry,
 )
+from backend.app.services.bambu_mqtt import HMS_MQTT_VERIFY_FAILED
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.notification_service import notification_service
 from backend.app.services.printer_manager import (
@@ -172,6 +173,25 @@ def _mapping_is_all_unresolved(mapping: list | None) -> bool:
     if not isinstance(mapping, list) or not mapping:
         return False
     return all(t is None or (isinstance(t, int) and t < 0) for t in mapping)
+
+
+def _mqtt_commands_rejected(status) -> bool:
+    """True when the printer is currently reporting that it refused a command.
+
+    ``HMS_MQTT_VERIFY_FAILED`` means the firmware's authorization check rejected
+    a control command it could not verify. Queries still answer, so the printer
+    looks connected and idle while project_file, gcode_line and
+    ams_change_filament are all dropped — no amount of waiting or re-uploading
+    changes that (#2732).
+
+    Tolerates a missing status and errors without a ``full_code`` (the 8-char
+    ``print_error`` path builds HMSError differently), so this is safe to call on
+    every watchdog poll.
+    """
+    for err in getattr(status, "hms_errors", None) or []:
+        if getattr(err, "full_code", "") == HMS_MQTT_VERIFY_FAILED:
+            return True
+    return False
 
 
 def _installed_nozzle_diameters(status) -> list[float]:
@@ -2967,6 +2987,7 @@ class PrintScheduler:
         queue_item_id: int,
         printer_id: int,
         created_by_id: int | None,
+        reason: str = "Printer accepted the file but never started printing",
     ) -> None:
         """Tell the user the queue item was failed after exhausting its dispatch retries.
 
@@ -2974,6 +2995,10 @@ class PrintScheduler:
         its own — hence the fresh one here. Best-effort throughout: the row is
         already marked failed and that is the load-bearing part; a notification
         provider being down must not resurrect the retry loop we just stopped.
+
+        ``reason`` defaults to the exhausted-retries wording. The command-rejected
+        path passes its own, because "accepted the file but never started" is the
+        opposite of what happened there — the printer refused it outright (#2732).
         """
         try:
             async with async_session() as db:
@@ -2986,7 +3011,7 @@ class PrintScheduler:
                     job_name=job_name,
                     printer_id=printer_id,
                     printer_name=printer.name if printer else "Unknown",
-                    reason="Printer accepted the file but never started printing",
+                    reason=reason,
                     db=db,
                 )
         except Exception as e:
@@ -3857,9 +3882,20 @@ class PrintScheduler:
 
         Phase A timeout raised from 45 s → 90 s as belt-and-braces for slow
         transitions that also don't emit an early subtask_id tick.
+
+        Both phases also watch for ``HMS_MQTT_VERIFY_FAILED``. A printer that
+        refuses to verify our commands will never start this job or any other,
+        so waiting out the full 270 s and re-uploading the 3MF twice more only
+        burns an upload slot the rest of the farm is queued behind — that path
+        is for a printer that might still come good, which this one cannot
+        (#2732). It fails the item on the spot with the actual reason instead.
         """
         last_status = None
         landed_on_subtask = False
+        # Latched, not level-tested: state.hms_errors is rebuilt from scratch on
+        # every push carrying an `hms` key, so the fault can come and go between
+        # 3-second polls. Seeing it once inside the dispatch window is enough.
+        command_rejected = False
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             await asyncio.sleep(poll_interval)
@@ -3890,6 +3926,13 @@ class PrintScheduler:
                 except Exception:
                     pass
                 return
+            # Checked only after the active-state exit above: a stale HMS left
+            # over from an earlier job must never abort a print that is visibly
+            # running. An actually-refused command leaves the printer idle, so
+            # this ordering costs the detection nothing.
+            if _mqtt_commands_rejected(status):
+                command_rejected = True
+                break
             if pre_subtask_id is not None and status.subtask_id is not None and status.subtask_id != pre_subtask_id:
                 # Phase A exit — printer accepted the file (subtask_id flipped
                 # to our submission id). Don't return yet: the printer may
@@ -3899,7 +3942,7 @@ class PrintScheduler:
                 landed_on_subtask = True
                 break
 
-        if landed_on_subtask:
+        if landed_on_subtask and not command_rejected:
             phase_b_deadline = time.monotonic() + phase_b_timeout
             while time.monotonic() < phase_b_deadline:
                 await asyncio.sleep(poll_interval)
@@ -3919,6 +3962,11 @@ class PrintScheduler:
                     except Exception:
                         pass
                     return
+                # Same ordering rule as Phase A: a running print wins over a
+                # lingering HMS.
+                if _mqtt_commands_rejected(status):
+                    command_rejected = True
+                    break
 
         # No active-state transition. Revert the item so the scheduler can retry.
         # Drop the in-memory hold so the retry isn't blocked by it.
@@ -3948,6 +3996,20 @@ class PrintScheduler:
                 return "already_moved_on"
             item.dispatch_attempts = (item.dispatch_attempts or 0) + 1
             item.started_at = None
+            if command_rejected:
+                # No retry budget for this one: the printer refused to verify the
+                # command, and re-uploading the same 3MF to the same printer will
+                # be refused the same way. Fail now with the fix rather than after
+                # three laps of a message about SD cards (#2732).
+                item.status = "failed"
+                item.error_message = (
+                    "The printer rejected the print command: MQTT command verification failed "
+                    "(HMS 0500-0500-0001-0007). Enable Developer Mode on the printer, restart it, "
+                    "then start the job again."
+                )
+                item.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+                return "command_rejected"
             if item.dispatch_attempts >= DISPATCH_MAX_ATTEMPTS:
                 item.status = "failed"
                 item.error_message = (
@@ -3982,6 +4044,25 @@ class PrintScheduler:
             return
 
         total_timeout = timeout + (phase_b_timeout if landed_on_subtask else 0.0)
+        if revert_outcome == "command_rejected":
+            logger.error(
+                "Queue item %s: printer %d reported HMS %s (MQTT command verification "
+                "failed) — the print command was rejected, not lost. Failing the item "
+                "without retrying; enable Developer Mode on the printer and restart it (#2732)",
+                queue_item_id,
+                printer_id,
+                HMS_MQTT_VERIFY_FAILED,
+            )
+            await scheduler._notify_dispatch_gave_up(
+                queue_item_id,
+                printer_id,
+                created_by_id,
+                reason="Printer rejected the print command (MQTT command verification failed)",
+            )
+            # Same reasoning as the landed_on_subtask path below: the file is on
+            # the printer and a forced reconnect would only add 0500_4003 to a
+            # problem that has nothing to do with the MQTT session (#1150).
+            return
         if revert_outcome == "gave_up":
             logger.error(
                 "Queue item %s: printer %d never started the print after %d dispatch "

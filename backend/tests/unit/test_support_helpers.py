@@ -701,19 +701,33 @@ class TestCollectSupportInfo:
 
 
 class TestParseObicoEnabledPrinters:
-    """Tests for the per-printer obico flag parser used by the bundle."""
+    """Tests for the per-printer obico flag parser used by the bundle.
 
-    def test_empty_string_returns_empty_set(self):
+    The setting is written by the settings UI as a JSON array and read by
+    ObicoDetectionService._load_settings as one; the bundle used to split it on
+    commas and call empty "no printers", so a default Obico setup was reported
+    as monitoring nothing while it was in fact monitoring everything (#2733).
+    """
+
+    def test_empty_means_all_printers(self):
         from backend.app.api.routes.support import _parse_obico_enabled_printers
 
-        assert _parse_obico_enabled_printers("") == set()
-        assert _parse_obico_enabled_printers("   ") == set()
+        # None (not "no printers") — the same convention _load_settings uses.
+        assert _parse_obico_enabled_printers("") is None
+        assert _parse_obico_enabled_printers("   ") is None
+        assert _parse_obico_enabled_printers(None) is None
 
-    def test_comma_separated_ids(self):
+    def test_json_array_is_the_stored_shape(self):
+        from backend.app.api.routes.support import _parse_obico_enabled_printers
+
+        assert _parse_obico_enabled_printers("[1, 2, 3]") == {1, 2, 3}
+        assert _parse_obico_enabled_printers("[]") == set()
+
+    def test_comma_separated_ids_still_parse(self):
+        # Legacy fallback for any install that stored the old shape.
         from backend.app.api.routes.support import _parse_obico_enabled_printers
 
         assert _parse_obico_enabled_printers("1,2,3") == {1, 2, 3}
-        # Whitespace around tokens is forgiven (matches obico_detection's parser).
         assert _parse_obico_enabled_printers("1, 2 ,3") == {1, 2, 3}
 
     def test_non_integer_tokens_are_skipped(self):
@@ -722,6 +736,13 @@ class TestParseObicoEnabledPrinters:
 
         assert _parse_obico_enabled_printers("1,abc,2") == {1, 2}
         assert _parse_obico_enabled_printers(",,1,") == {1}
+        assert _parse_obico_enabled_printers('[1, "two", 3]') == {1, 3}
+
+    def test_json_object_is_not_a_printer_list(self):
+        from backend.app.api.routes.support import _parse_obico_enabled_printers
+
+        # Falls through to the comma parser, which finds no integers.
+        assert _parse_obico_enabled_printers('{"1": true}') == set()
 
 
 class TestCheckUrlReachable:

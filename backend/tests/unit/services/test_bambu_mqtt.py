@@ -3547,6 +3547,108 @@ class TestDeveloperModeDetection:
         assert mqtt_client.state.developer_mode is False
 
 
+class TestMqttCommandVerificationFailed:
+    """HMS 0500_0500_0001_0007 is the printer refusing to verify our commands (#2732).
+
+    A P1S on firmware 01.10.00.00 answers queries normally while dropping every
+    control command, so nothing else in the connection looks wrong. This HMS is
+    the only direct evidence, which makes it authoritative over the probe.
+    """
+
+    @pytest.fixture
+    def mqtt_client(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        return BambuMQTTClient(
+            ip_address="192.168.1.100",
+            serial_number="01S00A000000000",
+            access_code="12345678",
+        )
+
+    @staticmethod
+    def _hms_payload(*entries):
+        return {"print": {"gcode_state": "IDLE", "hms": list(entries)}}
+
+    # attr 0x05000500, code 0x00010007 — the values a real P1S sends.
+    VERIFY_FAILED = {"attr": 83887360, "code": 65543}
+    OTHER_FAULT = {"attr": 0x03000200, "code": 0x00018012}
+
+    def test_hms_forces_developer_mode_false(self, mqtt_client):
+        mqtt_client.state.developer_mode = True  # what the probe wrongly concluded
+        mqtt_client._process_message(self._hms_payload(self.VERIFY_FAILED))
+        assert mqtt_client.state.developer_mode is False
+
+    def test_hms_is_surfaced_with_its_full_code(self, mqtt_client):
+        """The short code collapses to a useless 0500_0007 — full_code must survive."""
+        from backend.app.services.bambu_mqtt import HMS_MQTT_VERIFY_FAILED
+
+        mqtt_client._process_message(self._hms_payload(self.VERIFY_FAILED))
+        assert [e.full_code for e in mqtt_client.state.hms_errors] == [HMS_MQTT_VERIFY_FAILED]
+
+    def test_unrelated_hms_does_not_touch_developer_mode(self, mqtt_client):
+        mqtt_client.state.developer_mode = True
+        mqtt_client._process_message(self._hms_payload(self.OTHER_FAULT))
+        assert mqtt_client.state.developer_mode is True
+
+    def test_clearing_the_hms_re_arms_the_probe(self, mqtt_client):
+        """Enabling Developer Mode and restarting must not leave a stuck False."""
+        mqtt_client._process_message(self._hms_payload(self.VERIFY_FAILED))
+        assert mqtt_client.state.developer_mode is False
+        mqtt_client._dev_mode_probed = True
+
+        mqtt_client._process_message(self._hms_payload())
+        assert mqtt_client.state.developer_mode is None
+        assert mqtt_client._dev_mode_probed is False
+
+    def test_empty_hms_leaves_a_probe_verdict_alone(self, mqtt_client):
+        """Only the HMS-derived latch self-clears; a probe's False is not ours to undo."""
+        mqtt_client.state.developer_mode = False  # from an explicit probe refusal
+        mqtt_client._process_message(self._hms_payload())
+        assert mqtt_client.state.developer_mode is False
+
+    def test_inconclusive_probe_does_not_overwrite_the_hms_verdict(self, mqtt_client):
+        mqtt_client._process_message(self._hms_payload(self.VERIFY_FAILED))
+        mqtt_client._handle_dev_mode_probe_response({"command": "ams_filament_setting", "sequence_id": "3"})
+        assert mqtt_client.state.developer_mode is False
+
+
+class TestDeveloperModeProbeInconclusive:
+    """An empty probe response proves nothing and must not read as ENABLED (#2732)."""
+
+    @pytest.fixture
+    def mqtt_client(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        return BambuMQTTClient(
+            ip_address="192.168.1.100",
+            serial_number="TEST123",
+            access_code="12345678",
+        )
+
+    def test_empty_result_stays_unknown(self, mqtt_client):
+        """P1S 01.10.00.00 echoes the command back with no `result` field at all."""
+        mqtt_client._handle_dev_mode_probe_response({"command": "ams_filament_setting", "sequence_id": "3"})
+        assert mqtt_client.state.developer_mode is None
+
+    def test_explicit_success_still_enables(self, mqtt_client):
+        mqtt_client._handle_dev_mode_probe_response({"sequence_id": "3", "result": "success"})
+        assert mqtt_client.state.developer_mode is True
+
+    def test_verify_failure_still_disables(self, mqtt_client):
+        mqtt_client._handle_dev_mode_probe_response(
+            {"sequence_id": "3", "result": "failed", "reason": "mqtt message verify failed"}
+        )
+        assert mqtt_client.state.developer_mode is False
+
+    def test_inconclusive_response_still_clears_probe_bookkeeping(self, mqtt_client):
+        """Whatever the verdict, the response ends the probe (no retry storm)."""
+        mqtt_client._dev_mode_probe_seq = "3"
+        mqtt_client._dev_mode_probe_failures = 1
+        mqtt_client._handle_dev_mode_probe_response({"sequence_id": "3", "result": ""})
+        assert mqtt_client._dev_mode_probe_seq is None
+        assert mqtt_client._dev_mode_probe_failures == 0
+
+
 class TestDeveloperModeProbeTimeout:
     """Tests for developer mode probe timeout, retry, and forced reconnect (#887).
 
@@ -4669,6 +4771,44 @@ class TestStaleReconnect:
         with caplog.at_level(logging.WARNING):
             mqtt_client.check_staleness()
         assert not any("zero status reports" in r.getMessage() for r in caplog.records)
+
+    def test_check_staleness_no_serial_hint_right_after_reconnect(self, mqtt_client, caplog):
+        """#2732 — _report_messages_since_connect is reset by _on_connect, so a
+        reconnect landing just before the staleness check leaves it at 0 for
+        reasons that have nothing to do with the serial. A healthy P1S was being
+        told to check its serial number 1 ms after reconnecting."""
+        import logging
+        import time
+
+        mqtt_client.state.connected = True
+        mqtt_client._last_message_time = time.time() - 120
+        mqtt_client._report_messages_since_connect = 0
+        mqtt_client._connect_time = time.monotonic()  # fresh session
+
+        with caplog.at_level(logging.WARNING):
+            mqtt_client.check_staleness()
+
+        assert mqtt_client._zero_report_hint_logged is False
+        assert not any("zero status reports" in r.getMessage() for r in caplog.records)
+        # The stale reconnect itself still happens — only the hint is suppressed.
+        assert mqtt_client._stale_reconnecting is True
+
+    def test_check_staleness_serial_hint_when_session_old_enough(self, mqtt_client, caplog):
+        """A session that has been up past the stale window and still received
+        nothing is the case the hint was written for."""
+        import logging
+        import time
+
+        mqtt_client.state.connected = True
+        mqtt_client._last_message_time = time.time() - 120
+        mqtt_client._report_messages_since_connect = 0
+        mqtt_client._connect_time = time.monotonic() - 120
+
+        with caplog.at_level(logging.WARNING):
+            mqtt_client.check_staleness()
+
+        assert mqtt_client._zero_report_hint_logged is True
+        assert any("zero status reports" in r.getMessage() for r in caplog.records)
 
     def test_check_staleness_no_serial_hint_when_reports_received(self, mqtt_client, caplog):
         """A stale connection that DID receive reports (a normal mid-session

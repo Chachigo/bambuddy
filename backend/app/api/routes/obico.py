@@ -17,6 +17,8 @@ router = APIRouter(prefix="/obico", tags=["obico"])
 
 class TestConnectionRequest(BaseModel):
     url: str
+    # Omitted entirely = test with the saved token; "" = test with no token.
+    token: str | None = None
 
 
 @router.get("/status")
@@ -65,10 +67,15 @@ async def test_connection(
     req: TestConnectionRequest,
     _: User | None = RequirePermissionIfAuthEnabled(Permission.SETTINGS_UPDATE),
 ):
-    """Ping the Obico ML API `/hc/` health endpoint. Returns ok + raw body."""
+    """Ping the Obico ML API health endpoint and check the token. Returns ok + raw body."""
     if not req.url:
-        return {"ok": False, "status_code": None, "body": None, "error": "URL is empty"}
-    return await obico_detection_service.test_connection(req.url)
+        return {"ok": False, "status_code": None, "body": None, "error": "URL is empty", "auth_ok": None}
+    token = req.token
+    if token is None:
+        # Field omitted entirely — test what the service actually uses.
+        settings = await obico_detection_service._load_settings()
+        token = settings.get("ml_token") or ""
+    return await obico_detection_service.test_connection(req.url, token)
 
 
 @router.get("/cached-frame/{nonce}")

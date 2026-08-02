@@ -44,6 +44,19 @@ _frame_cache: dict[str, tuple[bytes, float]] = {}
 _frame_cache_lock = asyncio.Lock()
 
 
+def auth_headers(token: str | None) -> dict[str, str]:
+    """Bearer header for the ML API, or nothing when no token is configured.
+
+    Obico's ML API gates ``/p/`` behind ``ML_API_TOKEN`` (``ml_api/auth.py``):
+    with the variable set it answers a bare 401 to any request whose
+    ``Authorization`` header isn't ``Bearer <token>``, and with it unset it
+    ignores the header entirely. Sending nothing when unconfigured keeps the
+    request byte-identical to what shipped before the setting existed.
+    """
+    token = (token or "").strip()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def _prune_frame_cache() -> None:
     """Drop entries older than FRAME_CACHE_TTL. Called under the cache lock."""
     now = time.monotonic()
@@ -111,6 +124,7 @@ class ObicoDetectionService:
         keys = [
             "obico_enabled",
             "obico_ml_url",
+            "obico_ml_token",
             "obico_sensitivity",
             "obico_action",
             "obico_poll_interval",
@@ -133,6 +147,7 @@ class ObicoDetectionService:
         return {
             "enabled": rows.get("obico_enabled", "false").lower() == "true",
             "ml_url": (rows.get("obico_ml_url") or "").rstrip("/"),
+            "ml_token": (rows.get("obico_ml_token") or "").strip(),
             "sensitivity": rows.get("obico_sensitivity", "medium"),
             "action": rows.get("obico_action", "notify"),
             "poll_interval": int(rows.get("obico_poll_interval", "10")),
@@ -279,7 +294,23 @@ class ObicoDetectionService:
 
         try:
             async with httpx.AsyncClient(timeout=DETECTION_TIMEOUT) as client:
-                resp = await client.get(ml_url, params={"img": snapshot_url})
+                resp = await client.get(
+                    ml_url,
+                    params={"img": snapshot_url},
+                    headers=auth_headers(settings.get("ml_token")),
+                )
+                if resp.status_code == 401:
+                    # The server runs with ML_API_TOKEN set and rejected ours.
+                    # Say so plainly: the health endpoint is ungated, so "Test
+                    # Connection" passes against exactly this configuration and
+                    # a raw 401 gives the user nothing to act on (#2733).
+                    self._last_error = (
+                        "Obico ML API rejected the token (401). Set Settings → Failure Detection → "
+                        "ML API Token to the ML_API_TOKEN the server runs with, or clear ML_API_TOKEN "
+                        "on the server."
+                    )
+                    logger.warning("%s (printer %s)", self._last_error, printer_id)
+                    return
                 resp.raise_for_status()
                 payload = resp.json()
         except Exception as e:
@@ -364,8 +395,8 @@ class ObicoDetectionService:
             "history": list(self._history),
         }
 
-    async def test_connection(self, url: str) -> dict:
-        """Ping the ML API health endpoint. Returns {ok, status_code, body, error}.
+    async def test_connection(self, url: str, token: str = "") -> dict:
+        """Ping the ML API and check the token. Returns {ok, status_code, body, error, auth_ok}.
 
         The stored ``obico_ml_url`` setting is validated at the schema layer,
         but this route takes its URL from the request body, so the same
@@ -374,27 +405,71 @@ class ObicoDetectionService:
         is returned to the caller (it is the health signal — the endpoint
         answers "ok"), which is exactly why the destination must be inside
         policy before the request is made.
+
+        ``token`` is used verbatim — resolving "not supplied" to the saved
+        setting is the route's job, so this stays a pure outbound call.
+
+        Health alone cannot answer whether the token works, because Obico
+        gates ``/p/`` but leaves ``/hc/`` open — which is how a token-protected
+        server passed this test while every detection call came back 401
+        (#2733). So a second, side-effect-free probe follows: ``/p/`` with no
+        ``img`` parameter. The auth decorator runs before the handler, so 401
+        means the token was rejected and 422 ("Invalid request params") means
+        it was accepted. No inference work is done either way.
         """
         from backend.app.api.routes._url_safety import assert_safe_lan_service_url
 
         try:
             assert_safe_lan_service_url(url, label="Obico ML URL")
         except ValueError as exc:
-            return {"ok": False, "status_code": None, "body": None, "error": str(exc)}
+            return {"ok": False, "status_code": None, "body": None, "error": str(exc), "auth_ok": None}
 
-        target = f"{url.rstrip('/')}/hc/"
+        headers = auth_headers(token)
+
+        base = url.rstrip("/")
         try:
             async with httpx.AsyncClient(timeout=HEALTH_TIMEOUT) as client:
-                resp = await client.get(target)
-            body = resp.text.strip()
-            return {
-                "ok": resp.status_code == 200 and body.lower() == "ok",
-                "status_code": resp.status_code,
-                "body": body,
-                "error": None,
-            }
+                resp = await client.get(f"{base}/hc/", headers=headers)
+                body = resp.text.strip()
+                healthy = resp.status_code == 200 and body.lower() == "ok"
+                if not healthy:
+                    return {
+                        "ok": False,
+                        "status_code": resp.status_code,
+                        "body": body,
+                        "error": None,
+                        "auth_ok": None,
+                    }
+
+                auth_ok: bool | None
+                try:
+                    probe = await client.get(f"{base}/p/", headers=headers)
+                    auth_ok = probe.status_code != 401
+                except Exception:
+                    # The health check already succeeded, so don't fail the
+                    # whole test on the probe — report the token as unknown.
+                    auth_ok = None
         except Exception as e:
-            return {"ok": False, "status_code": None, "body": None, "error": str(e) or type(e).__name__}
+            return {
+                "ok": False,
+                "status_code": None,
+                "body": None,
+                "error": str(e) or type(e).__name__,
+                "auth_ok": None,
+            }
+
+        if auth_ok is False:
+            return {
+                "ok": False,
+                "status_code": 401,
+                "body": body,
+                "error": (
+                    "The ML API is reachable but rejected the token. It runs with ML_API_TOKEN set — "
+                    "enter that value as the ML API Token, or clear ML_API_TOKEN on the server."
+                ),
+                "auth_ok": False,
+            }
+        return {"ok": True, "status_code": resp.status_code, "body": body, "error": None, "auth_ok": auth_ok}
 
 
 obico_detection_service = ObicoDetectionService()
