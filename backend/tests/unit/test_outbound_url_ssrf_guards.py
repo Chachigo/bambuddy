@@ -40,6 +40,9 @@ from backend.app.api.routes._url_safety import assert_safe_lan_service_url
 from backend.app.schemas.auth import OIDCProviderCreate, OIDCProviderUpdate
 from backend.app.schemas.settings import LAN_SERVICE_URL_SETTINGS, AppSettingsUpdate
 from backend.app.services import notification_service as ns
+from backend.app.services.homeassistant import HomeAssistantService
+from backend.app.services.rest_smart_plug import RESTSmartPlugService
+from backend.app.services.tasmota import TasmotaService
 
 # Dangerous under any topology — both tiers must reject all of these.
 UNIVERSALLY_BLOCKED = [
@@ -54,6 +57,11 @@ UNIVERSALLY_BLOCKED = [
     "http://[::ffff:169.254.169.254]/",
     "http://0.0.0.0/",
     "http://239.255.255.250/",
+    # The DNS-name form of the same target. Neither tier resolves hostnames,
+    # but these are a fixed literal set, so matching them costs no lookup.
+    "http://metadata.google.internal/",
+    "http://METADATA.GOOGLE.INTERNAL/computeMetadata/v1/",
+    "http://metadata.goog/",
 ]
 
 # The normal self-hosted topology — the LAN tier must permit all of these.
@@ -374,3 +382,269 @@ async def test_test_config_refuses_metadata_targets_without_a_request(provider_t
     assert success is False
     assert called is False
     assert "cloud metadata" in message
+
+
+# ---------------------------------------------------------------------------
+# Smart plugs: the same request-body-URL shape as the notification test endpoint
+# ---------------------------------------------------------------------------
+#
+# POST /smart-plugs/{ha,rest}/test-connection take their URL from the request
+# body and never persist it, so the schema-layer validator on ``ha_url`` does
+# not apply. Both are reachable with only ``SMART_PLUGS_CONTROL``, which the
+# default Operators group carries and which does NOT imply ``SETTINGS_UPDATE``
+# — identical to the notification case above.
+#
+# Both previously used hand-rolled checks that got the policy wrong in both
+# directions: the REST one rejected a literal ``127.0.0.1`` while allowing
+# every non-literal hostname, and the HA one matched three literal strings and
+# never parsed the hostname as an IP at all.
+
+
+@pytest.mark.parametrize("url", UNIVERSALLY_BLOCKED)
+def test_rest_plug_guard_rejects_dangerous_targets(url: str):
+    assert RESTSmartPlugService._validate_url(url) is False
+
+
+@pytest.mark.parametrize("url", LAN_ALLOWED)
+def test_rest_plug_guard_permits_the_normal_self_hosted_topology(url: str):
+    """Includes literal 127.0.0.1, which the previous implementation rejected
+    while accepting the equivalent "localhost" — a plug bridge on the same
+    host could only be configured by spelling it one particular way."""
+    assert RESTSmartPlugService._validate_url(url) is True
+
+
+@pytest.mark.parametrize("url", UNIVERSALLY_BLOCKED)
+def test_ha_guard_rejects_dangerous_targets(url: str):
+    assert HomeAssistantService._validate_url(url) is None
+
+
+@pytest.mark.parametrize("url", LAN_ALLOWED)
+def test_ha_guard_permits_the_normal_self_hosted_topology(url: str):
+    assert HomeAssistantService._validate_url(url) is not None
+
+
+def test_ha_guard_still_normalises_the_url_it_returns():
+    """Delegating the policy must not change what the caller gets back:
+    scheme+host+port+path, with query and fragment dropped."""
+    assert HomeAssistantService._validate_url("http://192.168.1.5:8123/base?x=1#f") == "http://192.168.1.5:8123/base"
+    assert HomeAssistantService._validate_url("http://ha.lan") == "http://ha.lan"
+
+
+def test_ha_guard_keeps_ipv6_literals_bracketed():
+    """urlparse strips the brackets off an IPv6 host; re-emitting it without
+    them yields an unparseable URL that httpx cannot dial."""
+    assert HomeAssistantService._validate_url("http://[fd00::1]:8123/api") == "http://[fd00::1]:8123/api"
+
+
+@pytest.mark.parametrize("ip", ["169.254.169.254", "100.100.100.200", "fd00:ec2::254", "0.0.0.0", "239.255.255.250"])
+def test_tasmota_guard_rejects_metadata_and_misuse_addresses(ip: str):
+    """Tasmota keeps its own stricter rule (bare IP literals only, loopback
+    rejected — a plug is always a separate LAN device), but must not miss the
+    destinations that are dangerous regardless of topology."""
+    assert TasmotaService._validate_ip(ip) is False
+
+
+@pytest.mark.parametrize("ip", ["::ffff:169.254.169.254", "::ffff:100.100.100.200"])
+def test_tasmota_guard_unwraps_ipv4_mapped_ipv6(ip: str):
+    assert TasmotaService._validate_ip(ip) is False
+
+
+@pytest.mark.parametrize("ip", ["192.168.1.50", "10.0.0.7", "172.16.4.9"])
+def test_tasmota_guard_still_permits_a_normal_lan_plug(ip: str):
+    assert TasmotaService._validate_ip(ip) is True
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "tasmota.local", "not-an-ip"])
+def test_tasmota_guard_keeps_failing_closed_on_non_lan_device_values(ip: str):
+    """Deliberately stricter than the shared LAN guard, and unchanged here."""
+    assert TasmotaService._validate_ip(ip) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    ["http://169.254.169.254/", "http://100.100.100.200/", "http://metadata.google.internal/"],
+)
+async def test_rest_test_connection_refuses_metadata_without_a_request(target: str, monkeypatch):
+    """End-to-end shape of the reported attack, mirroring the notification
+    test above: an unsaved URL aimed at IMDS via the test endpoint must be
+    refused before any HTTP call is made."""
+
+    def _fail_if_called(*_a, **_kw):
+        raise AssertionError("outbound request should not have been attempted")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _fail_if_called)
+    result = await RESTSmartPlugService().test_connection(target, "GET", None)
+
+    assert result["success"] is False
+    assert "cloud metadata" in result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target",
+    ["http://169.254.169.254", "http://100.100.100.200", "http://metadata.google.internal"],
+)
+async def test_ha_test_connection_refuses_metadata_without_a_request(target: str, monkeypatch):
+    def _fail_if_called(*_a, **_kw):
+        raise AssertionError("outbound request should not have been attempted")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _fail_if_called)
+    result = await HomeAssistantService().test_connection(target, "token")
+
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["http://169.254.169.254", "http://metadata.google.internal"])
+async def test_obico_test_connection_refuses_metadata_without_a_request(target: str, monkeypatch):
+    """Same shape again: obico_ml_url is guarded when saved via settings, but
+    this route takes the URL from the request body and echoes the response."""
+    from backend.app.services.obico_detection import ObicoDetectionService
+
+    def _fail_if_called(*_a, **_kw):
+        raise AssertionError("outbound request should not have been attempted")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _fail_if_called)
+    result = await ObicoDetectionService().test_connection(target)
+
+    assert result["ok"] is False
+    assert result["body"] is None
+    assert "cloud metadata" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Drift backstop, part 2: URLs that arrive in a request body
+# ---------------------------------------------------------------------------
+#
+# `test_every_url_setting_is_either_guarded_or_explicitly_exempt` above only
+# walks `AppSettingsUpdate`. That is why the notification test endpoint, and
+# then the two smart-plug test endpoints, each had to be found by hand: a URL
+# that arrives in a request body and is never persisted is not a settings
+# field, so nothing enumerated it. This walks the live route table instead.
+
+
+def _request_body_url_fields() -> set[tuple[str, str]]:
+    """Every (model, field) pair on a mutating route whose body carries a URL."""
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel
+
+    from backend.app.main import app
+
+    found: set[tuple[str, str]] = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or not ({"POST", "PUT", "PATCH"} & set(route.methods or ())):
+            continue
+        for param in route.dependant.body_params:
+            # FastAPI moved the resolved annotation from `type_` onto
+            # `field_info.annotation`; read both so this can't silently
+            # enumerate nothing (which would make the assertions vacuous).
+            annotation = getattr(param, "type_", None)
+            if annotation is None:
+                annotation = getattr(getattr(param, "field_info", None), "annotation", None)
+            if not (isinstance(annotation, type) and issubclass(annotation, BaseModel)):
+                continue
+            for field in annotation.model_fields:
+                if field == "url" or field.endswith("_url"):
+                    found.add((annotation.__name__, field))
+    return found
+
+
+# Guarded: the handler (or the service it calls) puts the value through one of
+# the two tiers before any request is issued.
+GUARDED_BODY_URLS = {
+    ("AppSettingsUpdate", "bambu_studio_api_url"),
+    ("AppSettingsUpdate", "ha_url"),
+    ("AppSettingsUpdate", "obico_ml_url"),
+    ("AppSettingsUpdate", "orcaslicer_api_url"),
+    ("AppSettingsUpdate", "spoolman_url"),  # assert_safe_spoolman_url at each consumer
+    ("HATestConnectionRequest", "url"),  # homeassistant._validate_url
+    ("RESTTestConnectionRequest", "url"),  # rest_smart_plug._validate_url
+    ("TestConnectionRequest", "url"),  # obico_detection.test_connection
+    ("OIDCProviderCreate", "issuer_url"),  # public tier, via schemas.auth
+    ("OIDCProviderCreate", "icon_url"),
+    ("OIDCProviderUpdate", "issuer_url"),
+    ("OIDCProviderUpdate", "icon_url"),
+    # Gitea/Forgejo derive their API base from this and request it with the
+    # stored token, so it is a real fetch target — guarded in
+    # github_backup._enforce_private_repo, which both POST and PATCH funnel through.
+    ("GitHubBackupConfigCreate", "repository_url"),
+    ("GitHubBackupConfigUpdate", "repository_url"),
+    # SmartPlug{Create,Update} persist these; every read goes back out through
+    # RESTSmartPlugService._send_request, which applies the same guard.
+    ("SmartPlugCreate", "rest_on_url"),
+    ("SmartPlugCreate", "rest_off_url"),
+    ("SmartPlugCreate", "rest_status_url"),
+    ("SmartPlugCreate", "rest_power_url"),
+    ("SmartPlugCreate", "rest_energy_url"),
+    ("SmartPlugUpdate", "rest_on_url"),
+    ("SmartPlugUpdate", "rest_off_url"),
+    ("SmartPlugUpdate", "rest_status_url"),
+    ("SmartPlugUpdate", "rest_power_url"),
+    ("SmartPlugUpdate", "rest_energy_url"),
+}
+
+# Not a destination Bambuddy requests — no guard applies.
+NOT_A_FETCH_TARGET = {
+    ("AppSettingsUpdate", "external_url"),  # Bambuddy's own address (see exempt list above)
+    ("AppSettingsUpdate", "ldap_server_url"),  # ldap://, handed to an LDAP client
+    ("ProjectCreate", "url"),  # stored link, rendered in the UI, never fetched
+    ("ProjectUpdate", "url"),
+    ("BOMItemCreate", "sourcing_url"),  # stored supplier link, never fetched
+    ("BOMItemUpdate", "sourcing_url"),
+    ("MakerWorldResolveRequest", "url"),  # parsed for a model id; fetches go to a pinned CDN allowlist
+    ("DeviceRegisterRequest", "backend_url"),  # the device's view of Bambuddy's own address
+    ("HeartbeatRequest", "backend_url"),
+    ("SystemConfigRequest", "backend_url"),
+    ("ExternalLinkCreate", "url"),  # sidebar link, rendered in the UI, never requested
+    ("ExternalLinkUpdate", "url"),
+    ("MaintenanceTypeCreate", "wiki_url"),  # documentation link surfaced in the UI/notifications
+    ("MaintenanceTypeUpdate", "wiki_url"),
+    ("ArchiveUpdate", "external_url"),  # stored source link for the model, never fetched
+}
+
+# Genuinely unguarded, and deliberately recorded rather than quietly exempted.
+# These reach `external_camera.capture_frame`, which dials rtsp:// as well as
+# http(s):// — the LAN-service guard rejects any non-HTTP scheme, so wiring it
+# up as-is would break every RTSP camera. Closing these needs a scheme-aware
+# variant of the guard, not a one-line delegation.
+KNOWN_UNGUARDED_NEEDS_SCHEME_AWARE_GUARD = {
+    ("PrinterCreate", "external_camera_url"),
+    ("PrinterCreate", "external_camera_snapshot_url"),
+    ("PrinterUpdate", "external_camera_url"),
+    ("PrinterUpdate", "external_camera_snapshot_url"),
+}
+
+
+def test_the_route_walk_actually_finds_something():
+    """Guards the guard. If FastAPI's internals move again and the walk starts
+    returning nothing, both assertions below pass vacuously and the backstop
+    silently stops working — which is the exact failure it exists to prevent."""
+    found = _request_body_url_fields()
+    assert ("RESTTestConnectionRequest", "url") in found
+    assert ("HATestConnectionRequest", "url") in found
+    assert len(found) > 20
+
+
+def test_every_request_body_url_is_classified():
+    """A new URL-bearing request field can't land without a decision.
+
+    Add it to GUARDED_BODY_URLS once the handler runs it through a guard, or
+    to NOT_A_FETCH_TARGET with the reason it is never requested. Do not add
+    anything to KNOWN_UNGUARDED_* without also raising it.
+    """
+    classified = GUARDED_BODY_URLS | NOT_A_FETCH_TARGET | KNOWN_UNGUARDED_NEEDS_SCHEME_AWARE_GUARD
+    unclassified = _request_body_url_fields() - classified
+    assert not unclassified, (
+        f"Unclassified request-body URL field(s): {sorted(unclassified)}. Route the value "
+        f"through a guard and list it in GUARDED_BODY_URLS, or list it in NOT_A_FETCH_TARGET "
+        f"with the reason it is never fetched."
+    )
+
+
+def test_classification_lists_do_not_drift_from_the_routes():
+    """The reverse direction: a stale entry means a route was renamed or
+    removed and the list was not updated, which would hide the next one."""
+    actual = _request_body_url_fields()
+    stale = (GUARDED_BODY_URLS | NOT_A_FETCH_TARGET | KNOWN_UNGUARDED_NEEDS_SCHEME_AWARE_GUARD) - actual
+    assert not stale, f"Classification entries no longer match any route: {sorted(stale)}"

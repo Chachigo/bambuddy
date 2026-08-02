@@ -13,7 +13,12 @@ from __future__ import annotations
 import ipaddress
 from urllib.parse import urlparse
 
-from backend.app.api.routes._url_safety import CLOUD_METADATA_IPS, NUMERIC_IP_RE, unwrap_ipv4_mapped
+from backend.app.api.routes._url_safety import (
+    CLOUD_METADATA_HOSTNAMES,
+    CLOUD_METADATA_IPS,
+    NUMERIC_IP_RE,
+    unwrap_ipv4_mapped,
+)
 
 
 def assert_safe_public_https_url(url: str) -> None:
@@ -38,16 +43,26 @@ def assert_safe_public_https_url(url: str) -> None:
     - IPv4-mapped IPv6 (``::ffff:127.0.0.1``) — unwrapped before the IP-class
       check so an attacker can't bypass via IPv6 encoding.
 
-    Hostname-based addresses are accepted without DNS resolution — the
-    operator is trusted to configure a sensible IdP host, and resolving here
-    would both add a TOCTOU gap (DNS can change between validation and
-    request) and make the validator issue network requests of its own.
+    Hostname-based addresses are otherwise accepted without DNS resolution —
+    the operator is trusted to configure a sensible IdP host, and resolving
+    here would both add a TOCTOU gap (DNS can change between validation and
+    request) and make the validator issue network requests of its own. The
+    fixed cloud-metadata hostnames are the exception: matching them is a
+    literal string comparison, not a resolution.
     """
     parsed = urlparse(url)
     if parsed.scheme.lower() != "https":
         raise ValueError("icon URL must use https://")
 
     hostname = (parsed.hostname or "").lower()
+
+    # "https:///path" parses to an empty hostname; without this it reaches the
+    # ip_address() ValueError branch and is accepted as a symbolic hostname.
+    if not hostname:
+        raise ValueError("icon URL must include a hostname")
+
+    if hostname in CLOUD_METADATA_HOSTNAMES:
+        raise ValueError("icon URL must not point to a cloud metadata endpoint")
 
     if NUMERIC_IP_RE.match(hostname):
         raise ValueError("icon URL must not use numeric-encoded IP addresses")
