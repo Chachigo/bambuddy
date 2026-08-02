@@ -3672,6 +3672,7 @@ export default {
     showModified: '更新日時を表示',
     hideModified: '更新日時を非表示',
     lastModified: '最終更新',
+    lastActivity: '最終アクティビティ',
     resultsCount: '{{total}}件中{{showing}}件',
     selectAll: 'すべて選択',
     deselectAll: 'すべて選択解除',

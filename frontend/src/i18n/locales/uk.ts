@@ -3701,6 +3701,7 @@ export default {
     showModified: "Показати змінені дати",
     hideModified: "Приховати змінені дати",
     lastModified: "Востаннє змінено",
+    lastActivity: "Остання активність",
     resultsCount: "{{showing}} з {{total}} файлів",
     selectAll: "Вибрати усі",
     deselectAll: "Зняти вибір із усіх",

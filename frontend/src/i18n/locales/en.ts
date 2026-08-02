@@ -3701,6 +3701,7 @@ export default {
     showModified: 'Show modified dates',
     hideModified: 'Hide modified dates',
     lastModified: 'Last modified',
+    lastActivity: 'Last activity',
     resultsCount: '{{showing}} of {{total}} files',
     selectAll: 'Select All',
     deselectAll: 'Deselect All',

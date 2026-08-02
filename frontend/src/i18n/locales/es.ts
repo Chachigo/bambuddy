@@ -3675,6 +3675,7 @@ export default {
     showModified: 'Mostrar fechas de modificación',
     hideModified: 'Ocultar fechas de modificación',
     lastModified: 'Última modificación',
+    lastActivity: 'Última actividad',
     resultsCount: '{{showing}} de {{total}} archivos',
     selectAll: 'Seleccionar todo',
     deselectAll: 'Deseleccionar todo',

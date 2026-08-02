@@ -558,11 +558,12 @@ interface FolderTreeItemProps {
   depth?: number;
   wrapNames?: boolean;
   defaultExpanded?: boolean;
+  showModified?: boolean;
   hasPermission: (permission: Permission) => boolean;
   t: TFunction;
 }
 
-function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, onRename, depth = 0, wrapNames = false, defaultExpanded = true, hasPermission, t }: FolderTreeItemProps) {
+function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, onRename, depth = 0, wrapNames = false, defaultExpanded = true, showModified = false, hasPermission, t }: FolderTreeItemProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [showActions, setShowActions] = useState(false);
   const hasChildren = folder.children.length > 0;
@@ -609,7 +610,20 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
         ) : (
           <FolderOpen className="w-4 h-4 text-bambu-green flex-shrink-0" />
         )}
-        <span className={`text-sm flex-1 min-w-0 ${wrapNames ? 'break-all' : 'truncate'}`} title={folder.name}>{folder.name}</span>
+        <div className="flex-1 min-w-0">
+          <span className={`block text-sm ${wrapNames ? 'break-all' : 'truncate'}`} title={folder.name}>{folder.name}</span>
+          {/* #2680 follow-up: the same toolbar toggle that shows dates on file
+              cards also shows them here. This is `latest_activity_at` — the
+              newest timestamp among the folder itself, its files and its
+              subfolders (the value "sort by recent activity" orders on) — not
+              the folder's own on-disk mtime, hence the distinct label. */}
+          {showModified && folder.latest_activity_at && (
+            <span className="mt-0.5 flex items-center gap-1 text-xs text-bambu-gray" title={t('fileManager.lastActivity')}>
+              <CalendarClock className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{formatDate(folder.latest_activity_at)}</span>
+            </span>
+          )}
+        </div>
         {/* Link indicator - clickable to change link */}
         {isLinked && (
           <button
@@ -709,6 +723,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
               depth={depth + 1}
               wrapNames={wrapNames}
               defaultExpanded={defaultExpanded}
+              showModified={showModified}
               hasPermission={hasPermission}
               t={t}
             />
@@ -1957,6 +1972,7 @@ export function FileManagerPage() {
                 onRename={(f) => setRenameItem({ type: 'folder', id: f.id, name: f.name })}
                 wrapNames={wrapFolderNames}
                 defaultExpanded={!collapseFoldersByDefault}
+                showModified={showModified}
                 hasPermission={hasPermission}
                 t={t}
               />

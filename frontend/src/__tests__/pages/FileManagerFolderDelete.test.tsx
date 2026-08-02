@@ -71,7 +71,10 @@ function mockAuthUser(permissions: string[]) {
 }
 
 async function openFolderMenu(user: ReturnType<typeof userEvent.setup>, folderName: string) {
-  const row = screen.getByText(folderName).parentElement!;
+  // Walk up to the row itself rather than assuming the name is its direct
+  // child — the name sits in a wrapper that also holds the optional
+  // last-activity line (#2680).
+  const row = screen.getByText(folderName).closest('div.group')!;
   const buttons = within(row).getAllByRole('button');
   // The kebab (MoreVertical) menu toggle is the last button in the row
   await user.click(buttons[buttons.length - 1]);

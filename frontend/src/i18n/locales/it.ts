@@ -3660,6 +3660,7 @@ export default {
     showModified: 'Mostra date di modifica',
     hideModified: 'Nascondi date di modifica',
     lastModified: 'Ultima modifica',
+    lastActivity: 'Ultima attività',
     resultsCount: '{{showing}} di {{total}} file',
     selectAll: 'Seleziona tutto',
     deselectAll: 'Deseleziona tutto',

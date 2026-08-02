@@ -3660,6 +3660,7 @@ export default {
     showModified: '顯示修改日期',
     hideModified: '隱藏修改日期',
     lastModified: '最後修改',
+    lastActivity: '最近活動',
     resultsCount: '{{showing}} / {{total}} 個檔案',
     selectAll: '全選',
     deselectAll: '取消全選',
