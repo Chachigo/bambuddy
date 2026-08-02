@@ -57,6 +57,12 @@ async def _check_port(ip: str, port: int, timeout: float = _PORT_PROBE_TIMEOUT) 
         return False
 
 
+# Public alias. The connection watchdog probes the MQTT port before rebuilding a
+# client, so it can tell "the printer is switched off" (leave it alone, paho will
+# keep retrying) from "the printer is answering but our session is dead" (#2732).
+check_port = _check_port
+
+
 def _auth_reason_params(reason: str | None) -> dict:
     """Map a client's CONNACK-refusal slug onto the check's `params.reason`.
 

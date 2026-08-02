@@ -2693,7 +2693,7 @@ export default {
     title: '오류 - {{name}}',
     noErrors: '오류 없음',
     viewOnWiki: 'Bambu Lab 위키에서 보기',
-    mqttVerifyFailedRemedy: '프린터에서 개발자 모드를 활성화하고(설정 > 일반) 프린터를 재시작한 다음 작업을 다시 시작하세요.',
+    mqttVerifyFailedRemedy: '프린터에서 개발자 모드를 활성화하고 프린터를 재시작한 다음 작업을 다시 시작하세요.',
     unknownCode: '알 수 없는 HMS 코드 — 자세한 내용은 Bambu Lab 위키를 참조하세요.',
     clearInstructions: '오류를 해제하려면 프린터에서 오류를 지우세요.',
     clearErrors: '오류 지우기',

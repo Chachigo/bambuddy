@@ -2872,7 +2872,7 @@ export default {
     title: 'Errors - {{name}}',
     noErrors: 'No errors',
     viewOnWiki: 'View on Bambu Lab Wiki',
-    mqttVerifyFailedRemedy: 'Enable Developer Mode on the printer (Settings > General), restart the printer, then start the job again.',
+    mqttVerifyFailedRemedy: 'Enable Developer Mode on the printer, restart the printer, then start the job again.',
     unknownCode: 'Unknown HMS code — see the Bambu Lab wiki for details.',
     clearInstructions: 'Clear errors on the printer to dismiss them here.',
     clearErrors: 'Clear Errors',

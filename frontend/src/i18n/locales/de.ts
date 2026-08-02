@@ -2843,7 +2843,7 @@ export default {
     title: 'Fehler - {{name}}',
     noErrors: 'Keine Fehler',
     viewOnWiki: 'Im Bambu Lab Wiki ansehen',
-    mqttVerifyFailedRemedy: 'Aktiviere den Entwicklermodus am Drucker (Einstellungen > Allgemein), starte den Drucker neu und starte den Auftrag dann erneut.',
+    mqttVerifyFailedRemedy: 'Aktiviere den Entwicklermodus am Drucker, starte den Drucker neu und starte den Auftrag dann erneut.',
     unknownCode: 'Unbekannter HMS-Code — Details siehe Bambu Lab Wiki.',
     clearInstructions: 'Löschen Sie die Fehler am Drucker, um sie hier zu entfernen.',
     clearErrors: 'Fehler löschen',

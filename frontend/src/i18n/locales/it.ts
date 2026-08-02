@@ -2831,7 +2831,7 @@ export default {
     title: 'Errori - {{name}}',
     noErrors: 'Nessun errore',
     viewOnWiki: 'Vedi su Bambu Lab Wiki',
-    mqttVerifyFailedRemedy: 'Attiva la modalita sviluppatore sulla stampante (Impostazioni > Generale), riavvia la stampante e avvia di nuovo il lavoro.',
+    mqttVerifyFailedRemedy: 'Attiva la modalita sviluppatore sulla stampante, riavvia la stampante e avvia di nuovo il lavoro.',
     unknownCode: 'Codice HMS sconosciuto — consulta la wiki di Bambu Lab per i dettagli.',
     clearInstructions: 'Cancella gli errori sulla stampante per rimuoverli qui.',
     clearErrors: 'Cancella errori',

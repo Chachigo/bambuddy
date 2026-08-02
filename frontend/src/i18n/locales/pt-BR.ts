@@ -2831,7 +2831,7 @@ export default {
     title: 'Erros - {{name}}',
     noErrors: 'Nenhum erro',
     viewOnWiki: 'Ver no Bambu Lab Wiki',
-    mqttVerifyFailedRemedy: 'Ative o Modo Desenvolvedor na impressora (Configuracoes > Geral), reinicie a impressora e inicie o trabalho novamente.',
+    mqttVerifyFailedRemedy: 'Ative o Modo Desenvolvedor na impressora, reinicie a impressora e inicie o trabalho novamente.',
     unknownCode: 'Código HMS desconhecido — consulte o wiki da Bambu Lab para mais detalhes.',
     clearInstructions: 'Limpe os erros na impressora para descartá-los aqui.',
     clearErrors: 'Limpar Erros',

@@ -2847,7 +2847,7 @@ export default {
     title: 'Hatalar - {{name}}',
     noErrors: 'Hata yok',
     viewOnWiki: 'Bambu Lab Wiki\'de görüntüle',
-    mqttVerifyFailedRemedy: 'Yazicida Gelistirici Modunu etkinlestirin (Ayarlar > Genel), yaziciyi yeniden baslatin ve isi tekrar baslatin.',
+    mqttVerifyFailedRemedy: 'Yazicida Gelistirici Modunu etkinlestirin, yaziciyi yeniden baslatin ve isi tekrar baslatin.',
     unknownCode: 'Bilinmeyen HMS kodu — ayrıntılar için Bambu Lab wiki sayfasına bakın.',
     clearInstructions: 'Buradan kapatmak için yazıcıdaki hataları temizleyin.',
     clearErrors: 'Hataları Temizle',

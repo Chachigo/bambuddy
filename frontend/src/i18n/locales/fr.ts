@@ -2832,7 +2832,7 @@ export default {
     title: 'Erreurs - {{name}}',
     noErrors: 'Aucune erreur',
     viewOnWiki: 'Voir sur le Wiki Bambu Lab',
-    mqttVerifyFailedRemedy: "Activez le mode developpeur sur l'imprimante (Parametres > General), redemarrez l'imprimante, puis relancez la tache.",
+    mqttVerifyFailedRemedy: "Activez le mode developpeur sur l'imprimante, redemarrez l'imprimante, puis relancez la tache.",
     unknownCode: 'Code HMS inconnu — consultez le wiki Bambu Lab pour plus de détails.',
     clearInstructions: 'Effacez les erreurs sur l\'imprimante pour les retirer ici.',
     clearErrors: 'Effacer les erreurs',

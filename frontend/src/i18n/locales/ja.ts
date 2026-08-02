@@ -2843,7 +2843,7 @@ export default {
     title: 'エラー - {{name}}',
     noErrors: 'エラーなし',
     viewOnWiki: 'Bambu Lab Wikiで表示',
-    mqttVerifyFailedRemedy: 'プリンターで開発者モードを有効にし（設定 > 一般）、プリンターを再起動してから、ジョブをもう一度開始してください。',
+    mqttVerifyFailedRemedy: 'プリンターで開発者モードを有効にし、プリンターを再起動してから、ジョブをもう一度開始してください。',
     unknownCode: '不明なHMSコード — 詳細はBambu Lab Wikiを参照してください。',
     clearInstructions: 'プリンターでエラーをクリアするとここからも消えます。',
     clearErrors: 'エラーをクリア',

@@ -2831,7 +2831,7 @@ export default {
     title: '錯誤 - {{name}}',
     noErrors: '無錯誤',
     viewOnWiki: '在拓竹 Wiki 上檢視',
-    mqttVerifyFailedRemedy: '在印表機上啟用開發者模式（設定 > 一般），重新啟動印表機，然後重新開始該工作。',
+    mqttVerifyFailedRemedy: '在印表機上啟用開發者模式，重新啟動印表機，然後重新開始該工作。',
     unknownCode: '未知 HMS 代碼 — 詳情請參閱拓竹 Wiki。',
     clearInstructions: '在印表機上清除錯誤以在此處消除它們。',
     clearErrors: '清除錯誤',
