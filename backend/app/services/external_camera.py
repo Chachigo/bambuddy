@@ -8,6 +8,7 @@ to ensure they are well-formed before use.
 """
 
 import asyncio
+import functools
 import logging
 import re
 import shutil
@@ -175,6 +176,57 @@ def get_ffmpeg_path() -> str | None:
     return None
 
 
+# In-flight one-shot captures, keyed by (url, camera_type, snapshot_url) —
+# the tuple that actually identifies the physical resource being contended
+# (#2707 comment thread, following #2705's shape for the built-in path).
+#
+# V4L2 USB devices allow exactly one open handle, and is_stream_active() /
+# try_get_active_buffered_frame() (#2707) only stop a one-shot capturer from
+# competing with the fan-out live view. They do nothing for capturer-vs-
+# capturer with no viewer attached, where every consumer correctly concludes
+# it isn't competing with a viewer and then collides with the others -
+# exactly the #2705 report, just for this module's callers instead of
+# capture_camera_frame_bytes()'s (Obico polling, the in-print frame bank,
+# the finish-photo moment, plate detection, and the notification snapshot
+# all reach capture_frame() independently).
+#
+# snapshot_url is part of the key (not just url/camera_type) because it
+# routes to a completely different endpoint (#1177) - two printers that
+# share a camera_url but differ only in snapshot_url must not coalesce.
+_inflight_captures: dict[tuple[str, str, str | None], asyncio.Task[bytes | None]] = {}
+
+
+def capture_in_flight(url: str, camera_type: str, snapshot_url: str | None = None) -> bool:
+    """Return True iff a one-shot capture for this key is running right now.
+
+    Mirrors camera.py's capture_in_flight() for the built-in path - for a
+    caller that needs to know it will JOIN someone else's capture rather
+    than open its own connection. Ordinary consumers should ignore this:
+    they want "a recent frame", and capture_frame() already does the right
+    thing for them.
+    """
+    task = _inflight_captures.get((url, camera_type, snapshot_url))
+    return task is not None and not task.done()
+
+
+def _discard_inflight_capture(key: tuple[str, str, str | None], task: asyncio.Task) -> None:
+    """Done-callback: drop the finished task from the in-flight registry.
+
+    Guarded on identity so a slow task that finishes after a newer capture
+    has registered for the same key can't evict its successor.
+
+    Also retrieves the exception, if any: the leader normally awaits the
+    task and would surface it, but a leader whose own caller was cancelled
+    leaves nobody to collect it, and an unretrieved task exception is
+    logged by asyncio as a warning with a traceback at an arbitrary later
+    point otherwise.
+    """
+    if _inflight_captures.get(key) is task:
+        del _inflight_captures[key]
+    if not task.cancelled() and task.exception() is not None:
+        logger.debug("In-flight external-camera capture for %s ended in an exception", key[0])
+
+
 async def capture_frame(
     url: str,
     camera_type: str,
@@ -186,7 +238,10 @@ async def capture_frame(
     Args:
         url: Live-stream URL (MJPEG stream, RTSP URL, HTTP snapshot URL, or USB device path).
         camera_type: "mjpeg", "rtsp", "snapshot", or "usb".
-        timeout: Connection timeout in seconds.
+        timeout: Connection timeout in seconds. Applies to this caller's own
+            wait, including when it joins another caller's capture - call
+            sites disagree about the value, and a follower must not silently
+            inherit the leader's deadline in either direction.
         snapshot_url: Optional override for single-frame capture. When set, fetched
             via plain HTTP GET regardless of `camera_type`. Bypasses MJPEG warm-up
             handling on sources that expose a dedicated frame endpoint (e.g. go2rtc's
@@ -195,6 +250,76 @@ async def capture_frame(
 
     Returns:
         JPEG bytes or None on failure
+
+    Concurrent callers for the same (url, camera_type, snapshot_url) share
+    one capture (#2705-shape fix, filed for the external-camera path as a
+    follow-up on #2707): the first opens the connection, everyone arriving
+    while it's in flight awaits the same result. This coalesces; it does
+    not cache - a call that arrives after the previous capture finished
+    always captures fresh, since plate detection and the finish-photo path
+    judge a running print from these frames and a stale one there is worse
+    than a slow one (#1397).
+    """
+    key = (url, camera_type, snapshot_url)
+
+    # A follower whose leader fails takes a turn of its own rather than
+    # inheriting a failure it never had a chance to avoid - by then the
+    # leader has finished, so there's no connection left to compete with.
+    # Bounded at two rounds: if the capture we joined AND its replacement
+    # both failed, a third attempt won't help, and this caller has already
+    # spent its patience.
+    for _ in range(2):
+        leader = _inflight_captures.get(key)
+        if leader is None or leader.done():
+            break
+        try:
+            frame = await asyncio.wait_for(asyncio.shield(leader), timeout=timeout)
+        except TimeoutError:
+            # shield() keeps the capture running for whoever else is still
+            # waiting on it - giving up is this caller's decision alone.
+            logger.warning("Gave up waiting %ss on the in-flight external-camera capture for %s", timeout, key[0])
+            return None
+        except asyncio.CancelledError:
+            # Distinguish "the capture I joined was cancelled" from "I was
+            # cancelled". Only the former is ours to recover from.
+            if not leader.cancelled():
+                raise
+            logger.info("In-flight external-camera capture for %s was cancelled; capturing our own", key[0])
+            continue
+        if frame is not None:
+            logger.debug(
+                "Reusing in-flight external-camera capture for %s: %d bytes (no second connection opened)",
+                key[0],
+                len(frame),
+            )
+            return frame
+        logger.debug("In-flight external-camera capture for %s failed; capturing our own", key[0])
+    else:
+        return None
+
+    task = asyncio.create_task(_capture_frame_uncoalesced(url, camera_type, timeout, snapshot_url))
+    _inflight_captures[key] = task
+    task.add_done_callback(functools.partial(_discard_inflight_capture, key))
+    # No wait_for here: this caller IS the capture, and each dispatched
+    # _capture_* function already enforces `timeout` internally, where it
+    # can also kill the ffmpeg process - a second deadline on top would
+    # abandon the subprocess instead of killing it. shield() so a cancelled
+    # leader (a client navigating away mid-request is routine) doesn't take
+    # the capture down with it - followers already waiting on it still get
+    # their frame.
+    return await asyncio.shield(task)
+
+
+async def _capture_frame_uncoalesced(
+    url: str,
+    camera_type: str,
+    timeout: int,
+    snapshot_url: str | None,
+) -> bytes | None:
+    """Open a connection and capture one frame. See capture_frame().
+
+    Callers want that wrapper, not this: it opens a connection
+    unconditionally, which is the collision #2705/#2707 are about.
     """
     if snapshot_url:
         # Redact before truncating — slicing first can cut the URL short of the
