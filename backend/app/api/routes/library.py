@@ -3082,6 +3082,7 @@ async def _try_preview_slice_filaments(
     """
     from backend.app.api.routes.settings import get_setting
     from backend.app.services.slice_preview import get_preview_filaments
+    from backend.app.services.slicer_api import get_stall_timeout_seconds
 
     preferred = (await get_setting(db, "preferred_slicer")) or "bambu_studio"
     if preferred == "orcaslicer":
@@ -3107,6 +3108,7 @@ async def _try_preview_slice_filaments(
         file_name=file_path.name,
         api_url=api_url,
         request_id=request_id,
+        timeout_seconds=await get_stall_timeout_seconds(db),
     )
 
 
@@ -3607,6 +3609,8 @@ async def _run_slicer_with_fallback(
         SlicerApiService,
         SlicerApiUnavailableError,
         SlicerInputError,
+        SlicerTimeoutError,
+        get_stall_timeout_seconds,
     )
 
     user: User | None = None
@@ -3717,7 +3721,9 @@ async def _run_slicer_with_fallback(
     # gates the toggle on the picked printer matching the design's target,
     # so this path never re-targets across printer models.
     embedded_mode = bool(request.use_embedded_settings and is_3mf)
-    service = SlicerApiService(api_url)
+    # Bounds silence rather than total slicing time (#2730), so a heavy model
+    # that keeps reporting progress runs to completion however long it takes.
+    service = SlicerApiService(api_url, timeout_seconds=await get_stall_timeout_seconds(db))
 
     # #1493: cross-nozzle-class re-slice (single <-> dual). Without
     # intervention the slicer rejects with either "G-code in unprintable
@@ -3960,6 +3966,12 @@ async def _run_slicer_with_fallback(
             used_embedded_settings = True
     except SlicerInputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SlicerTimeoutError as exc:
+        # 504, not 502: the sidecar answered for the whole run, we stopped
+        # waiting. Reported separately so the user is told the slice ran out of
+        # time and where to change that, rather than that the sidecar is
+        # unreachable — which is what a read timeout used to look like (#2730).
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except SlicerApiServerError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except SlicerApiUnavailableError as exc:

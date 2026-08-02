@@ -2256,6 +2256,8 @@ export default {
     slicerCard: "Слайсер",
     orcaslicerApiUrl: "URL допоміжного сервісу OrcaSlicer",
     bambuStudioApiUrl: "URL допоміжного сервісу Bambu Studio",
+    slicerStallTimeout: 'Тайм-аут простою слайсера (хвилини)',
+    slicerStallTimeoutDescription: 'Перервати нарізку, якщо sidecar не повідомляє про прогрес протягом цього часу. Важкі моделі, які продовжують повідомляти про прогрес, ніколи не перериваються, скільки б часу не знадобилося. Для sidecar без звіту про прогрес це значення використовується як загальний ліміт часу.',
     slicerApiUrlDescription: "URL контейнера допоміжного сервісу slicer-API. Залиште поле порожнім, щоб використовувати типові значення зі змінних середовища SLICER_API_URL / BAMBU_STUDIO_API_URL.",
     slicerBundlesRemoved: {
       title: "Пакети профілів слайсера (вилучено)",

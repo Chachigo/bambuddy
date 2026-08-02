@@ -69,6 +69,17 @@ def _install_mock_sidecar(handler: Callable[[httpx.Request], httpx.Response]) ->
     return client
 
 
+def _is_slice_post(request: httpx.Request) -> bool:
+    """True for the slice call itself, false for the progress polls beside it.
+
+    Since #2730 a slice is supervised by a 1 Hz poll of
+    ``GET /slice/progress/{id}``, which shares this mock transport. Tests that
+    count *slice attempts* — primary vs embedded-settings fallback — have to
+    exclude those, or the count becomes a measure of how long the test took.
+    """
+    return request.method == "POST" and request.url.path.endswith("/slice")
+
+
 async def _wait_for_job(client: AsyncClient, job_id: int, timeout: float = 5.0) -> dict:
     """Poll `/api/v1/slice-jobs/{id}` until the job hits a terminal state.
 
@@ -414,6 +425,8 @@ class TestSliceLibraryFile:
         call_count = {"n": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             call_count["n"] += 1
             # First call: profile triplet present → simulate CLI 5xx
             if call_count["n"] == 1:
@@ -454,7 +467,9 @@ class TestSliceLibraryFile:
         # STL has no embedded settings — the CLI 5xx is terminal.
         call_count = {"n": 0}
 
-        def handler(_: httpx.Request) -> httpx.Response:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             call_count["n"] += 1
             return httpx.Response(
                 status_code=500,
@@ -568,6 +583,8 @@ class TestSliceLibraryFile:
         call_count = {"n": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             call_count["n"] += 1
             captured["body"] = request.content
             return httpx.Response(
@@ -777,6 +794,8 @@ class TestCrossClassSliceAllLoop:
         captured_requests: list[dict] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             # Multipart bodies aren't trivially parseable here; pull
             # the plate field by string search since the helper sends
             # ``name="plate"`` immediately followed by the value.
@@ -1463,6 +1482,8 @@ class TestSliceSlicerRejection:
         call_count = {"n": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             call_count["n"] += 1
             return httpx.Response(
                 status_code=500,
@@ -1721,6 +1742,8 @@ class TestUnusedSlotSubstitutionOnSinglePlateSource:
         captured: list[list[str]] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             captured.append(self._filament_names_sent(request.content))
             return httpx.Response(
                 status_code=200,
@@ -1818,6 +1841,8 @@ class TestUnusedSlotSubstitutionOnSinglePlateSource:
         captured: list[list[str]] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
+            if not _is_slice_post(request):
+                return httpx.Response(404)
             captured.append(self._filament_names_sent(request.content))
             return httpx.Response(
                 status_code=200,
