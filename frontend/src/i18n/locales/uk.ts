@@ -5090,7 +5090,6 @@ export default {
       flowType: "Тип потоку",
       highFlow: "Сопло з високим потоком",
       standard: "Стандартний",
-      flowTypeNotReported: "Принтер не повідомляє",
       nozzleSize: "Розмір сопла",
       extruder: "Екструдер",
       extruders: "Екструдери",

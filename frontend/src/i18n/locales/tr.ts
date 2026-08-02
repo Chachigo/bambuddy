@@ -5015,7 +5015,6 @@ export default {
       flowType: 'Akış Türü',
       highFlow: 'Yüksek Akış',
       standard: 'Standart',
-      flowTypeNotReported: 'Yazıcı tarafından bildirilmedi',
       nozzleSize: 'Nozul Boyutu',
       extruder: 'Ekstrüder',
       extruders: 'Ekstrüderler',

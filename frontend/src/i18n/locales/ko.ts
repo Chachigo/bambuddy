@@ -4790,7 +4790,6 @@ export default {
       flowType: '유량 유형',
       highFlow: '고유량',
       standard: '표준',
-      flowTypeNotReported: '프린터에서 보고하지 않음',
       nozzleSize: '노즐 크기',
       extruder: '압출기',
       extruders: '압출기',

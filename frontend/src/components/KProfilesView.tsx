@@ -49,22 +49,25 @@ const truncateK = (value: string) => {
   return (Math.trunc(num * 1000) / 1000).toFixed(3);
 };
 
-// Get flow type label from nozzle_id (e.g., "HH00-0.4" -> "HF", "HS00-0.4" -> "S").
-// Single-nozzle printers omit nozzle_id from their extrusion_cali_get response
-// entirely (#1748), and there is no other field to recover the flow type from —
-// so return '' and let the caller show nothing rather than assert "Standard".
-const getFlowTypeLabel = (nozzleId: string) => {
-  if (nozzleId.startsWith('HH')) return 'HF';  // High Flow
-  if (nozzleId.startsWith('HS')) return 'S';   // Standard Flow
-  return '';  // not reported by the printer
-};
+// nozzle_id encodes the flow type, per the slicer's own generator:
+//   "H" + (Standard ? "S" : "H") + "00" + "-" + diameter
+// so "HS00-0.4" is Standard and "HH00-0.4" is High Flow. The "00" is a literal,
+// not a material code.
+const STANDARD_FLOW = 'HS00';
+const HIGH_FLOW = 'HH00';
 
-// Extract nozzle type prefix from nozzle_id (e.g., "HH00-0.4" -> "HH00").
-// '' when the printer reported no nozzle_id — see getFlowTypeLabel.
+// Many printers omit nozzle_id from their extrusion_cali_get response entirely
+// (#1748) — the field simply isn't in the payload. BambuStudio treats that as
+// Standard (its parser falls back to nvtStandard when the key is absent), and
+// so do we: the flow type stays a real, editable value rather than a blank.
 const getNozzleTypePrefix = (nozzleId: string) => {
   const match = nozzleId.match(/^([A-Z]{2}\d{2})/);
-  return match ? match[1] : '';
+  return match ? match[1] : STANDARD_FLOW;
 };
+
+// Short label for the profile list.
+const getFlowTypeLabel = (nozzleId: string) =>
+  getNozzleTypePrefix(nozzleId) === HIGH_FLOW ? 'HF' : 'S';
 
 // Extract filament name from profile name (e.g., "High Flow_Devil Design PLA Basic" -> "Devil Design PLA Basic")
 const extractFilamentName = (profileName: string) => {
@@ -132,7 +135,7 @@ function KProfileCard({ profile, onEdit, onCopy, selectionMode, isSelected, onTo
             </span>
           )}
           <span className="text-xs text-bambu-gray whitespace-nowrap">
-            {[flowType, diameter].filter(Boolean).join(' ')}
+            {flowType} {diameter}
           </span>
         </div>
         {note && (
@@ -165,6 +168,7 @@ interface KProfileModalProps {
   builtinFilaments?: { filament_id: string; name: string }[];  // Filament ID → name lookup
   filamentPresets?: FilamentPresetOption[];  // Every filament this install knows, tiered
   isDualNozzle?: boolean;  // Whether this is a dual-nozzle printer
+  supportsFlowType?: boolean;  // Model sells both Standard and High Flow nozzles
   initialNote?: string;  // Initial note value for the profile
   initialNoteKey?: string | null;  // Key the note was stored under (for clearing)
   onClose: () => void;
@@ -181,6 +185,7 @@ function KProfileModal({
   builtinFilaments = [],
   filamentPresets = [],
   isDualNozzle = false,
+  supportsFlowType = true,
   initialNote = '',
   initialNoteKey = null,
   onClose,
@@ -207,7 +212,7 @@ function KProfileModal({
   // single-nozzle models never do (#1748) — showing "High Flow" there was the
   // UI inventing a value the printer never sent.
   const [nozzleType, setNozzleType] = useState(
-    profile ? getNozzleTypePrefix(profile.nozzle_id) : 'HH00'
+    profile ? getNozzleTypePrefix(profile.nozzle_id) : STANDARD_FLOW
   );
   const [modalDiameter, setModalDiameter] = useState(
     profile?.nozzle_diameter || nozzleDiameter
@@ -351,11 +356,14 @@ function KProfileModal({
     const nozzleId = `${nozzleType}-${modalDiameter}`;
 
     // An edit is delete + re-add on single-nozzle printers, so the nozzle
-    // fields have to survive the round trip untouched — both selects are
-    // disabled while editing. Rebuilding them from the selects is what let a
-    // 0.6mm profile come back as "HH00-0.4" once the parse defaults had
-    // stamped it 0.4 (#1748); pass through what the printer reported instead.
-    const editNozzleId = profile ? profile.nozzle_id : nozzleId;
+    // fields have to survive the round trip — both selects are disabled while
+    // editing. Rebuilding them blindly from the selects is what let a 0.6mm
+    // profile come back as "HH00-0.4" once the parse defaults had stamped it
+    // 0.4 (#1748), so prefer whatever the printer reported. Where it reported
+    // no nozzle_id at all, send the rebuilt one rather than an empty string —
+    // the field is part of the profile's identity on the wire and the slicer
+    // always populates it.
+    const editNozzleId = profile ? profile.nozzle_id || nozzleId : nozzleId;
     const editDiameter = profile ? profile.nozzle_diameter : modalDiameter;
 
     // The printer indexes its calibration table by filament_id, so the preset
@@ -562,7 +570,7 @@ function KProfileModal({
                               // Auto-generate the profile name, but never over
                               // an entry the user typed.
                               if (!name) {
-                                const flowLabel = nozzleType === 'HH00' ? 'HF' : 'S';
+                                const flowLabel = nozzleType === HIGH_FLOW ? 'HF' : 'S';
                                 setName(`${flowLabel} ${f.name}`);
                               }
                             }}
@@ -582,9 +590,12 @@ function KProfileModal({
               )}
             </div>
 
-            {/* Flow Type and Nozzle Size - read-only when editing */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
+            {/* Flow Type and Nozzle Size - read-only when editing. Flow type
+                is hidden on models sold with a single nozzle variant (the
+                A-series), where the choice would be meaningless — same gate
+                the slicer applies via support_nozzle_volume(). */}
+            <div className={supportsFlowType ? 'grid grid-cols-2 gap-4' : ''}>
+              <div className={supportsFlowType ? '' : 'hidden'}>
                 <label className="block text-sm text-bambu-gray mb-1">{t('kProfiles.modal.flowType')}</label>
                 <select
                   value={nozzleType}
@@ -596,7 +607,7 @@ function KProfileModal({
                     if (!profile && filamentChoice && !name) {
                       const selectedFilament = filamentPresets.find(f => f.id === filamentChoice);
                       if (selectedFilament) {
-                        const flowLabel = newNozzleType === 'HH00' ? 'HF' : 'S';
+                        const flowLabel = newNozzleType === HIGH_FLOW ? 'HF' : 'S';
                         setName(`${flowLabel} ${selectedFilament.name}`);
                       }
                     }
@@ -604,14 +615,8 @@ function KProfileModal({
                   disabled={!!profile}
                   className={`w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none ${profile ? 'opacity-60 cursor-not-allowed' : ''}`}
                 >
-                  {/* Only reachable when editing a profile the printer
-                      reported without a nozzle_id — the select is disabled
-                      there, so this is a readout, not a choice. */}
-                  {nozzleType === '' && (
-                    <option value="">{t('kProfiles.modal.flowTypeNotReported')}</option>
-                  )}
-                  <option value="HH00">{t('kProfiles.modal.highFlow')}</option>
-                  <option value="HS00">{t('kProfiles.modal.standard')}</option>
+                  <option value={HIGH_FLOW}>{t('kProfiles.modal.highFlow')}</option>
+                  <option value={STANDARD_FLOW}>{t('kProfiles.modal.standard')}</option>
                 </select>
               </div>
               <div>
@@ -993,21 +998,6 @@ export function KProfilesView() {
     return builtinFilamentMap.get(profile.filament_id) || extractFilamentName(profile.name);
   }, [builtinFilamentMap]);
 
-  // Whether the printer reports a nozzle_id at all. Single-nozzle models omit
-  // it from every extrusion_cali_get entry (#1748), so a flow-type filter there
-  // could only ever match nothing — hide it instead of offering a control that
-  // silently empties the list.
-  const hasFlowTypeInfo = React.useMemo(
-    () => (kprofiles?.profiles ?? []).some((p) => getFlowTypeLabel(p.nozzle_id) !== ''),
-    [kprofiles?.profiles]
-  );
-
-  // Don't strand the list behind a filter whose control just disappeared
-  // (switching printers, or a refetch that no longer carries nozzle ids).
-  useEffect(() => {
-    if (!hasFlowTypeInfo) setFlowTypeFilter('all');
-  }, [hasFlowTypeInfo]);
-
   // Filter and sort profiles
   // Note: nozzle diameter filtering is done server-side via MQTT request
   const filteredProfiles = React.useMemo(() => {
@@ -1053,6 +1043,18 @@ export function KProfilesView() {
   // Check if selected printer is dual-nozzle (auto-detected from MQTT temperature data)
   const selectedPrinterData = printers?.find((p) => p.id === selectedPrinter);
   const isDualNozzle = selectedPrinterData?.nozzle_count === 2;
+
+  // Whether this printer model is sold with both Standard and High Flow
+  // nozzles. Comes from the model, not from whether the payload happened to
+  // carry a nozzle_id — most printers omit that field entirely (#1748) while
+  // still offering both flows. Only the A-series has a single variant.
+  const supportsFlowType = selectedPrinterData?.supports_nozzle_flow_type ?? true;
+
+  // Don't strand the list behind a filter whose control just disappeared.
+  useEffect(() => {
+    if (!supportsFlowType) setFlowTypeFilter('all');
+  }, [supportsFlowType]);
+
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1145,10 +1147,10 @@ export function KProfilesView() {
               name: p.name,
               k_value: parseFloat(p.k_value).toFixed(6),
               filament_id: p.filament_id,
-              // Keep an absent nozzle_id absent. Exports from single-nozzle
-              // printers carry none (#1748), and HH00 vs HS00 is a coin flip
-              // we'd be writing to the printer as if it were fact.
-              nozzle_id: p.nozzle_id || '',
+              // An export from a printer that reports no nozzle_id carries
+              // none; fall back to Standard, the same default the slicer's
+              // parser uses for a missing field.
+              nozzle_id: p.nozzle_id || `${STANDARD_FLOW}-${nozzleDiameter}`,
               nozzle_diameter: p.nozzle_diameter || nozzleDiameter,
               extruder_id: p.extruder_id ?? 0,
               slot_id: 0, // Always create new
@@ -1394,7 +1396,7 @@ export function KProfilesView() {
             </select>
           </div>
         )}
-        {hasFlowTypeInfo && (
+        {supportsFlowType && (
           <div className="w-32">
             <select
               value={flowTypeFilter}
@@ -1603,6 +1605,7 @@ export function KProfilesView() {
             builtinFilaments={enrichedBuiltinFilaments}
             filamentPresets={filamentPresets}
             isDualNozzle={isDualNozzle}
+            supportsFlowType={supportsFlowType}
             initialNote={note}
             initialNoteKey={key}
             onSaveNote={handleSaveNote}
@@ -1629,6 +1632,7 @@ export function KProfilesView() {
           builtinFilaments={enrichedBuiltinFilaments}
           filamentPresets={filamentPresets}
           isDualNozzle={isDualNozzle}
+          supportsFlowType={supportsFlowType}
           onSaveNote={handleSaveNote}
           hasPermission={hasPermission}
           onClose={() => {
@@ -1651,6 +1655,7 @@ export function KProfilesView() {
           builtinFilaments={enrichedBuiltinFilaments}
           filamentPresets={filamentPresets}
           isDualNozzle={isDualNozzle}
+          supportsFlowType={supportsFlowType}
           onSaveNote={handleSaveNote}
           hasPermission={hasPermission}
           // Pass profile data but without slot_id to create a new profile
