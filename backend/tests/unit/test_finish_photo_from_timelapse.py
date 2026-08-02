@@ -62,11 +62,14 @@ def patched_session(fake_archive, monkeypatch):
 async def test_returns_none_when_timelapse_never_lands(tmp_path: Path, patched_session):
     """Print finished without a timelapse — bail after timeout so the caller
     falls back to the live-camera grab."""
-    result = await _capture_finish_photo_from_timelapse(
+    result, pending = await _capture_finish_photo_from_timelapse(
         archive_id=42,
         archive_dir=tmp_path,
     )
     assert result is None
+    # Ran out of time rather than concluded: the video may still be on its way,
+    # which is what tells the caller to schedule a background upgrade (#2704).
+    assert pending is True
 
 
 async def test_extracts_frame_when_timelapse_lands(tmp_path: Path, patched_session, monkeypatch):
@@ -96,7 +99,7 @@ async def test_extracts_frame_when_timelapse_lands(tmp_path: Path, patched_sessi
         "backend.app.services.camera.extract_video_last_frame",
         new=fake_extract,
     ):
-        result = await _capture_finish_photo_from_timelapse(
+        result, pending = await _capture_finish_photo_from_timelapse(
             archive_id=42,
             archive_dir=tmp_path / "archive_dir",
         )
@@ -105,6 +108,7 @@ async def test_extracts_frame_when_timelapse_lands(tmp_path: Path, patched_sessi
     assert result.startswith("finish_")
     assert result.endswith(".jpg")
     assert (tmp_path / "archive_dir" / "photos" / result).exists()
+    assert pending is False
 
 
 async def test_returns_none_when_extraction_fails(tmp_path: Path, patched_session, monkeypatch):
@@ -125,12 +129,15 @@ async def test_returns_none_when_extraction_fails(tmp_path: Path, patched_sessio
         "backend.app.services.camera.extract_video_last_frame",
         new=fake_extract_fails,
     ):
-        result = await _capture_finish_photo_from_timelapse(
+        result, pending = await _capture_finish_photo_from_timelapse(
             archive_id=42,
             archive_dir=tmp_path / "archive_dir",
         )
 
     assert result is None
+    # The video arrived and ffmpeg refused it — waiting longer cannot help, so
+    # this must NOT ask for a background retry.
+    assert pending is False
 
 
 async def test_polls_until_file_appears(tmp_path: Path, patched_session, monkeypatch):
@@ -163,7 +170,7 @@ async def test_polls_until_file_appears(tmp_path: Path, patched_session, monkeyp
             "backend.app.services.camera.extract_video_last_frame",
             new=fake_extract,
         ):
-            result = await _capture_finish_photo_from_timelapse(
+            result, pending = await _capture_finish_photo_from_timelapse(
                 archive_id=42,
                 archive_dir=tmp_path / "archive_dir",
             )

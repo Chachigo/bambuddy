@@ -2700,6 +2700,11 @@ async def on_print_start(printer_id: int, data: dict):
                 # scanner runs fresh; also unlink the old video file so reprints
                 # don't accumulate orphans in the archive directory. Photos list
                 # is left alone — accumulating one finish photo per run is fine.
+                # The print-start baseline (#2704) is stale for the same reason:
+                # it describes the printer before the previous run. The capture
+                # below overwrites it, but clear it here too so an early failure
+                # can't leave the scan diffing against the wrong snapshot.
+                archive.timelapse_baseline = None
                 stale_timelapse_relpath = archive.timelapse_path
                 if stale_timelapse_relpath:
                     archive.timelapse_path = None
@@ -2838,7 +2843,7 @@ async def on_print_start(printer_id: int, data: dict):
                 # falls into its "take baseline now" fallback, which snapshots
                 # AFTER the new MP4 already exists and never matches a diff
                 # (#1403 follow-up — see pwostran's 2026-05-18 support bundle).
-                await _capture_timelapse_baseline_at_start(printer, printer_id, logger)
+                await _capture_timelapse_baseline_at_start(printer, printer_id, logger, archive_id=archive.id)
 
             return  # Skip creating a new archive
 
@@ -3488,7 +3493,7 @@ async def on_print_start(printer_id: int, data: dict):
                     logger.warning("[SPOOLMAN] Failed to store tracking data: %s", e)
 
                 # Capture timelapse file baseline for snapshot-diff on completion
-                await _capture_timelapse_baseline_at_start(printer, printer_id, logger)
+                await _capture_timelapse_baseline_at_start(printer, printer_id, logger, archive_id=archive.id)
         finally:
             # Keep temp_path around until print completes so the cover endpoint
             # can reuse it (#972). Cache eviction in on_print_complete deletes
@@ -3500,6 +3505,62 @@ async def on_print_start(printer_id: int, data: dict):
 
 
 _TIMELAPSE_VIDEO_EXTENSIONS = (".mp4", ".avi")
+
+# Poll schedule for the post-print timelapse scan (#2704). Module-level so
+# tests can shrink them without waiting out real delays.
+#
+# This replaced a fixed [5, 10, 20, 30] retry ladder, i.e. roughly 65 s of
+# looking. Across 247 support bundles the attempt that found the video was #1
+# 272 times, then 17 / 13 / 13 — a flat tail against the cutoff rather than a
+# decaying one, which is the signature of a budget that expires while files are
+# still arriving. 457 scans were scheduled and only 262 ever attached. Big
+# prints make big videos and the printer writes them after the print ends, so
+# the poll now runs for minutes and costs one FTP LIST per round.
+_TIMELAPSE_SCAN_FIRST_DELAY_SECONDS: float = 5.0
+_TIMELAPSE_SCAN_POLL_INTERVAL_SECONDS: float = 30.0
+_TIMELAPSE_SCAN_TIMEOUT_SECONDS: float = 900.0
+
+
+def _timelapse_scan_max_attempts() -> int:
+    """Round cap for the poll, derived from the wall-clock budget.
+
+    The deadline alone is not a sufficient bound: it assumes each round really
+    waits, which stops being true the moment ``asyncio.sleep`` is patched out,
+    and an FTP list that fails immediately would otherwise spin against the
+    printer at full speed for the whole window. Whichever bound is reached
+    first ends the poll.
+    """
+    if _TIMELAPSE_SCAN_POLL_INTERVAL_SECONDS <= 0:
+        # A zero interval makes the wall-clock budget meaningless; fall back to
+        # the round count the production interval would have given.
+        return 32
+    return max(1, int(_TIMELAPSE_SCAN_TIMEOUT_SECONDS // _TIMELAPSE_SCAN_POLL_INTERVAL_SECONDS) + 1)
+
+
+async def _claimed_timelapse_names(db, printer_id: int, exclude_archive_id: int) -> set[str]:
+    """Video filenames already attached to some other archive of this printer.
+
+    Used to disambiguate when more than one file is new since the baseline —
+    which happens when a previous print's video landed after this print's
+    baseline was taken. Ordering the candidates would be the obvious fix and is
+    the wrong one: it can only be done on mtime or on the filename timestamp,
+    both of which come from the printer's own clock, and a LAN-only printer
+    can't reach Bambu's NTP server. Exclusion needs no clock at all.
+
+    ``attach_timelapse`` saves the video into the archive directory under the
+    printer's original filename, and the later MP4 conversion keeps the stem,
+    so the stem of ``timelapse_path`` recovers what was claimed.
+    """
+    from backend.app.models.archive import PrintArchive
+
+    rows = await db.execute(
+        select(PrintArchive.timelapse_path).where(
+            PrintArchive.printer_id == printer_id,
+            PrintArchive.id != exclude_archive_id,
+            PrintArchive.timelapse_path.is_not(None),
+        )
+    )
+    return {Path(p).stem for p in rows.scalars().all() if p}
 
 
 async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
@@ -3533,7 +3594,9 @@ async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
     return [], None
 
 
-async def _capture_timelapse_baseline_at_start(printer, printer_id: int, logger: logging.Logger) -> None:
+async def _capture_timelapse_baseline_at_start(
+    printer, printer_id: int, logger: logging.Logger, archive_id: int | None = None
+) -> None:
     """Snapshot the printer's timelapse directory at print start so the
     completion-time scan can pick the new file by set-difference.
 
@@ -3546,39 +3609,69 @@ async def _capture_timelapse_baseline_at_start(printer, printer_id: int, logger:
 
     Bambu printers in LAN-only mode don't sync NTP, so mtime ordering is
     unreliable — the snapshot-diff approach sidesteps that entirely.
+
+    When ``archive_id`` is known the baseline is also written to the archive
+    row, so it survives a restart and the manual "Scan for Timelapse" button
+    can run the same diff instead of falling back to clock-based matching
+    (#2704). Only baselines taken at print start are persisted — one taken at
+    completion already contains the new video and would poison a later scan.
     """
+    names: set[str] | None = None
     try:
         baseline_files, _ = await _list_timelapse_videos(printer)
-        _timelapse_baselines[printer_id] = {f.get("name", "") for f in baseline_files}
+        names = {f.get("name", "") for f in baseline_files}
+        _timelapse_baselines[printer_id] = names
         logger.info(
             "[TIMELAPSE] Baseline at print start: %s video files for printer %s",
-            len(_timelapse_baselines[printer_id]),
+            len(names),
             printer_id,
         )
     except Exception as e:
         logger.warning("[TIMELAPSE] Failed to capture baseline at print start: %s", e)
 
+    if archive_id is None:
+        return
+    try:
+        async with async_session() as db:
+            from backend.app.models.archive import PrintArchive
+
+            archive = await db.get(PrintArchive, archive_id)
+            if archive is not None:
+                # Written even when the listing failed, and then as NULL. A
+                # reprint reuses the archive row, so leaving the previous run's
+                # baseline in place would have the scan diff this print against
+                # the state of the printer before the *last* one — and a stale
+                # baseline reads as authoritative, where NULL correctly falls
+                # back to a fresh snapshot.
+                archive.timelapse_baseline = sorted(names) if names is not None else None
+                await db.commit()
+    except Exception as e:
+        # In-memory baseline still covers the normal completion path.
+        logger.warning("[TIMELAPSE] Failed to persist baseline for archive %s: %s", archive_id, e)
+
 
 async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[str] | None = None):
+    """Poll the printer for this print's timelapse and attach it.
+
+    Snapshot diff, not timestamp matching: a printer in LAN-only mode cannot
+    reach Bambu's NTP server, so the clock behind both the filename and the FTP
+    mtime is arbitrarily wrong — one reporter's P1S was six and a half days out
+    (#2704). Comparing the current listing against the set of filenames that
+    existed when the print started needs no clock at all, because the printer
+    writes the video only once the print has ended.
+
+    Baseline precedence: the caller's in-memory set, then the one persisted on
+    the archive at print start, then a snapshot taken now. The last of those is
+    a poor substitute — by completion the new video may already be on the card,
+    in which case it lands in the "baseline" and no diff can ever match — but it
+    is all that is available for a print that began before Bambuddy started.
+
+    On success the video is deleted from the printer, which keeps ``/timelapse``
+    down to the unclaimed files and makes the next diff unambiguous.
     """
-    Scan for timelapse with retries using a snapshot-diff approach.
-
-    Instead of picking the "most recent by mtime" (unreliable when the printer
-    clock is wrong in LAN-only mode), we snapshot existing MP4 filenames BEFORE
-    waiting, then look for any NEW filename that appears after each delay.
-
-    If baseline_names is provided (captured at print start), it is used directly.
-    Otherwise falls back to taking a baseline at completion time (best-effort
-    for prints started before app restart).
-
-    Falls back to name-matching (print name contained in MP4 filename) if no
-    new file appears after all retries.
-    """
-    from pathlib import Path
-
     logger = logging.getLogger(__name__)
 
-    # --- Phase 1: Take baseline snapshot of existing timelapse files ---
+    # --- Phase 1: establish the baseline -------------------------------------
     try:
         async with async_session() as db:
             from backend.app.models.printer import Printer
@@ -3597,14 +3690,20 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                 return
 
             if baseline_names is not None:
-                # Use pre-captured baseline from print start (no race condition)
                 logger.info(
                     "[TIMELAPSE] Using print-start baseline: %s existing video files for archive %s",
                     len(baseline_names),
                     archive_id,
                 )
+            elif archive.timelapse_baseline is not None:
+                # Persisted at print start — survives a restart mid-print.
+                baseline_names = set(archive.timelapse_baseline)
+                logger.info(
+                    "[TIMELAPSE] Using stored baseline: %s existing video files for archive %s",
+                    len(baseline_names),
+                    archive_id,
+                )
             else:
-                # Fallback: take baseline now (e.g. app restarted mid-print)
                 result = await db.execute(select(Printer).where(Printer.id == archive.printer_id))
                 printer = result.scalar_one_or_none()
                 if not printer:
@@ -3619,144 +3718,208 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                     archive_id,
                 )
 
-            # Derive base_name for name-matching fallback
-            base_name = Path(archive.filename).stem if archive.filename else ""
-            if base_name.endswith(".gcode"):
-                base_name = base_name[:-6]
-
     except Exception as e:
         logger.warning("[TIMELAPSE] Failed to take baseline snapshot for archive %s: %s", archive_id, e)
         return
 
-    # --- Phase 2: Retry loop — look for NEW files that weren't in baseline ---
-    retry_delays = [5, 10, 20, 30]
+    # --- Phase 2: poll for a file that was not there when the print began -----
+    deadline = time.monotonic() + _TIMELAPSE_SCAN_TIMEOUT_SECONDS
+    max_attempts = _timelapse_scan_max_attempts()
+    seen_names: set[str] = set()
+    delay = _TIMELAPSE_SCAN_FIRST_DELAY_SECONDS
+    attempt = 0
 
-    for attempt, delay in enumerate(retry_delays, 1):
-        logger.info(
-            "[TIMELAPSE] Attempt %s/%s: waiting %ss before scanning for archive %s",
-            attempt,
-            len(retry_delays),
-            delay,
-            archive_id,
-        )
+    while True:
         await asyncio.sleep(delay)
+        delay = _TIMELAPSE_SCAN_POLL_INTERVAL_SECONDS
+        attempt += 1
 
         try:
             from backend.app.models.printer import Printer
-            from backend.app.services.bambu_ftp import download_file_bytes_async
 
             # Read phase: fetch archive + printer in a short session and release
             # the pooled connection BEFORE the FTP list/download below. Holding it
             # across the FTP round-trips left one connection idle-in-transaction per
-            # in-flight scan — ×4 retries, per completed print (issue #2572).
+            # in-flight scan (issue #2572).
             async with async_session() as db:
                 service = ArchiveService(db)
                 archive = await service.get_archive(archive_id)
 
                 if not archive:
-                    logger.warning("[TIMELAPSE] Archive %s not found, stopping retries", archive_id)
+                    logger.warning("[TIMELAPSE] Archive %s not found, stopping poll", archive_id)
                     return
                 if archive.timelapse_path:
-                    logger.info("[TIMELAPSE] Archive %s already has timelapse attached, stopping retries", archive_id)
+                    logger.info("[TIMELAPSE] Archive %s already has timelapse attached, stopping poll", archive_id)
                     return
 
                 result = await db.execute(select(Printer).where(Printer.id == archive.printer_id))
                 printer = result.scalar_one_or_none()
                 if not printer:
-                    logger.warning("[TIMELAPSE] Printer not found for archive %s, stopping retries", archive_id)
+                    logger.warning("[TIMELAPSE] Printer not found for archive %s, stopping poll", archive_id)
                     return
+
+                claimed = await _claimed_timelapse_names(db, archive.printer_id, archive_id)
 
             # I/O phase (no DB connection held): FTP list + download.
             video_files, found_path = await _list_timelapse_videos(printer)
 
-            if not video_files:
-                logger.info("[TIMELAPSE] Attempt %s: No video files found, will retry", attempt)
-                continue
+            # The poll can run for dozens of rounds, so only narrate a round
+            # that saw something change. Repeating the whole listing every 30 s
+            # would bury the one interesting line in the support bundle.
+            names_now = {f.get("name", "") for f in video_files}
+            changed = attempt == 1 or names_now != seen_names
+            seen_names = names_now
+            speak = logger.info if changed else logger.debug
 
-            logger.info("[TIMELAPSE] Attempt %s: Found %s video files in %s", attempt, len(video_files), found_path)
-            for f in video_files[:5]:
-                logger.info("[TIMELAPSE]   - %s", f.get("name"))
+            if video_files:
+                speak("[TIMELAPSE] Attempt %s: Found %s video files in %s", attempt, len(video_files), found_path)
+                if changed:
+                    for f in video_files[:5]:
+                        logger.info("[TIMELAPSE]   - %s", f.get("name"))
 
-            # Find files that are NEW (not in baseline snapshot)
-            new_files = [f for f in video_files if f.get("name", "") not in baseline_names]
-
-            if new_files:
-                # Pick the first new file (there should typically be exactly one)
-                target = new_files[0]
-                file_name = target.get("name")
-                remote_path = target.get("path") or f"/timelapse/{file_name}"
-                logger.info(
-                    "[TIMELAPSE] Attempt %s: New file detected: %s (downloading for archive %s)",
-                    attempt,
-                    file_name,
-                    archive_id,
+                attached = await _attach_first_unclaimed_timelapse(
+                    archive_id, printer, video_files, baseline_names, claimed, attempt, logger, quiet=not changed
                 )
-
-                timelapse_data = await download_file_bytes_async(
-                    printer.ip_address, printer.access_code, remote_path, printer_model=printer.model
-                )
-                if timelapse_data:
-                    # Write phase: attach in a fresh short-lived session.
-                    async with async_session() as db:
-                        success = await ArchiveService(db).attach_timelapse(archive_id, timelapse_data, file_name)
-                    if success:
-                        logger.info("[TIMELAPSE] Successfully attached timelapse to archive %s", archive_id)
-                        await ws_manager.send_archive_updated({"id": archive_id, "timelapse_attached": True})
-                        return
-                    else:
-                        logger.warning("[TIMELAPSE] Failed to attach timelapse to archive %s", archive_id)
-                else:
-                    logger.warning("[TIMELAPSE] Attempt %s: Failed to download new file, will retry", attempt)
+                if attached:
+                    return
             else:
-                logger.info("[TIMELAPSE] Attempt %s: No new files since baseline, will retry", attempt)
+                speak("[TIMELAPSE] Attempt %s: No video files found, will retry", attempt)
 
         except Exception as e:
             logger.warning("[TIMELAPSE] Attempt %s failed with error: %s", attempt, e)
 
-    # --- Phase 3: Fallback — try name matching against all files ---
-    if base_name:
-        logger.info("[TIMELAPSE] Retries exhausted, trying name-match fallback for '%s'", base_name)
-        try:
-            from backend.app.models.printer import Printer
-            from backend.app.services.bambu_ftp import download_file_bytes_async
+        if attempt >= max_attempts or time.monotonic() >= deadline:
+            break
 
-            # Read phase: short session, released before the FTP work (issue #2572).
-            async with async_session() as db:
-                service = ArchiveService(db)
-                archive = await service.get_archive(archive_id)
-                if not archive or archive.timelapse_path:
-                    return
+    # No name-match fallback: it compared the print name against the filename,
+    # and Bambu firmware only ever writes "video_<timestamp>". Across 247 support
+    # bundles it fired 159 times and matched zero times, so all it added was a
+    # misleading log line before giving up.
+    logger.warning(
+        "[TIMELAPSE] No new video appeared for archive %s within %ss, giving up",
+        archive_id,
+        int(_TIMELAPSE_SCAN_TIMEOUT_SECONDS),
+    )
 
-                result = await db.execute(select(Printer).where(Printer.id == archive.printer_id))
-                printer = result.scalar_one_or_none()
-                if not printer:
-                    return
 
-            # I/O phase (no DB connection held): FTP list + download.
-            video_files, found_path = await _list_timelapse_videos(printer)
-            for f in video_files:
-                fname = f.get("name", "")
-                if base_name.lower() in fname.lower():
-                    remote_path = f.get("path") or f"/timelapse/{fname}"
-                    logger.info("[TIMELAPSE] Name-match fallback: '%s' matches '%s'", base_name, fname)
+async def _attach_first_unclaimed_timelapse(
+    archive_id: int,
+    printer,
+    video_files: list[dict],
+    baseline_names: set[str],
+    claimed: set[str],
+    attempt: int,
+    logger: logging.Logger,
+    *,
+    quiet: bool = False,
+) -> bool:
+    """Download and attach the one video that belongs to this print.
 
-                    timelapse_data = await download_file_bytes_async(
-                        printer.ip_address, printer.access_code, remote_path, printer_model=printer.model
-                    )
-                    if timelapse_data:
-                        # Write phase: attach in a fresh short-lived session.
-                        async with async_session() as db:
-                            success = await ArchiveService(db).attach_timelapse(archive_id, timelapse_data, fname)
-                        if success:
-                            logger.info("[TIMELAPSE] Name-match fallback attached timelapse to archive %s", archive_id)
-                            await ws_manager.send_archive_updated({"id": archive_id, "timelapse_attached": True})
-                            return
-                    break  # Only try the first name match
+    A candidate is any file absent from the print-start baseline. More than one
+    can qualify when a previous print's video landed late, after this print's
+    baseline was taken — those are filtered out by name, because they are
+    already attached to another archive. Sorting the candidates instead would
+    mean sorting on mtime or on the filename timestamp, both of which come from
+    the printer's unsynced clock.
 
-        except Exception as e:
-            logger.warning("[TIMELAPSE] Name-match fallback failed: %s", e)
+    Returns True once a video is attached. The printer's copy is deleted only
+    after the attach succeeds on bytes whose length matched the listing.
 
-    logger.warning("[TIMELAPSE] All attempts exhausted for archive %s, giving up", archive_id)
+    ``quiet`` downgrades the "nothing yet" lines to DEBUG when the caller has
+    already seen this exact listing — the poll runs for many rounds and only the
+    rounds where something changed are worth an INFO line.
+    """
+    from backend.app.services.bambu_ftp import (
+        delete_archived_timelapse,
+        download_file_bytes_async,
+        remote_file_settled,
+    )
+
+    speak = logger.debug if quiet else logger.info
+
+    new_files = [f for f in video_files if f.get("name", "") not in baseline_names]
+    if not new_files:
+        speak("[TIMELAPSE] Attempt %s: No new files since baseline, will retry", attempt)
+        return False
+
+    candidates = [f for f in new_files if Path(f.get("name", "")).stem not in claimed]
+    if not candidates:
+        speak(
+            "[TIMELAPSE] Attempt %s: %s new file(s), all already attached to other archives, will retry",
+            attempt,
+            len(new_files),
+        )
+        return False
+    if len(candidates) > 1:
+        logger.warning(
+            "[TIMELAPSE] Attempt %s: %s unclaimed new files (%s) — taking the first; "
+            "the rest stay on the printer for manual selection",
+            attempt,
+            len(candidates),
+            ", ".join(str(f.get("name")) for f in candidates),
+        )
+
+    target = candidates[0]
+    file_name = target.get("name")
+    remote_path = target.get("path") or f"/timelapse/{file_name}"
+    logger.info(
+        "[TIMELAPSE] Attempt %s: New file detected: %s (downloading for archive %s)",
+        attempt,
+        file_name,
+        archive_id,
+    )
+
+    # The listing always carries a size (`list_files` skips entries it can't
+    # parse), but read it explicitly: the delete below is destructive and must
+    # depend on a size we actually had, not on one we hoped was there.
+    expected_size = target.get("size")
+
+    timelapse_data = await download_file_bytes_async(
+        printer.ip_address,
+        printer.access_code,
+        remote_path,
+        printer_model=printer.model,
+        expected_size=expected_size,
+    )
+    if not timelapse_data:
+        # Short or failed transfer. The printer keeps its copy, so the next
+        # round can try again — which is exactly why the delete below is
+        # gated on a verified download.
+        logger.warning("[TIMELAPSE] Attempt %s: Failed to download new file, will retry", attempt)
+        return False
+
+    # The length check above proves we got what the listing said, not that the
+    # printer had finished writing. A video still being written can be listed
+    # short, served short, and pass — so confirm it has stopped growing before
+    # committing to it and deleting the original (#2704).
+    if not await remote_file_settled(
+        printer.ip_address,
+        printer.access_code,
+        remote_path,
+        len(timelapse_data),
+        printer_model=printer.model,
+    ):
+        return False
+
+    # Write phase: attach in a fresh short-lived session.
+    async with async_session() as db:
+        success = await ArchiveService(db).attach_timelapse(archive_id, timelapse_data, file_name)
+    if not success:
+        logger.warning("[TIMELAPSE] Failed to attach timelapse to archive %s", archive_id)
+        return False
+
+    logger.info("[TIMELAPSE] Successfully attached timelapse to archive %s", archive_id)
+    await ws_manager.send_archive_updated({"id": archive_id, "timelapse_attached": True})
+
+    await delete_archived_timelapse(
+        printer.ip_address,
+        printer.access_code,
+        remote_path,
+        verified=expected_size is not None,
+        printer_model=printer.model,
+        printer_name=printer.name,
+    )
+    return True
 
 
 # Defaults for the finish-photo-from-timelapse polling loop (#1397). These are
@@ -3764,11 +3927,25 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
 _FINISH_PHOTO_TIMELAPSE_POLL_INTERVAL_SECONDS: float = 3.0
 _FINISH_PHOTO_TIMELAPSE_POLL_TIMEOUT_SECONDS: float = 60.0
 
+# How long the *background* upgrade keeps waiting after the notification has
+# already gone out (#2704 follow-up). The short bound above exists so a slow
+# printer can't hold up the print-complete notification; this one exists so the
+# archive still ends up with the better frame afterwards.
+#
+# Measured across 261 attaches in the support bundles, the video lands a median
+# 13s after the print ends — but the P1 series writes MJPEG AVI rather than
+# H.264 MP4 and serves it slowly, so its p90 is 167s and the worst observed case
+# was 546s. Every other model was inside 26s. The long budget is therefore
+# almost entirely for P1-series users; on everything else the short wait already
+# wins and this task never runs.
+_FINISH_PHOTO_UPGRADE_TIMEOUT_SECONDS: float = 900.0
+
 
 async def _capture_finish_photo_from_timelapse(
     archive_id: int,
     archive_dir: Path,
-) -> str | None:
+    timeout: float | None = None,
+) -> tuple[str | None, bool]:
     """Wait for the per-print timelapse to land on the archive and extract its
     last frame as the finish photo (#1397).
 
@@ -3779,10 +3956,14 @@ async def _capture_finish_photo_from_timelapse(
 
     ``_scan_for_timelapse_with_retries`` runs in parallel and writes
     ``archive.timelapse_path`` when the file lands. This function polls for
-    that field. Returns the saved photo filename on success, or None if the
-    timelapse never arrives within the timeout / extraction fails / no
-    timelapse path was set — in which case the caller falls back to the
-    existing live-camera capture chain.
+    that field.
+
+    Returns ``(filename, still_pending)``. ``still_pending`` is True only when
+    the wait ran out with no video on the archive yet — i.e. the video may
+    still be coming and a later attempt could succeed. It is False when the
+    video landed (whether or not extraction worked), because in that case
+    waiting longer changes nothing. The caller uses that to decide between
+    falling back permanently and scheduling a background upgrade.
     """
     import uuid
 
@@ -3791,7 +3972,8 @@ async def _capture_finish_photo_from_timelapse(
 
     logger = logging.getLogger(__name__)
 
-    deadline = asyncio.get_event_loop().time() + _FINISH_PHOTO_TIMELAPSE_POLL_TIMEOUT_SECONDS
+    budget = _FINISH_PHOTO_TIMELAPSE_POLL_TIMEOUT_SECONDS if timeout is None else timeout
+    deadline = asyncio.get_event_loop().time() + budget
     poll_interval = _FINISH_PHOTO_TIMELAPSE_POLL_INTERVAL_SECONDS
 
     while True:
@@ -3814,23 +3996,69 @@ async def _capture_finish_photo_from_timelapse(
                         video_path.name,
                         archive_id,
                     )
-                    return filename
+                    return filename, False
                 logger.warning(
                     "[PHOTO-BG] Timelapse %s landed but last-frame extraction failed for archive %s; falling back",
                     video_path.name,
                     archive_id,
                 )
-                return None
+                return None, False
 
         if asyncio.get_event_loop().time() >= deadline:
             logger.info(
                 "[PHOTO-BG] Timelapse for archive %s didn't land within %.0fs; falling back to live camera",
                 archive_id,
-                _FINISH_PHOTO_TIMELAPSE_POLL_TIMEOUT_SECONDS,
+                budget,
             )
-            return None
+            return None, True
 
         await asyncio.sleep(poll_interval)
+
+
+async def _upgrade_finish_photo_from_timelapse(archive_id: int, archive_dir: Path) -> None:
+    """Add the timelapse's last frame to an archive after the fact (#2704).
+
+    The print-complete notification waits only ~60s for the video, because
+    holding a notification for minutes is worse than sending it with a live
+    camera grab. On a P1-series printer the video often lands well after that,
+    so the archive used to be stuck with the live grab — which is taken at
+    ``gcode_state=FINISH``, after the end G-code has dropped the bed, and is
+    the worse photo of the two.
+
+    This keeps waiting in the background and, when the video arrives, extracts
+    the frame and puts it *first* in the archive's photo list, so opening the
+    gallery shows it. The live grab is deliberately kept: the notification that
+    already went out links to that exact file, and deleting it would leave a
+    broken image in Discord or Telegram.
+    """
+    logger = logging.getLogger(__name__)
+
+    filename, _ = await _capture_finish_photo_from_timelapse(
+        archive_id, archive_dir, timeout=_FINISH_PHOTO_UPGRADE_TIMEOUT_SECONDS
+    )
+    if not filename:
+        logger.info("[PHOTO-UPGRADE] No timelapse frame for archive %s; keeping the live grab", archive_id)
+        return
+
+    try:
+        async with async_session() as db:
+            from backend.app.models.archive import PrintArchive
+
+            archive = await db.get(PrintArchive, archive_id)
+            if archive is None:
+                return
+            photos = list(archive.photos or [])
+            if filename in photos:
+                return
+            # Front of the list: PhotoGalleryModal opens at index 0.
+            archive.photos = [filename, *photos]
+            await db.commit()
+    except Exception as e:
+        logger.warning("[PHOTO-UPGRADE] Failed to attach upgraded photo to archive %s: %s", archive_id, e)
+        return
+
+    logger.info("[PHOTO-UPGRADE] Archive %s now leads with the timelapse frame %s", archive_id, filename)
+    await ws_manager.send_archive_updated({"id": archive_id, "photo_added": filename})
 
 
 async def on_print_running_observed(printer_id: int, data: dict):
@@ -5029,8 +5257,9 @@ async def on_print_complete(printer_id: int, data: dict):
                 printer.external_camera_enabled and printer.external_camera_url
             )
 
+            timelapse_still_pending = False
             if prefer_timelapse_source:
-                photo_filename = await _capture_finish_photo_from_timelapse(
+                photo_filename, timelapse_still_pending = await _capture_finish_photo_from_timelapse(
                     archive_id=archive_id,
                     archive_dir=archive_dir,
                 )
@@ -5134,8 +5363,28 @@ async def on_print_complete(printer_id: int, data: dict):
                         arch.photos = photos
                         await db.commit()
                 logger.info("[PHOTO-BG] Saved: %s", photo_filename)
-                return photo_filename
-            return None
+
+            # The short wait above is bounded so a slow printer can't hold up
+            # the print-complete notification, which is what the caller is
+            # blocking on. When it ran out with the video still on its way,
+            # keep waiting off to the side and add the better frame to the
+            # archive once it arrives (#2704 follow-up) — otherwise P1-series
+            # users, whose videos routinely take minutes to transfer, never get
+            # the pre-bed-drop framing this path exists to provide.
+            #
+            # Spawned here rather than at the point the wait gave up: both this
+            # function and the upgrade do a read-modify-write on `photos`, and
+            # the live-camera fallback above can take tens of seconds. Starting
+            # the upgrade before that write means the two can interleave and one
+            # silently drops the other's entry, leaving a JPEG on disk that the
+            # gallery never lists.
+            if timelapse_still_pending:
+                spawn_background_task(
+                    _upgrade_finish_photo_from_timelapse(archive_id, archive_dir),
+                    name=f"finish-photo-upgrade-{archive_id}",
+                )
+
+            return photo_filename
         except Exception as e:
             logger.warning("[PHOTO-BG] Failed: %s", e)
             return None

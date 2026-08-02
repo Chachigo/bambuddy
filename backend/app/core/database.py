@@ -3798,6 +3798,18 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN library_file_id INTEGER")
     await _safe_execute(conn, "ALTER TABLE projects ADD COLUMN target_sets INTEGER")
 
+    # Migration: persist the timelapse snapshot-diff baseline (#2704).
+    # The list of video filenames present on the printer when the print began,
+    # so the diff survives a restart and the manual scan can use it instead of
+    # the clock-based matching that a LAN-only printer defeats. No dialect
+    # branch: SQLAlchemy renders this column as `JSON` on both SQLite and
+    # Postgres for a fresh install (checked with CreateTable against each
+    # dialect), so spelling the ALTER the same way keeps a migrated database
+    # identical to a new one. Matching matters on Postgres in particular —
+    # asyncpg binds the serialised value as json and would reject a TEXT column
+    # (mirrors the `projects.attachments JSON` migration above).
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN timelapse_baseline JSON")
+
     # Migration: plate-clear-required notification opt-in (#2525). Off by
     # default — it fires after every print, at the same moment as the
     # print-complete alert. Postgres rejects `DEFAULT 0` for BOOLEAN.
