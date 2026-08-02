@@ -253,8 +253,20 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
             # Marks history/reprint rows whose archive carries the slicer's own
             # live-resolved AMS-slot pick (extra_data.slicer_ams_mapping) — see
             # `_extract_slicer_ams_mapping_json` in virtual_printer/manager.py.
-            response.archive_has_slicer_ams_mapping = bool(
-                item.archive.extra_data and item.archive.extra_data.get("slicer_ams_mapping")
+            #
+            # Only when the saved mapping was resolved against *this* row's
+            # printer: a global tray ID means nothing on another printer, so
+            # that's the exact condition under which the mapping is reused. A
+            # badge on a row where nothing gets reused would be a lie (#2700
+            # review). Model-based rows (printer_id None) never match, which is
+            # correct — the mapping is not reused there either.
+            extra = item.archive.extra_data if isinstance(item.archive.extra_data, dict) else {}
+            saved_mapping = extra.get("slicer_ams_mapping")
+            response.archive_has_slicer_ams_mapping = (
+                isinstance(saved_mapping, dict)
+                and isinstance(saved_mapping.get("mapping"), list)
+                and item.printer_id is not None
+                and saved_mapping.get("printer_id") == item.printer_id
             )
             if item.plate_id:
                 archive_path = settings.base_dir / item.archive.file_path
@@ -664,12 +676,28 @@ async def add_to_queue(
     # at a different printer, where the same tray number can hold a
     # completely different spool (#2700 review).
     #
+    # It also stands down when the request carries force-color-match overrides:
+    # those are the caller asking the scheduler to match strictly against the
+    # printer's live trays, and they are only ever applied inside
+    # `_compute_ams_mapping_for_printer` — the function a stored mapping makes
+    # the scheduler skip. Same precedence as the VP-side toggle pair (#2700
+    # review).
+    #
     # Note this is otherwise unconditional — it applies regardless of whether
     # the physical spool in that slot has changed since the original print.
     # #1308 covers re-verifying a stored mapping against live AMS state at
     # dispatch time; that check is a separate PR and, once merged, will also
     # catch a stale slot inherited through this fallback.
-    if ams_mapping_json is None and archive and archive.extra_data and data.printer_id is not None:
+    wants_live_color_match = any(
+        isinstance(o, dict) and o.get("force_color_match") for o in (data.filament_overrides or [])
+    )
+    if (
+        ams_mapping_json is None
+        and not wants_live_color_match
+        and archive
+        and archive.extra_data
+        and data.printer_id is not None
+    ):
         saved = archive.extra_data.get("slicer_ams_mapping")
         if (
             isinstance(saved, dict)

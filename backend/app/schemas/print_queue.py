@@ -195,9 +195,10 @@ class PrintQueueItemResponse(BaseModel):
     # `curr_bed_type` rather than the archive-level first-plate default.
     bed_type: str | None = None
     # True when the source archive carries the slicer's own live-resolved
-    # AMS-slot pick (extra_data.slicer_ams_mapping) — a reprint of this
-    # archive reuses that exact physical spool instead of the scheduler
-    # re-deriving one from just the file's static type/color.
+    # AMS-slot pick (extra_data.slicer_ams_mapping) *and* it was resolved
+    # against this row's own printer — the only case where dispatch actually
+    # reuses that exact physical spool instead of the scheduler re-deriving one
+    # from the file's static type/color.
     archive_has_slicer_ams_mapping: bool = False
 
     # User tracking (Issue #206)

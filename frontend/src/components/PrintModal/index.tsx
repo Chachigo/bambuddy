@@ -22,6 +22,7 @@ import { getCurrencySymbol } from '../../utils/currency';
 import { getBedTypeInfo } from '../../utils/bedType';
 import { toDateTimeLocalValue, parseUTCDate } from '../../utils/date';
 import { getGlobalTrayId, isPlaceholderDate, effectivePreferLowest } from '../../utils/amsHelpers';
+import { resolveArchiveSlicerAmsMapping } from './archiveAmsMapping';
 import { FilamentMapping } from './FilamentMapping';
 import { FilamentOverride } from './FilamentOverride';
 import { PlateSelector } from './PlateSelector';
@@ -327,21 +328,16 @@ export function PrintModal({
 
   // The archive's own saved AMS-slot pick from the slicer (see the "Save AMS
   // mapping" virtual-printer setting) — undefined for library files or
-  // archives that predate the feature / had it off at print time. Stored as
-  // `{mapping, printer_id}`: the tray IDs are only meaningful against the
-  // specific printer's AMS layout they were resolved from, so only surface
-  // them when reprinting on that same printer — a different printer's slot 3
-  // can hold a completely different spool.
-  const archiveSlicerAmsMappingRaw = !isLibraryFile
-    ? (archiveDetails?.extra_data?.slicer_ams_mapping as
-        | { mapping?: number[]; printer_id?: number }
-        | undefined)
-    : undefined;
-  const archiveSlicerAmsMapping =
-    archiveSlicerAmsMappingRaw?.printer_id === effectivePrinterId &&
-    Array.isArray(archiveSlicerAmsMappingRaw.mapping)
-      ? archiveSlicerAmsMappingRaw.mapping
-      : undefined;
+  // archives that predate the feature / had it off at print time, and
+  // deliberately undefined unless the selected printer is the one the mapping
+  // was resolved against. See `resolveArchiveSlicerAmsMapping`.
+  const archiveSlicerAmsMapping = useMemo(
+    () =>
+      isLibraryFile
+        ? undefined
+        : resolveArchiveSlicerAmsMapping(archiveDetails?.extra_data, effectivePrinterId),
+    [isLibraryFile, archiveDetails?.extra_data, effectivePrinterId],
+  );
 
   // Fetch plates for archives
   const { data: archivePlatesData, isError: archivePlatesError } = useQuery({

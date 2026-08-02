@@ -178,6 +178,12 @@ def _extract_slicer_ams_mapping_json(data: dict, log_prefix: str) -> str | None:
     scheduler's "already resolved, don't touch it" branch in
     ``_ensure_ams_mapping`` use the slicer's own choice unchanged.
 
+    That branch skipping ``_compute_ams_mapping_for_printer`` is also what
+    makes this a trade rather than a pure win: ``prefer_lowest_filament``, its
+    AMS-filament-backup gate (#1766), the inventory-remain overrides and the
+    per-slot force-color overrides all live inside that function. Callers are
+    responsible for the gating — this parser only says what the slicer sent.
+
     Returns ``None`` when the field is absent, unparsable, or the classic
     "all -1" unresolved-race sentinel (#2589) — never worth trusting over a
     fresh live computation.
@@ -521,19 +527,28 @@ class VirtualPrinterInstance:
             if raw is not None:
                 patch["nozzle_mapping"] = json.dumps(raw)
 
-        # Same target_printer_id gate as the immediate path in
-        # _add_to_print_queue — a model-based VP has no MQTT bridge to a real
-        # printer, so there's no live AMS layout for the slicer to have
-        # resolved tray IDs against.
+        # Same two gates as the immediate path in `_add_to_print_queue`: a
+        # model-based VP has no live AMS layout for the slicer to have resolved
+        # tray IDs against, and taking the slicer's pick at all is the per-VP
+        # `save_ams_mapping` opt-in (it makes the scheduler skip
+        # `_compute_ams_mapping_for_printer`, and with it prefer-lowest and the
+        # #1766 backup gate).
         ams_mapping_json = (
             _extract_slicer_ams_mapping_json(data, f"[VP {self.name}] Late MQTT")
-            if self.target_printer_id is not None
+            if self.target_printer_id is not None and self.save_ams_mapping
             else None
         )
-        if ams_mapping_json is not None:
+        # `Force color match` still wins for this dispatch — see the same
+        # decision in `_add_to_print_queue`. The archive patch below is
+        # deliberately not gated on it: persisting the pick for later reprints
+        # is exactly what the toggle promises.
+        if ams_mapping_json is not None and not self.queue_force_color_match:
             patch["ams_mapping"] = ams_mapping_json
 
-        if not patch:
+        # `ams_mapping_json` alone is enough to keep going even when `patch` is
+        # empty: with `Force color match` on it never reaches the queue item,
+        # but it still has to be written onto the archive below.
+        if not patch and ams_mapping_json is None:
             self._recent_queue_items.pop(stash_key, None)
             return
 
@@ -557,7 +572,8 @@ class VirtualPrinterInstance:
                 if not eligible_ids:
                     self._recent_queue_items.pop(stash_key, None)
                     return
-                await db.execute(update(PrintQueueItem).where(PrintQueueItem.id.in_(eligible_ids)).values(**patch))
+                if patch:
+                    await db.execute(update(PrintQueueItem).where(PrintQueueItem.id.in_(eligible_ids)).values(**patch))
 
                 # The archive was already created (with no slicer_ams_mapping)
                 # before this late MQTT arrived — see
@@ -565,10 +581,11 @@ class VirtualPrinterInstance:
                 # too so a reprint later still picks up the slicer's pick, and
                 # the "AMS mapping from slicer" badge reflects reality instead
                 # of staying stuck on the archive's initial (empty) snapshot.
-                # Opt-in per VP, same as the immediate path in
-                # `_add_to_print_queue` — only the archive persistence is
-                # gated, not the queue item's own `ams_mapping` patched above.
-                if ams_mapping_json is not None and self.save_ams_mapping:
+                # Already gated on `save_ams_mapping` above, and deliberately
+                # NOT on `queue_force_color_match`: that toggle decides how
+                # *this* print is matched, not whether the pick is worth
+                # keeping for a later reprint.
+                if ams_mapping_json is not None:
                     archive_ids = {row[1] for row in rows if row[1] is not None}
                     if archive_ids:
                         archive_result = await db.execute(select(PrintArchive).where(PrintArchive.id.in_(archive_ids)))
@@ -582,11 +599,12 @@ class VirtualPrinterInstance:
 
                 await db.commit()
                 logger.info(
-                    "[VP %s] Late slicer MQTT for %s — retroactively stamped %s onto queue item(s) %s",
+                    "[VP %s] Late slicer MQTT for %s — retroactively stamped %s onto queue item(s) %s%s",
                     self.name,
                     stash_key,
                     sorted(patch.keys()),
                     eligible_ids,
+                    " and saved the slicer's AMS pick onto the archive" if ams_mapping_json is not None else "",
                 )
         except Exception as e:
             logger.error(
@@ -929,17 +947,52 @@ class VirtualPrinterInstance:
                 # type/color re-derivation entirely and dispatch use exactly
                 # the tray the slicer/user picked.
                 #
-                # Only trust it when this VP targets one fixed printer. A
-                # model-based ("Any <model>") VP has no MQTT bridge to a real
-                # printer, so the slicer has no live AMS layout to resolve
-                # tray IDs against — whatever it sends here is meaningless
-                # (or, worse, coincidentally valid for the wrong printer once
-                # the scheduler later picks one). Leaving it unset lets the
-                # scheduler's normal type/color re-derivation run against
-                # whichever printer actually gets the job.
+                # Two gates, both required:
+                #
+                # 1. This VP must target one fixed printer. A model-based
+                #    ("Any <model>") VP has no MQTT bridge to a real printer,
+                #    so the slicer has no live AMS layout to resolve tray IDs
+                #    against — whatever it sends here is meaningless (or,
+                #    worse, coincidentally valid for the wrong printer once
+                #    the scheduler later picks one).
+                # 2. The per-VP `save_ams_mapping` opt-in must be on. Taking
+                #    the slicer's pick means `_ensure_ams_mapping` returns
+                #    early and `_compute_ams_mapping_for_printer` never runs —
+                #    and that function is where `prefer_lowest_filament`, its
+                #    AMS-filament-backup gate (#1766) and the inventory-remain
+                #    overrides live. Honouring the slicer unconditionally would
+                #    silently retire all of that for every existing queue-mode
+                #    VP on upgrade, so it's opt-in like every other queue-mode
+                #    behaviour toggle (#2700 review).
+                #
+                # Either gate failing leaves it unset, and the scheduler's
+                # normal type/color re-derivation runs against whichever
+                # printer actually gets the job.
                 ams_mapping_json: str | None = None
-                if slicer_opts is not None and self.target_printer_id is not None:
+                if slicer_opts is not None and self.target_printer_id is not None and self.save_ams_mapping:
                     ams_mapping_json = _extract_slicer_ams_mapping_json(slicer_opts, f"[VP {self.name}]")
+
+                # `Force color match` is the user asking Bambuddy to do the
+                # matching strictly, against the printer's live trays. Its only
+                # effect on a fixed-printer item is via the per-slot
+                # `filament_overrides` written below, which are consumed inside
+                # `_compute_ams_mapping_for_printer` — the exact function a
+                # stored mapping skips. So when both toggles are on, the
+                # explicit strictness wins for *this* dispatch and the slicer's
+                # pick is still persisted onto the archive for later reprints,
+                # which is what `Save AMS mapping` actually promises (#2700
+                # review).
+                queue_ams_mapping_json = ams_mapping_json
+                if queue_ams_mapping_json is not None and self.queue_force_color_match:
+                    logger.info(
+                        "[VP %s] Saved the slicer's AMS pick to the archive but not onto the queue item(s): "
+                        "'Force color match' is on, so the scheduler matches against live trays for this print.",
+                        self.name,
+                    )
+                    queue_ams_mapping_json = None
+
+                # Parsed once for the per-plate length check in the loop below.
+                queue_ams_mapping = json.loads(queue_ams_mapping_json) if queue_ams_mapping_json else None
 
                 service = ArchiveService(db)
                 archive = await service.archive_print(
@@ -953,17 +1006,11 @@ class VirtualPrinterInstance:
                     prefer_filename_for_name=prefer_filename,
                     # Slicer's own live AMS-slot pick -- promoted to
                     # `extra_data.slicer_ams_mapping` by archive_print() so a
-                    # later reprint can reuse it. Opt-in per VP
-                    # (`save_ams_mapping`) — only the archive persistence is
-                    # gated; the queue item's own `ams_mapping` (used for
-                    # *this* dispatch, below) is set unconditionally whenever
-                    # the slicer provides it, since that's a correctness fix,
-                    # not a feature toggle. Tagged with the printer it was
-                    # resolved against so a later reprint on a *different*
-                    # printer knows not to reuse it (#2700 review).
-                    slicer_ams_mapping=(
-                        json.loads(ams_mapping_json) if ams_mapping_json and self.save_ams_mapping else None
-                    ),
+                    # later reprint can reuse it. Already gated on the per-VP
+                    # `save_ams_mapping` opt-in above. Tagged with the printer
+                    # it was resolved against so a later reprint on a
+                    # *different* printer knows not to reuse it (#2700 review).
+                    slicer_ams_mapping=(json.loads(ams_mapping_json) if ams_mapping_json else None),
                     slicer_ams_mapping_printer_id=self.target_printer_id,
                 )
                 if archive:
@@ -1046,6 +1093,31 @@ class VirtualPrinterInstance:
                                 if overrides:
                                     filament_overrides_json = json.dumps(overrides)
 
+                        # The slicer's mapping is indexed by the 3MF's own
+                        # file-global slot ids (position = slot_id - 1), so one
+                        # array covers every plate of a multi-plate Send All —
+                        # each plate just reads the entries for the slots it
+                        # actually prints. What must be checked is that it
+                        # reaches that far: a mapping shorter than this plate's
+                        # highest slot id can't address the plate's own slots,
+                        # and `_ensure_ams_mapping` would keep it anyway
+                        # because it only rejects an all-unresolved mapping. Fall
+                        # back to a computed mapping for that plate instead
+                        # (#2700 review).
+                        plate_ams_mapping_json = queue_ams_mapping_json
+                        if queue_ams_mapping is not None and requirements:
+                            max_slot_id = max((r.get("slot_id") or 0) for r in requirements)
+                            if max_slot_id > len(queue_ams_mapping):
+                                logger.warning(
+                                    "[VP %s] Slicer ams_mapping has %d entries but plate %s needs slot %d; "
+                                    "dropping it for this plate so the scheduler computes one from live AMS state.",
+                                    self.name,
+                                    len(queue_ams_mapping),
+                                    plate_id,
+                                    max_slot_id,
+                                )
+                                plate_ams_mapping_json = None
+
                         queue_item = PrintQueueItem(
                             printer_id=self.target_printer_id,
                             target_model=target_model,
@@ -1073,7 +1145,7 @@ class VirtualPrinterInstance:
                             nozzle_mapping=nozzle_mapping_json,
                             # Slicer's own live AMS-slot pick, when present —
                             # see `_extract_slicer_ams_mapping_json`.
-                            ams_mapping=ams_mapping_json,
+                            ams_mapping=plate_ams_mapping_json,
                         )
                         db.add(queue_item)
                         await db.flush()  # populate queue_item.id before logging

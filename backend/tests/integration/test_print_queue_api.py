@@ -378,6 +378,93 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_add_to_queue_force_color_match_overrides_beat_the_archive_fallback(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """Force-color-match overrides are the caller asking the scheduler to
+        match strictly against the printer's live trays, and they are only ever
+        applied inside `_compute_ams_mapping_for_printer` — the function a
+        stored mapping makes the scheduler skip. Inheriting the saved mapping
+        here would silently retire the strictness that was just requested
+        (#2700 review).
+        """
+        printer = await printer_factory()
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": printer.id}}
+        )
+
+        data = {
+            "printer_id": printer.id,
+            "archive_id": archive.id,
+            "filament_overrides": [
+                {"slot_id": 1, "type": "PLA", "color": "#FF0000", "force_color_match": True},
+            ],
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_add_to_queue_plain_overrides_still_allow_the_archive_fallback(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """Only force_color_match stands the fallback down. A plain preference
+        override is a filament swap, not a request for live colour matching, so
+        the saved mapping is still the best starting point.
+        """
+        printer = await printer_factory()
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": printer.id}}
+        )
+
+        data = {
+            "printer_id": printer.id,
+            "archive_id": archive.id,
+            "filament_overrides": [{"slot_id": 1, "type": "PLA", "color": "#FF0000"}],
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] == [5, -1, 2, -1]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_queue_response_flags_saved_mapping_only_for_its_own_printer(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """`archive_has_slicer_ams_mapping` drives a badge that claims the
+        print reuses the slicer's exact trays. Global tray IDs mean nothing on
+        another printer, so the flag must be false for a row targeting one —
+        otherwise the badge is there while nothing is reused (#2700 review).
+        """
+        origin_printer = await printer_factory()
+        other_printer = await printer_factory()
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": origin_printer.id}}
+        )
+
+        own = await async_client.post(
+            "/api/v1/queue/", json={"printer_id": origin_printer.id, "archive_id": archive.id}
+        )
+        assert own.status_code == 200
+        assert own.json()["archive_has_slicer_ams_mapping"] is True
+
+        foreign = await async_client.post(
+            "/api/v1/queue/", json={"printer_id": other_printer.id, "archive_id": archive.id}
+        )
+        assert foreign.status_code == 200
+        assert foreign.json()["archive_has_slicer_ams_mapping"] is False
+
+        # Model-based: the scheduler hasn't picked a printer yet, so the
+        # mapping is not reused there either.
+        model_based = await async_client.post("/api/v1/queue/", json={"target_model": "X1C", "archive_id": archive.id})
+        assert model_based.status_code == 200
+        assert model_based.json()["archive_has_slicer_ams_mapping"] is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_add_to_queue_with_plate_id(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):

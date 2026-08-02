@@ -890,8 +890,8 @@ export default {
       uploadedBy: '업로드한 사용자',
       noPermissionReprint: '재인쇄 권한이 없습니다',
       noFileForReprint: '3MF 파일 없음 — 인쇄 기록 시 프린터에서 파일을 다운로드할 수 없었습니다',
-      slicerAmsMapping: 'AMS 매핑 저장됨',
-      slicerAmsMappingTooltip: '이 아카이브에는 슬라이서에서 저장된 AMS 슬롯 매핑이 있습니다',
+      slicerAmsMapping: 'AMS 매핑 저장됨({{printer}})',
+      slicerAmsMappingTooltip: '슬라이서가 선택한 AMS 슬롯이 {{printer}}용으로 저장되었습니다. 슬롯 번호는 해당 프린터에서만 의미가 있으므로, 다시 {{printer}}로 보낼 때만 재인쇄에서 재사용됩니다.',
       noPermissionEdit: '아카이브를 편집할 권한이 없습니다',
       noPermissionDelete: '아카이브를 삭제할 권한이 없습니다',
       openInBambuStudio: '슬라이서에서 열기',
@@ -1353,8 +1353,8 @@ export default {
       printAnyway: '그냥 인쇄'
     },
     slicerAmsMapping: {
-      rowBadge: '슬라이서에서 저장된 AMS 슬롯',
-      rowTooltip: '이 아카이브에는 슬라이싱/전송 시 슬라이서가 선택한 정확한 AMS 슬롯이 보존되어 있습니다. 재인쇄 시 유형/색상으로 다시 추측하는 대신 해당 실물 스풀을 재사용합니다.',
+      rowBadge: '이 프린터용으로 저장된 AMS 슬롯',
+      rowTooltip: '이 아카이브에는 슬라이서가 선택한 정확한 AMS 슬롯이 이 항목의 대상 프린터용으로 저장되어 있습니다. 해당 프린터에서 재인쇄하면 유형과 색상으로 다시 맞추는 대신 그 트레이를 재사용할 수 있습니다.',
     },
   },
   stats: {

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -148,6 +148,7 @@ async function openInSlicerWithToken(
 function ArchiveCard({
   archive,
   printerName,
+  printerMap,
   isSelected,
   onSelect,
   selectionMode,
@@ -173,6 +174,10 @@ function ArchiveCard({
   currency: string;
   t: TFunction;
   onNavigateToArchive?: (archiveId: number) => void;
+  /** Printer id -> name, for naming the printer a saved slicer AMS mapping
+   *  belongs to. The card can't know which printer a reprint will target, so
+   *  the badge names the one the mapping is actually good for. */
+  printerMap: Map<number, string>;
 }) {
   // Debug: log when card is highlighted
   if (isHighlighted) {
@@ -184,6 +189,17 @@ function ArchiveCard({
   const { hasPermission, canModify } = useAuth();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  // Name of the printer this archive's saved slicer AMS mapping was resolved
+  // against, or undefined when there is none. Undefined also when the printer
+  // has since been deleted — a mapping whose printer is gone can never be
+  // reused, so the badge stays off rather than naming a ghost.
+  const savedSlicerAmsMappingPrinter = useMemo(() => {
+    const saved = (archive.extra_data as Record<string, unknown> | null)?.slicer_ams_mapping as
+      | { mapping?: unknown; printer_id?: number }
+      | undefined;
+    if (!saved || !Array.isArray(saved.mapping) || saved.printer_id == null) return undefined;
+    return printerMap.get(saved.printer_id);
+  }, [archive.extra_data, printerMap]);
   const [showReprint, setShowReprint] = useState(false);
   const [showSliceModal, setShowSliceModal] = useState(false);
   const [showRunPipeline, setShowRunPipeline] = useState(false);
@@ -1112,19 +1128,17 @@ function ArchiveCard({
           )}
         </div>
 
-        {/* Slicer's own saved AMS-slot pick (see "Save AMS mapping" VP setting) —
-            a reprint reuses this exact physical spool instead of re-deriving
-            one from the file's type/color. */}
-        {Array.isArray(
-          (
-            (archive.extra_data as Record<string, unknown> | null)?.slicer_ams_mapping as
-              | { mapping?: unknown }
-              | undefined
-          )?.mapping,
-        ) && (
-          <div className="flex items-center gap-1.5 text-bambu-green text-xs mb-3" title={t('archives.card.slicerAmsMappingTooltip')}>
+        {/* Slicer's own saved AMS-slot pick (see "Save AMS mapping" VP setting).
+            Named with the printer it was resolved against: global tray IDs mean
+            nothing on any other printer, so a reprint only reuses these exact
+            spools when it targets that same printer. */}
+        {savedSlicerAmsMappingPrinter && (
+          <div
+            className="flex items-center gap-1.5 text-bambu-green text-xs mb-3"
+            title={t('archives.card.slicerAmsMappingTooltip', { printer: savedSlicerAmsMappingPrinter })}
+          >
             <CheckCircle2 className="w-3.5 h-3.5" />
-            {t('archives.card.slicerAmsMapping')}
+            {t('archives.card.slicerAmsMapping', { printer: savedSlicerAmsMappingPrinter })}
           </div>
         )}
 
@@ -2977,7 +2991,12 @@ export function ArchivesPage() {
     localStorage.setItem('logPageSize', logPageSize.toString());
   }, [logPageSize]);
 
-  const printerMap = new Map(printers?.map((p) => [p.id, p.name]) || []);
+  // Memoised: it's handed to every ArchiveCard as a prop, and a fresh Map each
+  // render would re-run their lookups for no reason.
+  const printerMap = useMemo(
+    () => new Map<number, string>(printers?.map((p) => [p.id, p.name]) || []),
+    [printers],
+  );
 
   // Extract unique materials and colors from archives
   const uniqueMaterials = [...new Set(
@@ -3731,6 +3750,7 @@ export function ArchivesPage() {
                 key={archive.id}
                 archive={archive}
                 printerName={archive.printer_id ? printerMap.get(archive.printer_id) || 'Unknown' : (archive.sliced_for_model || 'No Printer')}
+                printerMap={printerMap}
                 isSelected={selectedIds.has(archive.id)}
                 onSelect={toggleSelect}
                 selectionMode={selectionMode}

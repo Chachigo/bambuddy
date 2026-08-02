@@ -939,8 +939,8 @@ export default {
       uploadedBy: 'Uploaded By',
       noPermissionReprint: 'You do not have permission to reprint',
       noFileForReprint: 'No 3MF file available — the file could not be downloaded from the printer when the print was recorded',
-      slicerAmsMapping: 'AMS mapping saved',
-      slicerAmsMappingTooltip: 'This archive has a saved AMS slot mapping from the slicer',
+      slicerAmsMapping: 'AMS mapping saved ({{printer}})',
+      slicerAmsMappingTooltip: 'The slicer\'s own AMS slot choice was saved for {{printer}}. Tray numbers only mean something on that printer, so a reprint reuses them only when it targets {{printer}} again.',
       noPermissionEdit: 'You do not have permission to edit archives',
       noPermissionDelete: 'You do not have permission to delete archives',
       openInBambuStudio: 'Open in Slicer',
@@ -1158,8 +1158,8 @@ export default {
       printAnyway: 'Print Anyway',
     },
     slicerAmsMapping: {
-      rowBadge: 'AMS slot saved from slicer',
-      rowTooltip: 'This archive carries the exact AMS slot the slicer picked when it was sliced/sent. A reprint reuses that physical spool instead of re-guessing from type/color.',
+      rowBadge: 'AMS slots saved for this printer',
+      rowTooltip: 'This archive carries the exact AMS slots the slicer picked, saved for the printer this item targets. A reprint on it can reuse those trays instead of matching again by type and colour.',
     },
     // Print modal
     editQueueItem: 'Edit Queue Item',

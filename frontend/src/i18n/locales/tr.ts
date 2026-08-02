@@ -935,8 +935,8 @@ export default {
       uploadedBy: 'Yükleyen',
       noPermissionReprint: 'Yeniden yazdırma izniniz yok',
       noFileForReprint: 'Kullanılabilir 3MF dosyası yok — baskı kaydedildiğinde dosya yazıcıdan indirilemedi',
-      slicerAmsMapping: 'AMS eşlemesi kaydedildi',
-      slicerAmsMappingTooltip: 'Bu arşivde dilimleyiciden kaydedilmiş bir AMS yuva eşlemesi var',
+      slicerAmsMapping: 'AMS eşlemesi kaydedildi ({{printer}})',
+      slicerAmsMappingTooltip: 'Dilimleyicinin AMS yuva seçimi {{printer}} için kaydedildi. Yuva numaraları yalnızca o yazıcıda anlamlıdır; bu nedenle yeniden yazdırma bunları yalnızca yine {{printer}} hedeflendiğinde kullanır.',
       noPermissionEdit: 'Arşivleri düzenleme izniniz yok',
       noPermissionDelete: 'Arşivleri silme izniniz yok',
       openInBambuStudio: 'Dilimleyicide Aç',
@@ -1149,8 +1149,8 @@ export default {
       printAnyway: 'Yine de Yazdır',
     },
     slicerAmsMapping: {
-      rowBadge: 'Dilimleyiciden kaydedilen AMS yuvası',
-      rowTooltip: 'Bu arşiv, dilimleme/gönderme sırasında dilimleyicinin seçtiği tam AMS yuvasını taşır. Yeniden yazdırma, tür/renkten yeniden tahmin etmek yerine o fiziksel makarayı yeniden kullanır.',
+      rowBadge: 'Bu yazıcı için kaydedilen AMS yuvaları',
+      rowTooltip: 'Bu arşiv, dilimleyicinin seçtiği tam AMS yuvalarını bu öğenin hedeflediği yazıcı için saklar. O yazıcıda yeniden yazdırma, tür ve renge göre yeniden eşleştirmek yerine bu makaraları yeniden kullanabilir.',
     },
     // Baskı modali
     editQueueItem: 'Kuyruk Öğesini Düzenle',

@@ -135,6 +135,12 @@ export function VirtualPrinterCard({ printer, models }: VirtualPrinterCardProps)
       setLocalTargetPrinterId(printer.target_printer_id);
       setLocalBindIp(printer.bind_ip || '');
       setLocalTailscaleDisabled(printer.tailscale_disabled ?? true);
+      // Queue-mode behaviour toggles. Without these the switch stays visually
+      // flipped after a failed save, so the card claims a setting the server
+      // never accepted.
+      setLocalQueueForceColorMatch(printer.queue_force_color_match ?? false);
+      setLocalSaveAmsMapping(printer.save_ams_mapping ?? false);
+      setLocalGcodeInjection(printer.gcode_injection ?? false);
       setPendingAction(null);
     },
   });
