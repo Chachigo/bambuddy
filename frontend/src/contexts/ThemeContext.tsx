@@ -19,7 +19,7 @@ interface ThemeContextType {
   lightStyle: ThemeStyle;
   lightBackground: LightBackground;
   lightAccent: ThemeAccent;
-  // Show live print progress (% + green ring favicon) in the browser tab
+  // Show live print progress (% + accent-coloured ring favicon) in the browser tab
   progressInTitle: boolean;
   setProgressInTitle: (v: boolean) => void;
   // Actions

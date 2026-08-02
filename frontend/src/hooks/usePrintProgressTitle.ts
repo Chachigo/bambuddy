@@ -3,7 +3,6 @@ import { useEffect, useRef } from 'react';
 import { api } from '../api/client';
 import { useTheme } from '../contexts/ThemeContext';
 
-const DEFAULT_TITLE = 'Bambuddy';
 const FALLBACK_ACCENT = '#00ae42'; // Bambuddy green, if --accent can't be read (e.g. jsdom)
 
 // A remaining_time <= 0 means "ETA not known yet" (the backend defaults it to 0,
@@ -111,15 +110,22 @@ export function usePrintProgressTitle() {
     enabled: progressInTitle,
   });
 
+  // No refetchInterval here on purpose. This hook is mounted globally, so a
+  // poll would add one request per printer every interval on every page — the
+  // Printers page already runs its own 30s fallback on this exact key. The
+  // WebSocket writes ['printerStatus', id] directly (useWebSocket), which keeps
+  // the tab live; a cosmetic title going stale during a WS outage is fine.
   const statusQueries = useQueries({
     queries: (progressInTitle ? printers ?? [] : []).map((p) => ({
       queryKey: ['printerStatus', p.id],
       queryFn: () => api.getPrinterStatus(p.id),
-      refetchInterval: 30000, // fallback; WebSocket drives live updates
     })),
   });
 
   const originalsRef = useRef<Map<HTMLLinkElement, string>>(new Map());
+  // The tab's own title, captured before we ever touch it, so restoring doesn't
+  // depend on a constant matching index.html.
+  const defaultTitleRef = useRef(document.title);
   // Whether we currently own the tab title/favicon. Lets us stay inert while
   // off (never touch the tab) yet still restore once if we ever took it over.
   const ownsRef = useRef(false);
@@ -129,12 +135,12 @@ export function usePrintProgressTitle() {
 
   useEffect(() => {
     if (progressInTitle && pct != null) {
-      document.title = `${pct}% · ${DEFAULT_TITLE}`;
+      document.title = `${pct}% · ${defaultTitleRef.current}`;
       setFavicon(drawProgressFavicon(pct), originalsRef.current);
       ownsRef.current = true;
     } else if (ownsRef.current) {
       // Disabled or idle after having taken over — hand the tab back.
-      document.title = DEFAULT_TITLE;
+      document.title = defaultTitleRef.current;
       setFavicon(null, originalsRef.current);
       ownsRef.current = false;
     }
@@ -145,9 +151,10 @@ export function usePrintProgressTitle() {
   useEffect(() => {
     const originals = originalsRef.current;
     const owns = ownsRef;
+    const defaultTitle = defaultTitleRef.current;
     return () => {
       if (owns.current) {
-        document.title = DEFAULT_TITLE;
+        document.title = defaultTitle;
         setFavicon(null, originals);
       }
     };

@@ -75,13 +75,47 @@ function wrapper() {
   );
 }
 
+// jsdom has no canvas backend — calling getContext('2d') logs a "Not implemented"
+// jsdomError (with a full React stack) into the suite output on every run, and
+// leaves the favicon path untested because it bails on the null context. Stub
+// both canvas calls so the ring code actually executes and the swap is assertable.
+const RING_URL = 'data:image/png;base64,ring';
+const fakeCtx = {
+  beginPath: vi.fn(),
+  arc: vi.fn(),
+  stroke: vi.fn(),
+  lineWidth: 0,
+  strokeStyle: '',
+  lineCap: 'butt',
+} as unknown as CanvasRenderingContext2D;
+
+const realGetContext = HTMLCanvasElement.prototype.getContext;
+const realToDataURL = HTMLCanvasElement.prototype.toDataURL;
+
+function faviconHref(): string {
+  return document.querySelector<HTMLLinkElement>('link[rel~="icon"]')!.href;
+}
+
 describe('usePrintProgressTitle effect', () => {
   beforeEach(() => {
     h.getPrinters.mockReset();
     h.getPrinterStatus.mockReset();
+
+    HTMLCanvasElement.prototype.getContext = (() =>
+      fakeCtx) as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      RING_URL) as typeof HTMLCanvasElement.prototype.toDataURL;
+
+    // Replaces <title> too, so set the title after wiring the head up — the hook
+    // captures document.title at mount.
+    document.head.innerHTML = '<link rel="icon" href="/favicon.svg">';
     document.title = 'Bambuddy';
   });
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    HTMLCanvasElement.prototype.getContext = realGetContext;
+    HTMLCanvasElement.prototype.toDataURL = realToDataURL;
+  });
 
   it('is inert while the pref is off — never touches the tab title', async () => {
     h.theme.value = { progressInTitle: false, resolvedMode: 'dark', darkAccent: 'green', lightAccent: 'green' };
@@ -91,10 +125,11 @@ describe('usePrintProgressTitle effect', () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(document.title).toBe('Something Else');
+    expect(faviconHref()).toContain('/favicon.svg');
     expect(h.getPrinters).not.toHaveBeenCalled();
   });
 
-  it('shows the active print percentage in the title when enabled', async () => {
+  it('shows the active print percentage in the title and swaps the favicon', async () => {
     h.theme.value = { progressInTitle: true, resolvedMode: 'dark', darkAccent: 'green', lightAccent: 'green' };
     h.getPrinters.mockResolvedValue([{ id: 1 }]);
     h.getPrinterStatus.mockResolvedValue({ state: 'RUNNING', progress: 42, remaining_time: 600 });
@@ -102,5 +137,21 @@ describe('usePrintProgressTitle effect', () => {
     renderHook(() => usePrintProgressTitle(), { wrapper: wrapper() });
 
     await waitFor(() => expect(document.title).toBe('42% · Bambuddy'));
+    expect(faviconHref()).toBe(RING_URL);
+  });
+
+  it('restores the original title and favicon when the pref is switched off', async () => {
+    h.theme.value = { progressInTitle: true, resolvedMode: 'dark', darkAccent: 'green', lightAccent: 'green' };
+    h.getPrinters.mockResolvedValue([{ id: 1 }]);
+    h.getPrinterStatus.mockResolvedValue({ state: 'RUNNING', progress: 42, remaining_time: 600 });
+
+    const { rerender } = renderHook(() => usePrintProgressTitle(), { wrapper: wrapper() });
+    await waitFor(() => expect(document.title).toBe('42% · Bambuddy'));
+
+    h.theme.value = { ...h.theme.value, progressInTitle: false };
+    rerender();
+
+    await waitFor(() => expect(document.title).toBe('Bambuddy'));
+    expect(faviconHref()).toContain('/favicon.svg');
   });
 });
