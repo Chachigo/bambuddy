@@ -1846,3 +1846,132 @@ class TestUnusedSlotSubstitutionOnSinglePlateSource:
 
         assert captured, "sidecar was never called"
         assert captured[0] == ["slot1", "slot2", "slot3", "slot4"], captured[0]
+
+
+class TestFilamentRequirementsFullSlots:
+    """#2712: what the slice modal is handed must be positional.
+
+    The modal's filament list maps index 0 to slot 1, and the backend forwards
+    it in that order as ``filament_1.json``..``filament_N.json``. A MakerWorld
+    source that ships slice_info and paints with slot 4 alone therefore has to
+    present four rows — a one-row list binds the user's pick to slot 1, and
+    slot 4 slices with whatever the source had baked in. Picking PETG produced
+    a PLA print, and the print dialog then correctly refused to match PETG.
+
+    Print-time AMS matching shares this endpoint and needs the opposite: only
+    the slots the plate consumes, so it doesn't demand spools for slots the
+    G-code never touches. Hence the opt-in flag rather than a shape change.
+    """
+
+    @staticmethod
+    def _sliced_source_using_only_slot_4() -> bytes:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("3D/3dmodel.model", "<model/>")
+            zf.writestr(
+                "Metadata/project_settings.config",
+                json.dumps(
+                    {
+                        "filament_type": ["PLA", "PLA", "PLA", "PLA"],
+                        "filament_colour": ["#38CC0A", "#161616", "#898989", "#898989"],
+                    }
+                ),
+            )
+            # MakerWorld ships slice_info without plate G-code, which is what
+            # sends this file down the "already sliced" branch.
+            zf.writestr(
+                "Metadata/slice_info.config",
+                "<?xml version='1.0'?>\n<config><plate>"
+                "<metadata key='index' value='1'/>"
+                "<filament id='4' tray_info_idx='GFL99' type='PLA' color='#898989'"
+                " used_m='35.51' used_g='105.92'/>"
+                "</plate></config>",
+            )
+        return buf.getvalue()
+
+    async def _make_file(self, db_session, tmp_path) -> int:
+        src = tmp_path / "library" / "files" / "tunnel.3mf"
+        src.write_bytes(self._sliced_source_using_only_slot_4())
+        lib = LibraryFile(
+            filename="tunnel.3mf",
+            file_path=str(src.relative_to(tmp_path)),
+            file_type="3mf",
+            file_size=src.stat().st_size,
+        )
+        db_session.add(lib)
+        await db_session.commit()
+        await db_session.refresh(lib)
+        return lib.id
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_full_slots_returns_one_row_per_project_slot(
+        self, async_client: AsyncClient, db_session, slice_test_setup
+    ):
+        file_id = await self._make_file(db_session, slice_test_setup["tmp_path"])
+
+        r = await async_client.get(f"/api/v1/library/files/{file_id}/filament-requirements?plate_id=1&full_slots=true")
+        assert r.status_code == 200, r.text
+        filaments = r.json()["filaments"]
+
+        assert [f["slot_id"] for f in filaments] == [1, 2, 3, 4]
+        # Only slot 4 prints, so only its row is selectable in the modal.
+        assert [f["used_in_plate"] for f in filaments] == [False, False, False, True]
+        # The used row keeps what the slice actually reported.
+        assert filaments[3]["used_grams"] == 105.9
+        assert filaments[3]["tray_info_idx"] == "GFL99"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_print_path_still_gets_only_the_used_slot(
+        self, async_client: AsyncClient, db_session, slice_test_setup
+    ):
+        """Without the flag the response must be byte-for-byte what it was.
+
+        PrintModal drives AMS matching off this; widening it would ask the
+        user to load three spools the print never touches.
+        """
+        file_id = await self._make_file(db_session, slice_test_setup["tmp_path"])
+
+        r = await async_client.get(f"/api/v1/library/files/{file_id}/filament-requirements?plate_id=1")
+        assert r.status_code == 200, r.text
+        filaments = r.json()["filaments"]
+
+        assert [f["slot_id"] for f in filaments] == [4]
+        assert filaments[0]["used_in_plate"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_unsliced_sources_are_unaffected_by_the_flag(
+        self, async_client: AsyncClient, db_session, slice_test_setup
+    ):
+        """Those already returned the full project list; the flag must not
+        double-handle them or change what the modal has been getting."""
+        tmp_path = slice_test_setup["tmp_path"]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("3D/3dmodel.model", "<model/>")
+            zf.writestr(
+                "Metadata/project_settings.config",
+                json.dumps({"filament_type": ["PLA", "PETG"], "filament_colour": ["#000000", "#FFFFFF"]}),
+            )
+        src = tmp_path / "library" / "files" / "raw.3mf"
+        src.write_bytes(buf.getvalue())
+        lib = LibraryFile(
+            filename="raw.3mf",
+            file_path=str(src.relative_to(tmp_path)),
+            file_type="3mf",
+            file_size=src.stat().st_size,
+        )
+        db_session.add(lib)
+        await db_session.commit()
+        await db_session.refresh(lib)
+
+        with_flag = await async_client.get(
+            f"/api/v1/library/files/{lib.id}/filament-requirements?plate_id=1&full_slots=true"
+        )
+        without = await async_client.get(f"/api/v1/library/files/{lib.id}/filament-requirements?plate_id=1")
+
+        assert with_flag.status_code == 200 and without.status_code == 200
+        assert with_flag.json()["filaments"] == without.json()["filaments"]
+        assert [f["slot_id"] for f in with_flag.json()["filaments"]] == [1, 2]

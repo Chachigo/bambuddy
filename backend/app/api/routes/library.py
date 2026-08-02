@@ -73,6 +73,7 @@ from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_miss
 from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_stl_thumbnail
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 from backend.app.utils.threemf_tools import (
+    expand_to_project_slots,
     extract_embedded_presets_from_3mf,
     extract_nozzle_mapping_from_3mf,
     extract_project_filaments_from_3mf,
@@ -3114,6 +3115,7 @@ async def get_library_file_filament_requirements(
     file_id: int,
     plate_id: int | None = None,
     request_id: str | None = None,
+    full_slots: bool = False,
     db: AsyncSession = Depends(get_db),
     auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
@@ -3130,6 +3132,10 @@ async def get_library_file_filament_requirements(
     Args:
         file_id: The library file ID
         plate_id: Optional plate index to get filaments for a specific plate
+        full_slots: Return one entry per *project* slot rather than only the
+            slots the plate consumes. See :func:`_expand_to_project_slots`.
+            Only the slice modal wants this; print-time AMS matching must keep
+            the used-only list.
     """
     import defusedxml.ElementTree as ET
 
@@ -3231,6 +3237,17 @@ async def get_library_file_filament_requirements(
                                     "used_in_plate": True,
                                 }
                             )
+
+            # Re-slicing a source that already carries slice_info (#2712).
+            # The block above answers "what does this plate consume", which is
+            # what print-time AMS matching needs. The slice modal needs "what
+            # slots exist", because its list is positional and the CLI binds
+            # entry N to slot N — so a source using only slot 4 handed the
+            # user's single pick to slot 1 and sliced slot 4 with the source's
+            # embedded default. Widen here rather than in the modal so the
+            # print path keeps the narrow list it depends on.
+            if full_slots and filaments:
+                filaments = expand_to_project_slots(zf, filaments)
 
             # Unsliced project files: slice_info had no per-plate data.
             # Return the FULL project_settings.config AMS slot list so

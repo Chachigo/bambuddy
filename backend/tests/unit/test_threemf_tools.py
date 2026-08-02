@@ -10,6 +10,7 @@ import math
 import zipfile
 
 from backend.app.utils.threemf_tools import (
+    expand_to_project_slots,
     extract_bed_type_from_3mf,
     extract_embedded_presets_from_3mf,
     extract_filament_usage_from_3mf,
@@ -478,6 +479,111 @@ class TestExtractProjectFilamentsFrom3mf:
         proj = {"filament_type": [], "filament_colour": []}
         with _make_3mf_with({"Metadata/project_settings.config": json.dumps(proj)}) as zf:
             assert extract_project_filaments_from_3mf(zf) == []
+
+
+# ---------------------------------------------------------------------------
+# Tests for expand_to_project_slots — #2712
+# ---------------------------------------------------------------------------
+
+
+class TestExpandToProjectSlots:
+    """The slice modal's filament list is positional: index 0 is slot 1, all
+    the way through to the ``filament_N.json`` parts handed to the slicer.
+
+    A MakerWorld source that carries slice_info but paints with slot 4 alone
+    used to yield a one-row list, so the user's single pick was bound to slot
+    1 and slot 4 — the slot that actually prints — kept the source's embedded
+    default. Picking PETG produced a PLA print.
+    """
+
+    PROJECT = json.dumps(
+        {
+            "filament_type": ["PLA", "PLA", "PLA", "PLA"],
+            "filament_colour": ["#38CC0A", "#161616", "#898989", "#898989"],
+        }
+    )
+
+    def test_a_single_used_slot_still_produces_a_full_positional_list(self):
+        """The reported file: four project slots, only slot 4 printed."""
+        used = [
+            {
+                "slot_id": 4,
+                "type": "PLA",
+                "color": "#898989",
+                "used_grams": 105.9,
+                "used_meters": 35.51,
+                "tray_info_idx": "GFL99",
+                "used_in_plate": True,
+            }
+        ]
+        with _make_3mf_with({"Metadata/project_settings.config": self.PROJECT}) as zf:
+            out = expand_to_project_slots(zf, used)
+
+        assert [f["slot_id"] for f in out] == [1, 2, 3, 4]
+        assert [f["used_in_plate"] for f in out] == [False, False, False, True]
+
+    def test_the_used_row_keeps_its_usage_figures(self):
+        """The modal shows the real weight and colour, and the print path
+        downstream reads ``tray_info_idx`` — none of it may be flattened into
+        a zeroed project row."""
+        used = [
+            {
+                "slot_id": 4,
+                "type": "PETG",
+                "color": "#FF0000",
+                "used_grams": 105.9,
+                "used_meters": 35.51,
+                "tray_info_idx": "GFL99",
+                "used_in_plate": True,
+            }
+        ]
+        with _make_3mf_with({"Metadata/project_settings.config": self.PROJECT}) as zf:
+            out = expand_to_project_slots(zf, used)
+
+        slot4 = out[3]
+        assert slot4["used_grams"] == 105.9
+        assert slot4["tray_info_idx"] == "GFL99"
+        # Resolved from the slice, not the project's stale PLA/#898989.
+        assert (slot4["type"], slot4["color"]) == ("PETG", "#FF0000")
+
+    def test_padding_rows_carry_the_project_type_and_colour(self):
+        """They drive the modal's pre-pick for the disabled rows."""
+        used = [{"slot_id": 4, "type": "PLA", "color": "#898989", "used_grams": 1.0, "used_meters": 1.0}]
+        with _make_3mf_with({"Metadata/project_settings.config": self.PROJECT}) as zf:
+            out = expand_to_project_slots(zf, used)
+
+        assert (out[0]["type"], out[0]["color"]) == ("PLA", "#38CC0A")
+        assert out[0]["used_grams"] == 0
+
+    def test_every_slot_used_is_a_shape_change_only(self):
+        used = [
+            {"slot_id": i, "type": "PLA", "color": "", "used_grams": 5.0, "used_meters": 1.0, "used_in_plate": True}
+            for i in (1, 2, 3, 4)
+        ]
+        with _make_3mf_with({"Metadata/project_settings.config": self.PROJECT}) as zf:
+            out = expand_to_project_slots(zf, used)
+
+        assert len(out) == 4
+        assert all(f["used_in_plate"] for f in out)
+        assert all(f["used_grams"] == 5.0 for f in out)
+
+    def test_a_used_slot_beyond_the_project_list_is_kept(self):
+        """Dropping it would recreate the original bug on a file whose
+        project settings and slice_info disagree — the one slot that prints
+        would vanish from the list entirely."""
+        used = [{"slot_id": 9, "type": "PLA", "color": "", "used_grams": 5.0, "used_meters": 1.0}]
+        with _make_3mf_with({"Metadata/project_settings.config": self.PROJECT}) as zf:
+            out = expand_to_project_slots(zf, used)
+
+        assert [f["slot_id"] for f in out] == [1, 2, 3, 4, 9]
+        assert out[-1]["used_in_plate"] is True
+
+    def test_returns_the_input_unchanged_without_project_settings(self):
+        """Nothing to widen against — a narrow list still prints correctly,
+        an invented one might not."""
+        used = [{"slot_id": 4, "type": "PLA", "color": "", "used_grams": 5.0, "used_meters": 1.0}]
+        with _make_3mf_with({"placeholder.txt": "hi"}) as zf:
+            assert expand_to_project_slots(zf, used) == used
 
 
 # ---------------------------------------------------------------------------

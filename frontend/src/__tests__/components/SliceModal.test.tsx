@@ -1242,6 +1242,102 @@ describe('SliceModal', () => {
     });
   });
 
+  // #2712: the filament list is positional the whole way down — index 0 is
+  // slot 1, and the backend forwards it as filament_1.json..filament_N.json.
+  // A MakerWorld source that ships slice_info and paints with slot 4 alone
+  // used to yield a one-row list, so the user's only pick was bound to slot 1
+  // and slot 4 sliced with the source's embedded default: picking PETG gave a
+  // PLA print. The modal now asks for every project slot so the positions
+  // line up.
+  it('requests every project slot, not just the ones the plate prints with', async () => {
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Tunnel.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(mockApi.getLibraryFileFilamentRequirements).toHaveBeenCalled());
+    const [, plateArg, , fullSlots] = mockApi.getLibraryFileFilamentRequirements.mock.calls[0];
+    expect(plateArg).toBe(1);
+    expect(fullSlots).toBe(true);
+  });
+
+  it('sends the pick for a high-numbered slot at its own index', async () => {
+    // Four project slots, only slot 4 printed. The pick must arrive as the
+    // FOURTH entry; anywhere else and the slicer binds it to the wrong slot.
+    mockApi.getLibraryFilePlates.mockResolvedValue({
+      file_id: 100,
+      filename: 'Tunnel.3mf',
+      is_multi_plate: false,
+      plates: [
+        {
+          index: 1,
+          name: 'Plate 1',
+          objects: ['Tunnel'],
+          has_thumbnail: false,
+          thumbnail_url: null,
+          print_time_seconds: 1200,
+          filament_used_grams: 105,
+          filaments: [],
+        },
+      ],
+    });
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue({
+      file_id: 100,
+      filename: 'Tunnel.3mf',
+      plate_id: 1,
+      filaments: [
+        { slot_id: 1, type: 'PLA', color: '#38CC0A', used_grams: 0, used_meters: 0, used_in_plate: false },
+        { slot_id: 2, type: 'PLA', color: '#161616', used_grams: 0, used_meters: 0, used_in_plate: false },
+        { slot_id: 3, type: 'PLA', color: '#898989', used_grams: 0, used_meters: 0, used_in_plate: false },
+        { slot_id: 4, type: 'PLA', color: '#898989', used_grams: 105, used_meters: 35, used_in_plate: true },
+      ],
+    });
+    mockApi.getSlicerPresets.mockResolvedValue({
+      cloud: {
+        printer: [{ id: 'P1', name: 'X1C', source: 'cloud' }],
+        process: [{ id: 'PR1', name: '0.20mm', source: 'cloud' }],
+        filament: [
+          { id: 'F-PLA', name: 'Cloud PLA Grey', source: 'cloud', filament_type: 'PLA', filament_colour: '#898989' },
+          { id: 'F-PETG', name: 'Cloud PETG', source: 'cloud', filament_type: 'PETG', filament_colour: '#00FF00' },
+        ],
+      },
+      local: { printer: [], process: [], filament: [] },
+      standard: { printer: [], process: [], filament: [] },
+      cloud_status: 'ok',
+      orca_cloud: { printer: [], process: [], filament: [] },
+      orca_cloud_status: 'ok',
+    });
+    mockApi.sliceLibraryFile.mockResolvedValue({
+      job_id: 51,
+      status: 'pending',
+      status_url: '/api/v1/slice-jobs/51',
+    });
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Tunnel.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText('X1C')).toBeDefined());
+
+    // 1 printer + 1 process + 1 bed-type + 4 filament rows.
+    const selects = presetSelects();
+    expect(selects).toHaveLength(7);
+    // Only slot 4 is selectable — the other three are the padding.
+    expect([selects[3].disabled, selects[4].disabled, selects[5].disabled]).toEqual([true, true, true]);
+    expect(selects[6].disabled).toBe(false);
+
+    const user = userEvent.setup();
+    await user.selectOptions(selects[6], 'cloud:F-PETG');
+    await user.click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => {
+      const [, body] = mockApi.sliceLibraryFile.mock.calls[0];
+      expect(body.filament_presets).toHaveLength(4);
+      expect(body.filament_presets[3]).toEqual({ source: 'cloud', id: 'F-PETG' });
+    });
+  });
+
   // ------------------------------------------------------------------
   // Slicer Pipelines (#1425) — Apply / Save integration in SliceModal
   // ------------------------------------------------------------------

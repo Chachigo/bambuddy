@@ -4693,10 +4693,17 @@ export const api = {
     archiveId: number,
     plateId?: number,
     requestId?: string,
+    /** Ask for one entry per project slot instead of only the slots this
+     * plate consumes. The slice modal needs it: its filament list is
+     * positional, so a source whose only used slot is 4 must still present
+     * four rows or the user's pick is bound to slot 1 (#2712). Print-time
+     * AMS matching must NOT set this — it wants the used-only list. */
+    fullSlots?: boolean,
   ) => {
     const qs = new URLSearchParams();
     if (plateId !== undefined) qs.set('plate_id', String(plateId));
     if (requestId) qs.set('request_id', requestId);
+    if (fullSlots) qs.set('full_slots', 'true');
     return request<{
       archive_id: number;
       filename: string;
@@ -6397,10 +6404,17 @@ export const api = {
     fileId: number,
     plateId?: number,
     requestId?: string,
+    /** Ask for one entry per project slot instead of only the slots this
+     * plate consumes. The slice modal needs it: its filament list is
+     * positional, so a source whose only used slot is 4 must still present
+     * four rows or the user's pick is bound to slot 1 (#2712). Print-time
+     * AMS matching must NOT set this — it wants the used-only list. */
+    fullSlots?: boolean,
   ) => {
     const qs = new URLSearchParams();
     if (plateId !== undefined) qs.set('plate_id', String(plateId));
     if (requestId) qs.set('request_id', requestId);
+    if (fullSlots) qs.set('full_slots', 'true');
     return request<{
       file_id: number;
       filename: string;
