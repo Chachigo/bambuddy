@@ -46,12 +46,25 @@ from backend.app.services.camera_profiles import get_camera_profile
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/printers", tags=["camera"])
 
-# Upper bound on waiting for a SIGKILLed ffmpeg to be reaped (#2580). A killed
-# ffmpeg stuck in uninterruptible I/O on a dead RTSP socket can take arbitrarily
-# long to exit — an unbounded post-kill wait() parked the fan-out stream
-# coroutine for 12 hours on a P2S, leaving every viewer attached to a stalled
-# broadcaster. Abandoning the wait is safe: cleanup_orphaned_streams' /proc scan
-# reaps any Bambu ffmpeg not attached to an active stream on its next pass.
+# Grace period for a SIGTERMed ffmpeg to shut down before we SIGKILL it. Only
+# reachable when ffmpeg genuinely ignores SIGTERM: _terminate_ffmpeg drains the
+# pipes first, and a drained ffmpeg exits in ~0.15s.
+_FFMPEG_TERM_TIMEOUT = 2.0
+
+# Upper bound on waiting for a SIGKILLed ffmpeg to be reaped (#2580).
+#
+# The original diagnosis — "a killed ffmpeg stuck in uninterruptible I/O on a
+# dead RTSP socket" — was wrong, and this bound was capping a deadlock of our
+# own making rather than waiting out a stuck process. A process that survives
+# SIGKILL would have to be in uninterruptible sleep (state D); the ffmpeg seen
+# doing this was in state S, and its returncode was already set to -9 while
+# wait() was still blocked. The real cause was undrained pipes (see
+# _terminate_ffmpeg), which made this timeout fire on *every* camera close.
+#
+# Kept as a backstop now that the cause is fixed: it should no longer be
+# reachable, and if it ever is, abandoning the wait is still safe because
+# cleanup_orphaned_streams' /proc scan reaps any Bambu ffmpeg not attached to
+# an active stream on its next pass.
 _FFMPEG_KILL_TIMEOUT = 2.0
 
 # Track active ffmpeg processes for cleanup
@@ -241,14 +254,63 @@ async def generate_chamber_mjpeg_stream(
         logger.info("Chamber image stream stopped for %s (stream_id=%s)", ip_address, stream_id)
 
 
+async def _drain_pipe(reader) -> None:
+    """Read a subprocess pipe to EOF and discard, so it can never block.
+
+    Best-effort by design: any read failure means we cannot drain further, and
+    the caller is tearing the process down regardless.
+    """
+    if reader is None:
+        return
+    try:
+        while await reader.read(65536):
+            pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — teardown must not fail on a dying pipe
+        return
+
+
 async def _terminate_ffmpeg(process: asyncio.subprocess.Process, stream_id: str | None = None) -> None:
-    """Terminate an ffmpeg process gracefully, then kill if needed."""
+    """Terminate an ffmpeg process gracefully, then kill if needed.
+
+    Drains stdout/stderr throughout, which is load-bearing rather than hygiene.
+    ffmpeg is spawned with both as pipes, and every caller of this has already
+    stopped reading stdout — so by the time we get here ffmpeg is typically
+    blocked in write() on a full 64 KiB pipe. Two things then go wrong:
+
+    * SIGTERM cannot be acted on. ffmpeg's handler only sets a flag that its
+      main loop polls, and a loop blocked in write() never reaches the check,
+      so the whole grace period is dead time.
+    * SIGKILL does kill it, but wait() cannot observe that. asyncio resolves
+      Process.wait()'s waiter through BaseSubprocessTransport._try_finish(),
+      which requires every pipe transport to report disconnected; paused,
+      unread pipes never reach EOF, so wait() blocks with returncode already
+      set. That is what made the "did not exit within Ns of SIGKILL" error
+      fire on every single camera close, and unbounded it was the 12-hour
+      hang in #2580.
+
+    Draining fixes both: SIGTERM becomes actionable and the exit observable.
+    Measured on an H2D: 4.0s of dead time per close before, ~0.15s after —
+    which matters because the printer allows exactly one camera connection,
+    so every one of those seconds was a connection nobody could use.
+
+    Discarding what we drain is deliberate. The stream loop already reads
+    stderr on its error paths (_read_ffmpeg_stderr), and it does so before
+    calling this, so nothing diagnostic is lost.
+    """
     if process.returncode is not None:
+        _spawned_ffmpeg_pids.pop(process.pid, None)
         return  # Already dead
+
+    drainers = [
+        asyncio.create_task(_drain_pipe(process.stdout)),
+        asyncio.create_task(_drain_pipe(process.stderr)),
+    ]
     try:
         process.terminate()
         try:
-            await asyncio.wait_for(process.wait(), timeout=2.0)
+            await asyncio.wait_for(process.wait(), timeout=_FFMPEG_TERM_TIMEOUT)
         except TimeoutError:
             logger.warning("ffmpeg didn't terminate gracefully, killing (stream_id=%s)", stream_id)
             process.kill()
@@ -257,7 +319,8 @@ async def _terminate_ffmpeg(process: asyncio.subprocess.Process, stream_id: str 
             except TimeoutError:
                 # Do NOT keep waiting (#2580): the caller is the stream
                 # generator, and blocking here pins the fan-out pump forever.
-                # The orphan janitor reaps the process later.
+                # The orphan janitor reaps the process later. With the pipes
+                # drained this should be unreachable — see _FFMPEG_KILL_TIMEOUT.
                 logger.error(
                     "ffmpeg did not exit within %.1fs of SIGKILL; abandoning wait (stream_id=%s)",
                     _FFMPEG_KILL_TIMEOUT,
@@ -267,7 +330,11 @@ async def _terminate_ffmpeg(process: asyncio.subprocess.Process, stream_id: str 
         pass  # Already dead
     except OSError as e:
         logger.warning("Error terminating ffmpeg: %s", e)
-    _spawned_ffmpeg_pids.pop(process.pid, None)
+    finally:
+        for drainer in drainers:
+            drainer.cancel()
+        await asyncio.gather(*drainers, return_exceptions=True)
+        _spawned_ffmpeg_pids.pop(process.pid, None)
 
 
 def _summarize_ffmpeg_stderr(text: str | None) -> str:
