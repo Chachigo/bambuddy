@@ -836,12 +836,72 @@ async def extract_video_last_frame(video_path: Path, output_path: Path) -> bool:
         return False
 
 
+def apply_camera_rotation(image_data: bytes, rotation: int, logger: logging.Logger) -> bytes:
+    """Apply a camera_rotation value (degrees clockwise) to a captured JPEG.
+
+    Shared by every capture path that saves a still image (notification
+    snapshots, finish photos, layer-timelapse frames) - previously only
+    wired into the notification-snapshot path, which left finish photos
+    and timelapse videos upside-down whenever camera_rotation was set.
+
+    Returns *image_data* itself (identity, not a copy) when there is nothing
+    to do or the rotate fails; callers that write to disk use that to skip a
+    pointless rewrite.
+    """
+    if not rotation:
+        return image_data
+
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        img = Image.open(BytesIO(image_data))
+        # PIL rotate is counter-clockwise, so negate for clockwise rotation
+        img = img.rotate(-rotation, expand=True)
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        rotated = buf.getvalue()
+        # Debug, not info: layer-timelapse calls this once per layer, so a tall
+        # print would otherwise put hundreds of lines in the log for something
+        # the surrounding capture already reports at debug level.
+        logger.debug("Applied %d° camera rotation: %s → %s bytes", rotation, len(image_data), len(rotated))
+        return rotated
+    except Exception as e:
+        logger.warning("Failed to apply camera rotation: %s", e)
+        return image_data
+
+
+async def apply_camera_rotation_to_file(path: Path, rotation: int, logger: logging.Logger) -> None:
+    """Rotate a JPEG that has already been written to disk, in place.
+
+    Two finish-photo sources never hold the frame as bytes - ``ffmpeg`` writes
+    the file for them, and they return only a filename - so they can't use
+    ``apply_camera_rotation`` directly. Best-effort: any failure leaves the
+    unrotated file in place, which is what the caller had before.
+    """
+    if not rotation:
+        return
+
+    try:
+        data = await asyncio.to_thread(path.read_bytes)
+        rotated = await asyncio.to_thread(apply_camera_rotation, data, rotation, logger)
+        if rotated is data:
+            # Nothing was done (the rotate failed and returned its input) -
+            # rewriting the same bytes would only risk truncating a good file.
+            return
+        await asyncio.to_thread(path.write_bytes, rotated)
+    except Exception as e:
+        logger.warning("Failed to rotate %s in place: %s", path.name, e)
+
+
 async def capture_finish_photo(
     printer_id: int,
     ip_address: str,
     access_code: str,
     model: str | None,
     archive_dir: Path,
+    rotation: int = 0,
 ) -> str | None:
     """Capture a finish photo and save it to the archive's photos folder.
 
@@ -851,6 +911,9 @@ async def capture_finish_photo(
         access_code: Printer access code
         model: Printer model
         archive_dir: Directory of the archive (where the 3MF is stored)
+        rotation: Printer's configured camera_rotation (degrees clockwise).
+            ffmpeg writes the file directly here, so the rotation is applied
+            to it afterwards rather than to bytes in hand.
 
     Returns:
         Filename of the captured photo, or None if capture failed
@@ -875,6 +938,7 @@ async def capture_finish_photo(
     )
 
     if success:
+        await apply_camera_rotation_to_file(output_path, rotation, logger)
         logger.info("Finish photo saved: %s", filename)
         return filename
     else:

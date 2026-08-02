@@ -179,3 +179,69 @@ async def test_polls_until_file_appears(tmp_path: Path, patched_session, monkeyp
 
     assert result is not None
     assert result.startswith("finish_")
+
+
+async def test_extracted_frame_is_rotated_when_configured(tmp_path: Path, patched_session, monkeypatch):
+    """#2708: this source hands a path to ffmpeg and never holds the bytes, so
+    it was the one finish-photo source that ignored camera_rotation entirely.
+    A built-in-camera print with a timelapse prefers this source over the live
+    grab, so leaving it out meant the orientation depended on which source won.
+    """
+    import io
+
+    from PIL import Image
+
+    monkeypatch.setattr(main_module.app_settings, "base_dir", tmp_path)
+    video_relpath = Path("archive/1/print/timelapse.mp4")
+    video_abspath = tmp_path / video_relpath
+    video_abspath.parent.mkdir(parents=True, exist_ok=True)
+    video_abspath.write_bytes(b"x" * 100)
+
+    async def fake_extract(src, dst):
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 32), (0, 0, 255)).save(buf, format="JPEG")
+        dst.write_bytes(buf.getvalue())
+        return True
+
+    monkeypatch.setattr(main_module, "_FINISH_PHOTO_TIMELAPSE_POLL_INTERVAL_SECONDS", 0.0)
+    patched_session.timelapse_path = str(video_relpath)
+
+    with patch("backend.app.services.camera.extract_video_last_frame", new=fake_extract):
+        result, _ = await _capture_finish_photo_from_timelapse(
+            archive_id=42,
+            archive_dir=tmp_path / "archive_dir",
+            rotation=90,
+        )
+
+    assert result is not None
+    written = tmp_path / "archive_dir" / "photos" / result
+    # 64x32 turned a quarter turn: the file on disk is the rotated one, not
+    # what ffmpeg wrote.
+    assert Image.open(io.BytesIO(written.read_bytes())).size == (32, 64)
+
+
+async def test_extracted_frame_is_untouched_without_a_rotation(tmp_path: Path, patched_session, monkeypatch):
+    """The default path must not decode and re-encode ffmpeg's output for
+    nothing — that would cost a generation of JPEG quality on every print."""
+    monkeypatch.setattr(main_module.app_settings, "base_dir", tmp_path)
+    video_relpath = Path("archive/1/print/timelapse.mp4")
+    video_abspath = tmp_path / video_relpath
+    video_abspath.parent.mkdir(parents=True, exist_ok=True)
+    video_abspath.write_bytes(b"x" * 100)
+
+    extracted = b"\xff\xd8" + b"\x00" * 50
+
+    async def fake_extract(src, dst):
+        dst.write_bytes(extracted)
+        return True
+
+    monkeypatch.setattr(main_module, "_FINISH_PHOTO_TIMELAPSE_POLL_INTERVAL_SECONDS", 0.0)
+    patched_session.timelapse_path = str(video_relpath)
+
+    with patch("backend.app.services.camera.extract_video_last_frame", new=fake_extract):
+        result, _ = await _capture_finish_photo_from_timelapse(
+            archive_id=42,
+            archive_dir=tmp_path / "archive_dir",
+        )
+
+    assert (tmp_path / "archive_dir" / "photos" / result).read_bytes() == extracted

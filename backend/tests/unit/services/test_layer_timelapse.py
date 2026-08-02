@@ -7,7 +7,7 @@ These tests cover session management and pure logic functions.
 import time
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -245,6 +245,99 @@ class TestLayerChangeLogic:
                     assert result is False
                     assert session.last_layer == 1  # Layer is still updated
                     assert session.frame_count == 0  # But frame count not incremented
+
+
+class TestCaptureLayerAppliesRotation:
+    """camera_rotation was previously only wired into the notification-
+    snapshot path, so a layer-timelapse video came out upside-down whenever
+    the printer had a rotation configured. capture_layer now applies it to
+    every captured frame, whether fresh or reused from the live view's
+    buffer, before writing to disk."""
+
+    @pytest.mark.asyncio
+    async def test_rotates_fresh_capture_when_configured(self, tmp_path):
+        from backend.app.services.layer_timelapse import TimelapseSession
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+
+            with patch.object(Path, "mkdir"):
+                session = TimelapseSession(1, 100, "/dev/video1", "usb", rotation=180)
+
+                with (
+                    patch("backend.app.api.routes.camera.live_frame_for_capture", return_value=(False, None)),
+                    patch(
+                        "backend.app.services.layer_timelapse.capture_frame",
+                        new_callable=AsyncMock,
+                        return_value=b"\xff\xd8unrotated\xff\xd9",
+                    ),
+                    patch(
+                        "backend.app.services.layer_timelapse.apply_camera_rotation",
+                        return_value=b"\xff\xd8rotated\xff\xd9",
+                    ) as mock_rotate,
+                    patch.object(Path, "write_bytes") as mock_write,
+                ):
+                    result = await session.capture_layer(1)
+
+        assert result is True
+        mock_rotate.assert_called_once_with(b"\xff\xd8unrotated\xff\xd9", 180, ANY)
+        mock_write.assert_called_once_with(b"\xff\xd8rotated\xff\xd9")
+
+    @pytest.mark.asyncio
+    async def test_rotates_buffered_frame_when_configured(self, tmp_path):
+        from backend.app.services.layer_timelapse import TimelapseSession
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+
+            with patch.object(Path, "mkdir"):
+                session = TimelapseSession(1, 100, "/dev/video1", "usb", rotation=90)
+
+                with (
+                    patch(
+                        "backend.app.api.routes.camera.live_frame_for_capture",
+                        return_value=(True, b"\xff\xd8buffered\xff\xd9"),
+                    ),
+                    patch(
+                        "backend.app.services.layer_timelapse.apply_camera_rotation",
+                        return_value=b"\xff\xd8rotated\xff\xd9",
+                    ) as mock_rotate,
+                    patch.object(Path, "write_bytes") as mock_write,
+                ):
+                    result = await session.capture_layer(1)
+
+        assert result is True
+        mock_rotate.assert_called_once_with(b"\xff\xd8buffered\xff\xd9", 90, ANY)
+        mock_write.assert_called_once_with(b"\xff\xd8rotated\xff\xd9")
+
+    @pytest.mark.asyncio
+    async def test_skips_rotation_when_not_configured(self, tmp_path):
+        """Default rotation=0 - no-op, and must not even call apply_camera_rotation
+        (avoids the PIL decode/re-encode round trip for the common case)."""
+        from backend.app.services.layer_timelapse import TimelapseSession
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+
+            with patch.object(Path, "mkdir"):
+                session = TimelapseSession(1, 100, "/dev/video1", "usb")
+                assert session.rotation == 0
+
+                with (
+                    patch("backend.app.api.routes.camera.live_frame_for_capture", return_value=(False, None)),
+                    patch(
+                        "backend.app.services.layer_timelapse.capture_frame",
+                        new_callable=AsyncMock,
+                        return_value=b"\xff\xd8unrotated\xff\xd9",
+                    ),
+                    patch("backend.app.services.layer_timelapse.apply_camera_rotation") as mock_rotate,
+                    patch.object(Path, "write_bytes") as mock_write,
+                ):
+                    result = await session.capture_layer(1)
+
+        assert result is True
+        mock_rotate.assert_not_called()
+        mock_write.assert_called_once_with(b"\xff\xd8unrotated\xff\xd9")
 
 
 class TestOnLayerChange:

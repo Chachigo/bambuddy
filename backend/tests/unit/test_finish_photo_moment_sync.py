@@ -322,3 +322,139 @@ async def test_bank_skips_during_calibration_substage(monkeypatch):
     _bank_env(monkeypatch, sub_stage=14)
     await main_module._maybe_bank_inprint_frame(3, 2)
     assert 3 not in main_module._inprint_frame_bank
+
+
+class TestStage22CacheHoldsExactlyOneRotation:
+    """#2708. `_stage22_finish_frames` is fed from two kinds of source: live
+    grabs, which are raw, and the #1867 in-print bank, whose bytes came from
+    `_capture_snapshot_for_notification` and are therefore ALREADY rotated.
+    The consumer cannot tell them apart, so the producer normalises: every
+    entry in the cache has had the rotation applied exactly once.
+
+    Rotating on the consumer side instead put two rotations on the banked
+    path — at 180 degrees that is the reported bug reproduced exactly, and at
+    90/270 it lands the photo 180 degrees out.
+    """
+
+    @staticmethod
+    def _jpeg(width, height):
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", (width, height), (0, 0, 255)).save(buf, format="JPEG")
+        return buf.getvalue()
+
+    @staticmethod
+    def _size(data):
+        import io
+
+        from PIL import Image
+
+        return Image.open(io.BytesIO(data)).size
+
+    async def test_a_live_grab_is_rotated_before_caching(self, patched_env, monkeypatch):
+        monkeypatch.setattr(patched_env, "camera_rotation", 90, raising=False)
+        raw = self._jpeg(64, 32)
+
+        async def _capture(**_kwargs):
+            return raw
+
+        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+
+        await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
+
+        cached = main_module._stage22_finish_frames[patched_env.id]
+        assert self._size(cached) == (32, 64)
+
+    async def test_the_banked_frame_is_cached_verbatim(self, patched_env, monkeypatch):
+        """The bank is filled by `_capture_snapshot_for_notification`, which
+        rotates before it returns — so the producer must pass those bytes
+        through untouched rather than rotating them a second time.
+
+        Note this pins the invariant forward; it does not on its own prove the
+        bug fixed, because the old producer didn't rotate anything either. The
+        pair that discriminates is `test_a_live_grab_is_rotated_before_caching`
+        (producer now rotates) plus the source guard below (consumer no longer
+        does).
+        """
+        monkeypatch.setattr(patched_env, "camera_rotation", 90, raising=False)
+        already_rotated = self._jpeg(32, 64)  # what one rotation of a 64x32 frame looks like
+        main_module._inprint_frame_bank[patched_env.id] = already_rotated
+
+        async def _capture(**_kwargs):  # pragma: no cover - must not be reached
+            raise AssertionError("the banked frame should have been preferred")
+
+        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+
+        await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
+
+        cached = main_module._stage22_finish_frames[patched_env.id]
+        assert cached is already_rotated
+        assert self._size(cached) == (32, 64)
+
+    async def test_a_stage22_grab_is_rotated_even_though_the_bank_is_full(self, patched_env, monkeypatch):
+        """Only the `finish_state` trigger reads the bank. The `stage_22` and
+        `last_layer` triggers take a live grab, which still needs rotating —
+        a shared "did we use the bank" flag must not latch on the bank merely
+        existing."""
+        monkeypatch.setattr(patched_env, "camera_rotation", 90, raising=False)
+        main_module._inprint_frame_bank[patched_env.id] = self._jpeg(999, 1)
+
+        async def _capture(**_kwargs):
+            return self._jpeg(64, 32)
+
+        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+
+        await on_finish_photo_moment(patched_env.id, {"trigger": "stage_22"})
+
+        cached = main_module._stage22_finish_frames[patched_env.id]
+        assert self._size(cached) == (32, 64)
+
+    async def test_no_rotation_configured_caches_the_bytes_as_captured(self, patched_env, monkeypatch):
+        raw = self._jpeg(64, 32)
+
+        async def _capture(**_kwargs):
+            return raw
+
+        monkeypatch.setattr("backend.app.services.camera.capture_camera_frame_bytes", _capture)
+
+        await on_finish_photo_moment(patched_env.id, {"trigger": "finish_state"})
+
+        assert main_module._stage22_finish_frames[patched_env.id] is raw
+
+
+def test_the_consumer_does_not_rotate_the_cached_frame():
+    """The other half of the #2708 invariant, and the half with no runtime
+    harness: `_background_finish_photo` is a closure nested inside
+    `on_print_complete`, so nothing can drive its cached-frame branch
+    directly. What it must NOT do is rotate what it pops from
+    `_stage22_finish_frames` — the producer has already done that, and doing
+    it again upside-downs the banked path, which is the bug this fixed.
+
+    Checked against the source because the alternative is no check at all.
+    """
+    import ast
+    from pathlib import Path
+
+    main_py = Path(__file__).resolve().parents[2] / "app" / "main.py"
+    assert main_py.exists(), f"guard is looking in the wrong place: {main_py}"
+    tree = ast.parse(main_py.read_text())
+
+    offenders = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_apply_camera_rotation"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+        and node.args[0].id == "cached_frame"
+    ]
+
+    assert not offenders, (
+        f"main.py:{offenders} rotates the frame popped from _stage22_finish_frames. "
+        "Those bytes are already rotated by on_finish_photo_moment (#2708); rotating "
+        "again returns a 180-degree print to upside-down."
+    )
