@@ -369,7 +369,6 @@ class TestCleanupOrphanedTimelapseSessions:
         )
 
         _active_sessions.clear()
-        printer_dir = tmp_path / "timelapse_frames" / "1"
 
         with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
             mock_settings.base_dir = tmp_path
@@ -433,3 +432,122 @@ class TestCleanupOrphanedTimelapseSessions:
             removed = cleanup_orphaned_timelapse_sessions()
 
         assert removed == 0
+
+    def test_spares_a_session_that_is_mid_stitch(self, tmp_path):
+        """on_print_complete drops the session from _active_sessions before it
+        hands frames_dir to ffmpeg, so for the length of a stitch (up to 300s)
+        the directory matches no active session. Its mtime is the last layer's
+        frame write, which on a tall print's final layer is easily older than
+        the age margin — and the margin's default IS the stitch timeout, so it
+        offers no headroom here. _finalizing_sessions covers that window."""
+        import os
+
+        from backend.app.services.layer_timelapse import (
+            TimelapseSession,
+            _active_sessions,
+            _finalizing_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        _finalizing_sessions.clear()
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            session = TimelapseSession(1, 100, "/dev/video1", "usb")
+            (session.frames_dir / "layer_00001.jpg").write_bytes(b"x")
+            old = time.time() - 600
+            os.utime(session.frames_dir, (old, old))
+
+            # Exactly the state on_print_complete is in while ffmpeg runs.
+            _active_sessions.pop(1, None)
+            _finalizing_sessions[1] = session.session_id
+
+            removed = cleanup_orphaned_timelapse_sessions(min_age_seconds=300)
+
+        assert removed == 0
+        assert session.frames_dir.exists(), "ffmpeg's input was deleted mid-stitch"
+        _finalizing_sessions.clear()
+
+    @pytest.mark.asyncio
+    async def test_on_print_complete_clears_the_finalizing_marker(self, tmp_path):
+        """Including when the stitch fails — a leaked marker would make the
+        sweep skip that printer's leftovers forever."""
+        from backend.app.services.layer_timelapse import (
+            TimelapseSession,
+            _active_sessions,
+            _finalizing_sessions,
+            on_print_complete,
+        )
+
+        _active_sessions.clear()
+        _finalizing_sessions.clear()
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            session = TimelapseSession(1, 100, "/dev/video1", "usb")
+            session.frame_count = 3
+            _active_sessions[1] = session
+
+            with patch.object(TimelapseSession, "stitch", AsyncMock(side_effect=RuntimeError("ffmpeg died"))):
+                result = await on_print_complete(1)
+
+        assert result is None
+        assert 1 not in _finalizing_sessions
+
+    def test_leaves_unrelated_files_alone(self, tmp_path):
+        """Only this module's own artifacts are swept. A file that is neither a
+        session directory nor timelapse_<id>.mp4 was put there by something
+        else, and age is not a reason to delete it."""
+        from backend.app.services.layer_timelapse import (
+            _active_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        printer_dir = tmp_path / "timelapse_frames" / "1"
+        printer_dir.mkdir(parents=True)
+        stranger = printer_dir / "notes.txt"
+        self._touch_old(stranger)
+        self._touch_old(printer_dir / "timelapse_20260101_000000.mp4")
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            removed = cleanup_orphaned_timelapse_sessions(min_age_seconds=300)
+
+        assert removed == 1
+        assert stranger.exists()
+        assert not (printer_dir / "timelapse_20260101_000000.mp4").exists()
+
+    def test_a_removal_that_fails_is_not_counted_as_removed(self, tmp_path):
+        """The count and the log line are the only evidence an operator has of
+        what was deleted, so a failed rmtree must not be reported as a success.
+
+        The stub honours rmtree's real contract — ignore_errors=True swallows
+        the failure and returns normally — because that is the whole point: a
+        caller passing it gets a silent no-op that the surrounding
+        ``except OSError`` can never see, and would still count and log the
+        directory as removed. A stub that raised unconditionally would pass
+        either way and prove nothing.
+        """
+        from backend.app.services.layer_timelapse import (
+            _active_sessions,
+            cleanup_orphaned_timelapse_sessions,
+        )
+
+        _active_sessions.clear()
+        printer_dir = tmp_path / "timelapse_frames" / "1"
+        self._mkdir_old(printer_dir / "20260101_000000")
+
+        def rmtree_on_read_only_fs(path, ignore_errors=False, **kwargs):
+            if ignore_errors:
+                return  # silently does nothing, exactly like the real thing
+            raise OSError("read-only fs")
+
+        with patch("backend.app.services.layer_timelapse.settings") as mock_settings:
+            mock_settings.base_dir = tmp_path
+            with patch("backend.app.services.layer_timelapse.shutil.rmtree", rmtree_on_read_only_fs):
+                removed = cleanup_orphaned_timelapse_sessions(min_age_seconds=300)
+
+        assert removed == 0, "a directory that is still on disk was reported as removed"
+        assert (printer_dir / "20260101_000000").exists()

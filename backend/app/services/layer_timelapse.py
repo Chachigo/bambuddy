@@ -19,6 +19,15 @@ logger = logging.getLogger(__name__)
 # Active timelapse sessions: {printer_id: TimelapseSession}
 _active_sessions: dict[int, "TimelapseSession"] = {}
 
+# Sessions whose frames are being stitched right now: {printer_id: session_id}.
+# on_print_complete removes the session from _active_sessions *before* handing
+# frames_dir to ffmpeg, so for the length of a stitch (up to 300s) nothing in
+# _active_sessions marks that directory as in use. Without this second registry
+# the only thing standing between an in-progress stitch and
+# cleanup_orphaned_timelapse_sessions() is the age margin — whose default is
+# exactly the stitch timeout, so there is no headroom at all.
+_finalizing_sessions: dict[int, str] = {}
+
 
 def get_ffmpeg_path() -> str | None:
     """Get the path to ffmpeg executable."""
@@ -274,6 +283,12 @@ async def on_print_complete(printer_id: int) -> Path | None:
     # Create output path in parent of frames dir
     output_path = session.frames_dir.parent / f"timelapse_{session.session_id}.mp4"
 
+    # The session is already out of _active_sessions, so mark it finalizing for
+    # the length of the stitch — otherwise a sweep running now sees a frames
+    # directory that matches no session and whose mtime is the last layer's
+    # write, which on a tall print's final layer is easily older than the age
+    # margin, and deletes ffmpeg's input from under it.
+    _finalizing_sessions[printer_id] = session.session_id
     try:
         success = await session.stitch(output_path)
         if success:
@@ -287,6 +302,8 @@ async def on_print_complete(printer_id: int) -> Path | None:
         logger.error("Timelapse completion failed: %s", e)
         session.cleanup()
         return None
+    finally:
+        _finalizing_sessions.pop(printer_id, None)
 
 
 def cancel_session(printer_id: int):
@@ -322,8 +339,21 @@ def cleanup_orphaned_timelapse_sessions(min_age_seconds: float = 300) -> int:
     process - and a restart-recovered print doesn't get a new timelapse
     session either (`_maybe_start_layer_timelapse` is only wired into fresh
     PRINT_START events, see #1353), so an orphaned directory can never be
-    resumed. `min_age_seconds` is just a defensive margin against reordering
-    if this is ever also called mid-run.
+    resumed.
+
+    Also safe to call mid-run, which needs all three guards rather than the
+    age margin alone:
+
+    * `_active_sessions` covers a session that is still capturing.
+    * `_finalizing_sessions` covers the stitch window. on_print_complete drops
+      the session from `_active_sessions` before handing frames_dir to ffmpeg,
+      so without this the directory matches no session for up to 300s while
+      being actively read.
+    * `min_age_seconds` covers the remaining gap - a session in the middle of
+      being created, and the stitched `.mp4` between ffmpeg finishing it and
+      the caller attaching and unlinking it. Both are freshly written, so the
+      margin has real headroom there; it did NOT have any for the stitch
+      window, whose length is bounded by the same 300s.
 
     Returns the number of orphaned directories/files removed.
     """
@@ -342,14 +372,24 @@ def cleanup_orphaned_timelapse_sessions(min_age_seconds: float = 300) -> int:
             continue
 
         active_session = _active_sessions.get(printer_id)
-        active_session_id = active_session.session_id if active_session else None
+        in_use_session_ids = {
+            active_session.session_id if active_session else None,
+            _finalizing_sessions.get(printer_id),
+        } - {None}
 
         for entry in printer_dir.iterdir():
             # Frame dirs are named "<session_id>/"; stitched-but-not-yet-
             # attached output files are "timelapse_<session_id>.mp4" (see
-            # on_print_complete's output_path).
-            entry_session_id = entry.name.removeprefix("timelapse_").removesuffix(".mp4") if entry.is_file() else entry.name
-            if entry_session_id == active_session_id:
+            # on_print_complete's output_path). Anything else under here was
+            # not written by this module, so leave it alone rather than
+            # deleting a file on the strength of its age.
+            if entry.is_dir():
+                entry_session_id = entry.name
+            elif entry.name.startswith("timelapse_") and entry.name.endswith(".mp4"):
+                entry_session_id = entry.name[len("timelapse_") : -len(".mp4")]
+            else:
+                continue
+            if entry_session_id in in_use_session_ids:
                 continue
             try:
                 if now - entry.stat().st_mtime < min_age_seconds:
@@ -357,8 +397,11 @@ def cleanup_orphaned_timelapse_sessions(min_age_seconds: float = 300) -> int:
             except OSError:
                 continue
             try:
+                # No ignore_errors: it would swallow a failed removal while the
+                # count and the log line below still claimed success, and that
+                # log is the only evidence an operator has of what was deleted.
                 if entry.is_dir():
-                    shutil.rmtree(entry, ignore_errors=True)
+                    shutil.rmtree(entry)
                 else:
                     entry.unlink(missing_ok=True)
                 removed += 1
