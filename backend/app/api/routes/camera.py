@@ -5,6 +5,8 @@ import logging
 import os
 import subprocess
 import sys
+import time
+import uuid
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -207,8 +209,6 @@ async def generate_chamber_mjpeg_stream(
 
             # Save frame to buffer for photo capture and track timestamp
             if printer_id is not None:
-                import time
-
                 _last_frames[printer_id] = frame
                 _last_frame_times[printer_id] = time.time()
 
@@ -240,10 +240,7 @@ async def generate_chamber_mjpeg_stream(
             _stream_last_frame_times.pop(stream_id, None)
 
         # Clean up frame buffer and timestamps
-        if printer_id is not None:
-            _last_frames.pop(printer_id, None)
-            _last_frame_times.pop(printer_id, None)
-            _stream_start_times.pop(printer_id, None)
+        _release_printer_frame_state(printer_id)
 
         # Close the connection
         try:
@@ -252,6 +249,44 @@ async def generate_chamber_mjpeg_stream(
         except OSError:
             pass  # Connection already closed or broken; cleanup is best-effort
         logger.info("Chamber image stream stopped for %s (stream_id=%s)", ip_address, stream_id)
+
+
+def _new_fanout_stream_id(printer_id: int) -> str:
+    """Registry key for one fan-out stream INSTANCE, not for the printer.
+
+    A plain ``f"{printer_id}-fanout"`` meant every successive stream for a
+    printer shared one key, so a departing generator's cleanup removed the entry
+    its successor had just registered. The external-camera path already carries a
+    per-instance suffix for exactly this reason (#2675); this gives the fan-out
+    path the same property.
+
+    The ``f"{printer_id}-"`` prefix is load-bearing — ``is_stream_active``,
+    ``stop_camera_stream`` and ``/camera/status`` all find a printer's streams by
+    scanning for it — so the suffix goes on the end.
+    """
+    return f"{printer_id}-fanout-{uuid.uuid4().hex[:8]}"
+
+
+def _release_printer_frame_state(printer_id: int | None) -> None:
+    """Drop a printer's buffered frame and timings — unless a stream still owns them.
+
+    These three dicts are keyed by printer, not by stream, so a departing
+    generator must not clear them while a newer stream for the same printer is
+    running. That used to happen routinely: stream ids were per-printer, so a
+    predecessor's cleanup wiped its successor's state, leaving
+    ``is_stream_active()`` False with a viewer attached (which is exactly what
+    the #1348 / #1271 guards read before deciding whether it is safe to open a
+    second camera connection), the janitor free to reap the live ffmpeg as an
+    orphan, and snapshots without a frame to reuse.
+
+    Call this AFTER removing the departing stream's own key, so the check
+    reports on other streams rather than on the caller.
+    """
+    if printer_id is None or is_stream_active(printer_id):
+        return
+    _last_frames.pop(printer_id, None)
+    _last_frame_times.pop(printer_id, None)
+    _stream_start_times.pop(printer_id, None)
 
 
 async def _drain_pipe(reader) -> None:
@@ -597,8 +632,6 @@ async def generate_rtsp_mjpeg_stream(
                         got_any_frames = True
 
                         if printer_id is not None:
-                            import time
-
                             _last_frames[printer_id] = frame
                             _last_frame_times[printer_id] = time.time()
                             if stream_id:
@@ -671,10 +704,7 @@ async def generate_rtsp_mjpeg_stream(
             _stream_last_frame_times.pop(stream_id, None)
 
         # Clean up frame buffer and timestamps
-        if printer_id is not None:
-            _last_frames.pop(printer_id, None)
-            _last_frame_times.pop(printer_id, None)
-            _stream_start_times.pop(printer_id, None)
+        _release_printer_frame_state(printer_id)
 
         if process:
             await _terminate_ffmpeg(process, stream_id)
@@ -739,9 +769,11 @@ async def camera_stream(
 
     # Check for external camera first
     if printer.external_camera_enabled and printer.external_camera_url:
-        import time
-        import uuid
-
+        # NB: no `import time` / `import uuid` here, and don't reintroduce them.
+        # A local import anywhere in this function makes the name function-local
+        # for the WHOLE function, so the RTSP/chamber path below — which never
+        # executes this branch — would raise UnboundLocalError on any printer
+        # without an external camera. Both are imported at module level.
         from backend.app.services.external_camera import generate_mjpeg_stream
 
         # Limit external camera FPS to reduce browser load
@@ -836,8 +868,6 @@ async def camera_stream(
     # attached — otherwise /camera/status would report stream_uptime jumping
     # backward whenever a second viewer joins. The upstream generator's
     # finally clears this entry when the upstream actually ends.
-    import time
-
     _stream_start_times.setdefault(printer_id, time.time())
 
     # Fan-out broadcaster (#1089): one upstream connection per printer, shared
@@ -850,7 +880,7 @@ async def camera_stream(
     # broadcaster. Concurrent viewers share that rate; new viewers after
     # teardown create a fresh broadcaster at their requested fps.
     fanout_key = f"printer-{printer_id}"
-    upstream_stream_id = f"{printer_id}-fanout"
+    upstream_stream_id = _new_fanout_stream_id(printer_id)
 
     def _factory(disconnect_event: asyncio.Event):
         # Re-bind locals into the closure so the async generator below sees
