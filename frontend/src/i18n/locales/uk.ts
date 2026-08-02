@@ -2457,6 +2457,8 @@ export default {
     styleGlow: "Світіння",
     styleVibrant: "Яскравий",
     themeToggleHint: "Перемикайтеся між темним, світлим і системним режимами за допомогою значка на бічній панелі.",
+    progressInTitle: "Прогрес у вкладці",
+    progressInTitleDescription: "Показує відсоток активного друку та кільце прогресу на вкладці браузера.",
     // Archive
     autoArchivePrints: "Автоматично архівувати друки",
     autoArchiveDescription: "Автоматично зберігати файли 3MF після завершення друку",

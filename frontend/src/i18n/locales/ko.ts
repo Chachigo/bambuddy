@@ -2308,6 +2308,8 @@ export default {
     styleGlow: '글로우',
     styleVibrant: '비브런트',
     themeToggleHint: '사이드바의 태양/달 아이콘으로 다크 모드와 라이트 모드를 전환하세요.',
+    progressInTitle: '탭에 인쇄 진행률 표시',
+    progressInTitleDescription: '브라우저 탭에 진행 중인 인쇄의 백분율과 진행 링을 표시합니다.',
     autoArchivePrints: '인쇄 자동 아카이브',
     autoArchiveDescription: '인쇄 완료 시 3MF 파일 자동 저장',
     saveThumbnailsDescription: '3MF 파일에서 미리보기 이미지 추출 및 저장',

@@ -2457,6 +2457,8 @@ export default {
     styleGlow: 'Glow',
     styleVibrant: 'Vibrant',
     themeToggleHint: 'Toggle between dark, light, and system mode using the icon in the sidebar.',
+    progressInTitle: 'Print progress in tab',
+    progressInTitleDescription: 'Show the active print\'s percentage and a progress ring in the browser tab.',
     // Archive
     autoArchivePrints: 'Auto-archive prints',
     autoArchiveDescription: 'Automatically save 3MF files when prints complete',

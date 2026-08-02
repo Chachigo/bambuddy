@@ -2442,6 +2442,8 @@ export default {
     styleGlow: 'Parıltı',
     styleVibrant: 'Canlı',
     themeToggleHint: 'Kenar çubuğundaki güneş/ay simgesini kullanarak koyu ve açık mod arasında geçiş yapın.',
+    progressInTitle: 'Sekmede baskı ilerlemesi',
+    progressInTitleDescription: 'Tarayıcı sekmesinde etkin baskının yüzdesini ve bir ilerleme halkası gösterir.',
     // Arşiv
     autoArchivePrints: 'Baskıları otomatik arşivle',
     autoArchiveDescription: 'Baskılar tamamlandığında 3MF dosyalarını otomatik olarak kaydet',
