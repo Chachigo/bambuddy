@@ -736,6 +736,12 @@ class BambuMQTTClient:
         # and the FINISH-state fallback don't both fire on the same
         # print. Reset to False on every print start.
         self._finish_photo_captured: bool = False
+        # #2702: one-shot re-request of the layer total. Armed at print start
+        # when the starting frame carried no `total_layer_num`, spent on the
+        # first layer advance that still has no denominator. Bambu firmware
+        # only re-sends *changed* fields, so a total we never received (or
+        # dropped) is only recoverable via a full pushall.
+        self._total_layers_refresh_armed: bool = False
         # #2547 end-of-print telemetry probe state. `_armed` is cleared once the
         # window has run for a print so a late FINISH re-send can't reopen it.
         self._eop_probe_armed: bool = True
@@ -2993,6 +2999,29 @@ class BambuMQTTClient:
                     f"{self.state.mc_print_sub_stage} -> {new_sub_stage}"
                 )
             self.state.mc_print_sub_stage = new_sub_stage
+        # Positive `total_layer_num` carried by *this* frame, or 0. Read up
+        # front because three places below consult it and they run in an order
+        # that is not the order they read most naturally in: the layer-advance
+        # refresh (#2702) must not fire on a frame that already answers it, the
+        # apply step must ignore firmware-reset 0s (#1771), and the new-print
+        # reset must not discard a total that belongs to the starting print.
+        total_from_this_frame = 0
+        if "total_layer_num" in data:
+            try:
+                total_from_this_frame = max(int(data["total_layer_num"] or 0), 0)
+            except (TypeError, ValueError):
+                # Must not escape. `_on_message` catches only JSONDecodeError
+                # and paho is left at `suppress_exceptions = False`, so an
+                # exception raised here is re-raised on the network thread and
+                # takes the printer connection down over one unusable field.
+                # Treat it as "not reported": the refresh below then recovers
+                # the real total from a pushall.
+                logger.debug(
+                    "[%s] ignoring unusable total_layer_num: %r",
+                    self.serial_number,
+                    data["total_layer_num"],
+                )
+
         if "layer_num" in data:
             new_layer = int(data["layer_num"])
             old_layer = self.state.layer_num
@@ -3003,6 +3032,25 @@ class BambuMQTTClient:
             # Trigger layer change callback if layer increased
             if new_layer > old_layer and self.on_layer_change:
                 self.on_layer_change(new_layer)
+            # #2702: the print is demonstrably laying down layers but we still
+            # have no denominator, so the pushall requested at print start
+            # either went unanswered or raced the printer learning the total.
+            # Ask once more — by layer 1 the printer definitely knows it.
+            # One-shot: an unanswered pushall must not turn into a per-layer
+            # retry loop for the rest of the print.
+            if (
+                new_layer > old_layer
+                and self._total_layers_refresh_armed
+                and not self.state.total_layers
+                and not total_from_this_frame
+            ):
+                self._total_layers_refresh_armed = False
+                logger.debug(
+                    "[%s] layer %s with no total_layer_num — re-requesting full status",
+                    self.serial_number,
+                    new_layer,
+                )
+                self._request_push_all()
             # #1867 last-layer finish-photo trigger. A1 Mini (and other
             # firmware variants) skips `stg_cur=22`, so the fallback fires
             # at gcode_state=FINISH — which runs AFTER user End G-code
@@ -3032,15 +3080,12 @@ class BambuMQTTClient:
                         "timelapse_was_active": self._timelapse_during_print,
                     }
                 )
-        if "total_layer_num" in data:
-            # Some firmware (P1S observed) resets `total_layer_num` to 0 at
-            # print end — same shape as the `layer_num` reset guarded above.
-            # Preserve the last known good value so the usage-tracker split
-            # path (#1771) has a denominator that survives the reset frame.
-            # Explicit reset to 0 happens on print start (`_handle_print_start`).
-            new_total = int(data["total_layer_num"])
-            if new_total > 0:
-                self.state.total_layers = new_total
+        if total_from_this_frame:
+            # Firmware (P1S observed) resets `total_layer_num` to 0 at print
+            # end — same shape as the `layer_num` reset guarded above. Applying
+            # only positive values preserves the last known good denominator so
+            # the usage-tracker split path (#1771) survives the reset frame.
+            self.state.total_layers = total_from_this_frame
 
         # Fan speeds (MQTT sends as string "0"-"15" representing speed levels, or percentage)
         # Convert to 0-100 percentage for display
@@ -4152,11 +4197,29 @@ class BambuMQTTClient:
             # Reset layer tracking for new print (needed for layer-based timelapse)
             self.state.layer_num = 0
             # Reset total_layers so the previous print's value can't bleed into
-            # this print's usage-tracker split before the new push_status arrives
-            # with the slicer's total (#1771 follow-on to the preservation guard
-            # above at line ~2135 — the guard now ignores firmware-reset 0s, so
-            # the explicit reset has to happen here instead).
-            self.state.total_layers = 0
+            # this print's usage-tracker split (#1771 follow-on to the
+            # preservation guard at the `total_layer_num` parse above — that
+            # guard ignores firmware-reset 0s, so the explicit reset has to
+            # happen here instead).
+            #
+            # #2702: reset to *this frame's* total, not to 0. The frame that
+            # trips the new-print detection can carry the new print's
+            # `total_layer_num` as well — the parse above has already applied
+            # it, and zeroing unconditionally threw it away. That looked
+            # harmless but is not recoverable: Bambu firmware sends only
+            # changed fields, so the printer never offers the total again, and
+            # the print runs to completion at `n/0` in the UI, in
+            # `{total_layers}` notifications, and as the usage-split
+            # denominator. The value only reappears on the next full pushall
+            # (reconnect / Force Refresh), which is why the symptom looked
+            # random and why a *stable* connection made it worse.
+            self.state.total_layers = total_from_this_frame
+            # If the starting frame brought no total, ask for one. Costs one
+            # MQTT message per print and covers the ordering where the printer
+            # published the total a frame or two before the state flip.
+            self._total_layers_refresh_armed = not total_from_this_frame
+            if self._total_layers_refresh_armed:
+                self._request_push_all()
             # Reset completion tracking for new print
             self._was_running = True
             self._completion_triggered = False

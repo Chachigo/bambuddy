@@ -1227,6 +1227,35 @@ def _redact_raw_push_status(raw: dict) -> dict:
     return out
 
 
+def _sanitize_push_status_values(node, sensitive_strings: dict[str, str]):
+    """Sanitize a push_status snapshot's string *values*, never its JSON text.
+
+    This used to run :func:`sanitize_log_content` over the serialised snapshot.
+    That pass includes a generic Bambu-serial regex
+    (``0[0-3][A-Z0-9][A-Z0-9]{9,13}`` in ``log_reader``) which matches the
+    decimal expansion of a float just as happily as a serial: an AMS ``k`` flow
+    factor of ``0.0199999995529652`` came out as ``0.[SERIAL]``, and the bundle
+    shipped invalid JSON — unusable for exactly the ground-truth purpose the
+    snapshot exists for (found while diagnosing #2702).
+
+    Walking the structure instead leaves numbers, bools and None untouched, so
+    the output always parses. Keys are structural and never rewritten.
+    """
+    if isinstance(node, str):
+        return sanitize_log_content(node, sensitive_strings)
+    if isinstance(node, dict):
+        return {k: _sanitize_push_status_values(v, sensitive_strings) for k, v in node.items()}
+    if isinstance(node, list | tuple):
+        # Tuples too: `json.dumps` renders them as arrays, so stringifying one
+        # here would change the file's shape rather than just its content.
+        return [_sanitize_push_status_values(v, sensitive_strings) for v in node]
+    if node is None or isinstance(node, bool | int | float):
+        return node
+    # Anything else (datetime, Decimal, …) would be stringified by json.dumps'
+    # ``default=str`` *after* this pass and so escape sanitisation entirely.
+    return sanitize_log_content(str(node), sensitive_strings)
+
+
 async def _get_recent_sanitized_logs(max_lines: int = 200) -> str:
     """Get recent log lines, sanitized for inclusion in bug reports."""
     # Collect sensitive strings from DB for redaction
@@ -1300,12 +1329,13 @@ async def generate_support_bundle(
                 "captured_at": datetime.now(timezone.utc).isoformat(),
                 "raw_data": redacted,
             }
-            # Belt-and-suspenders: pass the JSON text through the string-based
-            # sanitizer so any user-named string (printer name, serial baked
-            # into a tray uuid) the structural pass missed still gets caught.
-            snapshot_json = json.dumps(snapshot, indent=2, default=str)
-            snapshot_json = sanitize_log_content(snapshot_json, sensitive_strings)
-            zf.writestr(f"push-status/printer-{i + 1}.json", snapshot_json)
+            # Belt-and-suspenders: pass every string value through the
+            # string-based sanitizer so any user-named string (printer name,
+            # serial baked into a tray uuid) the structural pass missed still
+            # gets caught. Values only — sanitizing the serialised JSON text
+            # corrupted numeric literals (see _sanitize_push_status_values).
+            snapshot = _sanitize_push_status_values(snapshot, sensitive_strings)
+            zf.writestr(f"push-status/printer-{i + 1}.json", json.dumps(snapshot, indent=2, default=str))
 
         # Add log file
         # Off the event loop: this reads up to 10 MB and then runs one full regex
