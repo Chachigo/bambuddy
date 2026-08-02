@@ -3208,6 +3208,11 @@ async def set_fan_speed(
     profile gcode does. It only exists when the printer reports airduct part 10,
     so the request is rejected rather than sending M106 P10 into the void on a
     machine that has no such fan.
+
+    That gate also rejects for the short window between connecting and the
+    first airduct push, when nothing is known about the fan yet. The card hides
+    the badge over the same window, so there is no control to click; a direct
+    API caller gets a 400 and should retry once the status reports the fan.
     """
     fan_ids = {"part": 1, "aux": 2, "chamber": 3, "aux2": 10}
     fan_id = fan_ids.get(fan)

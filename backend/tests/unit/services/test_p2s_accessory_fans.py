@@ -190,6 +190,91 @@ class TestExhaustFanPresence:
         assert mqtt_client.state.exhaust_fan_present is True
 
 
+class TestPartialPartsFrames:
+    """A `parts` list that is not a full inventory must not retract presence.
+
+    `device.airduct` is pushed field by field — the `modeCur` handler reads it
+    with an `in` check for exactly that reason — so a frame can carry `parts`
+    without carrying every fan. Absence is what tells us a kit is not fitted, so
+    it is only trustworthy on a complete list. Read as gospel, a truncated frame
+    would make both accessory badges vanish mid-print and start rejecting
+    ``fan=aux2`` on a printer that does have the fan.
+
+    Completeness is judged on ids 1 (part cooling) and 2 (aux) being present:
+    neither is optional on any machine that reports an airduct at all, and both
+    appear in every layout in the support-package archive (P2S base 1,2 /
+    P2S+kit 1,2,3 / X2D 1,2,3,10 / H2C,H2D,H2S 1,2,3,6).
+    """
+
+    def test_partial_frame_does_not_retract_the_left_aux_fan(self, mqtt_client):
+        mqtt_client._update_state(_airduct_device(P2S_PARTS_LEFT_AUX_80))
+        assert mqtt_client.state.left_aux_fan_speed == 80
+
+        # Only the part cooling fan changed — the frame says nothing about the
+        # left aux fan, which is not the same as saying it is gone.
+        mqtt_client._update_state(
+            _airduct_device([{"func": 0, "id": 16, "range": 6553600, "state": 70, "tar_state": 70}])
+        )
+
+        assert mqtt_client.state.left_aux_fan_speed == 80
+
+    def test_partial_frame_does_not_retract_the_exhaust_fan(self, mqtt_client):
+        mqtt_client._update_state(_airduct_device(P2S_PARTS_LEFT_AUX_80))
+        assert mqtt_client.state.exhaust_fan_present is True
+
+        mqtt_client._update_state(
+            _airduct_device([{"func": 0, "id": 16, "range": 6553600, "state": 70, "tar_state": 70}])
+        )
+
+        assert mqtt_client.state.exhaust_fan_present is True
+
+    def test_a_partial_frame_still_applies_the_speed_it_carries(self, mqtt_client):
+        """Not-authoritative-for-absence is not the same as ignored."""
+        mqtt_client._update_state(_airduct_device(P2S_PARTS_LEFT_AUX_80))
+        assert mqtt_client.state.left_aux_fan_speed == 80
+
+        mqtt_client._update_state(
+            _airduct_device([{"func": 5, "id": 160, "range": 6553600, "state": 25, "tar_state": 25}])
+        )
+
+        assert mqtt_client.state.left_aux_fan_speed == 25
+
+    def test_a_partial_frame_can_still_reveal_a_fan(self, mqtt_client):
+        """Presence may always be added — only retraction needs a full list."""
+        mqtt_client._update_state(
+            _airduct_device([{"func": 2, "id": 48, "range": 6553600, "state": 70, "tar_state": 70}])
+        )
+
+        assert mqtt_client.state.exhaust_fan_present is True
+
+    def test_a_full_frame_still_retracts_both(self, mqtt_client):
+        """The kits really can be removed, and a complete list must say so —
+        this is the behaviour the presence gate exists for."""
+        mqtt_client._update_state(_airduct_device(P2S_PARTS_LEFT_AUX_80))
+        assert mqtt_client.state.left_aux_fan_speed == 80
+        assert mqtt_client.state.exhaust_fan_present is True
+
+        # Base P2S layout: part cooling + aux only.
+        mqtt_client._update_state(
+            _airduct_device(
+                [
+                    {"func": 0, "id": 16, "range": 6553600, "state": 0, "tar_state": 0},
+                    {"func": 6, "id": 32, "range": 6553600, "state": 0, "tar_state": 0},
+                ]
+            )
+        )
+
+        assert mqtt_client.state.left_aux_fan_speed is None
+        assert mqtt_client.state.exhaust_fan_present is False
+
+    def test_an_empty_parts_list_changes_nothing(self, mqtt_client):
+        mqtt_client._update_state(_airduct_device(P2S_PARTS_LEFT_AUX_80))
+        mqtt_client._update_state(_airduct_device([]))
+
+        assert mqtt_client.state.left_aux_fan_speed == 80
+        assert mqtt_client.state.exhaust_fan_present is True
+
+
 class TestLeftAuxFanCommand:
     """set_fan_speed must accept index 10 and emit M106 P10."""
 

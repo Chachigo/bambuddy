@@ -3552,8 +3552,7 @@ class BambuMQTTClient:
                 # `state` is already a 0-100 percentage.
                 parts = airduct_data.get("parts")
                 if isinstance(parts, list):
-                    left_aux_speed = None
-                    exhaust_present = False
+                    speeds: dict[int, int] = {}
                     for part in parts:
                         if not isinstance(part, dict):
                             continue
@@ -3576,20 +3575,45 @@ class BambuMQTTClient:
                         # Ids seen across the support-package archive:
                         #   1 part cooling, 2 aux, 3 chamber/exhaust,
                         #   6 (H2 series, unmapped), 10 left aux.
-                        if part_id == 10:
-                            left_aux_speed = max(0, min(100, part_state))
-                        elif part_id == 3:
-                            exhaust_present = True
+                        speeds[part_id] = max(0, min(100, part_state))
+
+                    # Absence in this list is what tells us a kit is NOT fitted,
+                    # so it may only be trusted when the list is a full
+                    # inventory rather than a diff frame. `device.airduct` is
+                    # pushed field by field — the `modeCur` handler above exists
+                    # for exactly that reason — and a truncated `parts` read as
+                    # gospel would retract both accessory badges mid-print and
+                    # start rejecting `aux2` on a printer that has the fan.
+                    #
+                    # Every airduct layout in the support-package archive
+                    # (P2S base 1,2 / P2S+kit 1,2,3 / X2D 1,2,3,10 /
+                    # H2C,H2D,H2S 1,2,3,6 — 37 of 37 bundles) contains both the
+                    # part cooling fan and the aux fan, neither of which is
+                    # optional on any machine that reports an airduct at all.
+                    # A list carrying both is therefore a complete inventory; a
+                    # list missing either is a partial frame, and we take its
+                    # speeds without touching presence.
+                    is_full_inventory = 1 in speeds and 2 in speeds
+
+                    left_aux_speed = speeds.get(10)
+                    if left_aux_speed is None and not is_full_inventory:
+                        # Partial frame that didn't mention the left aux fan —
+                        # keep whatever we already knew about it.
+                        left_aux_speed = self.state.left_aux_fan_speed
                     if left_aux_speed != self.state.left_aux_fan_speed:
                         logger.debug(
                             f"[{self.serial_number}] left_aux_fan_speed changed: "
                             f"{self.state.left_aux_fan_speed} -> {left_aux_speed}"
                         )
-                    # A full parts list without id 10 means the left aux fan is not
-                    # installed — report None so the UI can hide the widget.
+                    # A FULL parts list without id 10 means the left aux fan is
+                    # not installed — report None so the UI can hide the widget.
                     self.state.left_aux_fan_speed = left_aux_speed
-                    # id 3 present == chamber exhaust fan installed (base P2S omits it).
-                    self.state.exhaust_fan_present = exhaust_present
+                    # id 3 present == chamber exhaust fan installed (base P2S
+                    # omits it). Only ever retracted on a full inventory.
+                    if 3 in speeds:
+                        self.state.exhaust_fan_present = True
+                    elif is_full_inventory:
+                        self.state.exhaust_fan_present = False
                 # Parse chamber temp - may be encoded as (target*65536+current) when > 500
                 # Check if we recently set the target locally (within 5 seconds)
                 local_set_time = self.state.temperatures.get("_chamber_target_set_time", 0)

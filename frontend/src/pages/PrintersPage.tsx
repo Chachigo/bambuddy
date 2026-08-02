@@ -3908,7 +3908,13 @@ function PrinterCard({
               const chamberFanLabel = isExhaustModel
                 ? t('printers.fans.exhaust')
                 : t('printers.fans.chamber');
-              const showChamberFan = isExhaustModel ? status.exhaust_fan_present : hasChamberFan;
+              // Composed rather than either/or so both lists stay live for
+              // P2S/X2D: the model must have an enclosure fan at all, AND —
+              // where that fan is an add-on kit — actually report it. Written
+              // as `isExhaustModel ? exhaust_fan_present : hasChamberFan` the
+              // P2S/X2D entries in MODELS_WITH_CHAMBER_FAN became unreachable,
+              // which reads as if removing them were safe.
+              const showChamberFan = hasChamberFan && (!isExhaustModel || status.exhaust_fan_present);
               const fanItems: {
                 key: string;
                 label: string;
