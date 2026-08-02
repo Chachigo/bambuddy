@@ -5350,6 +5350,7 @@ async def on_print_complete(printer_id: int, data: dict):
                         )
                 cached_frame = _stage22_finish_frames.pop(printer_id, None)
                 if cached_frame:
+                    cached_frame = _apply_camera_rotation(cached_frame, printer, logger)
                     photos_dir = archive_dir / "photos"
                     photos_dir.mkdir(parents=True, exist_ok=True)
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -5384,6 +5385,7 @@ async def on_print_complete(printer_id: int, data: dict):
                             snapshot_url=printer.external_camera_snapshot_url,
                         )
                     if frame_data:
+                        frame_data = _apply_camera_rotation(frame_data, printer, logger)
                         photos_dir = archive_dir / "photos"
                         photos_dir.mkdir(parents=True, exist_ok=True)
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -5401,6 +5403,7 @@ async def on_print_complete(printer_id: int, data: dict):
                     if (active_for_printer or active_chamber_for_printer) and buffered_frame:
                         # Use frame from active stream
                         logger.info("[PHOTO-BG] Using buffered frame from active stream")
+                        buffered_frame = _apply_camera_rotation(buffered_frame, printer, logger)
                         photos_dir = archive_dir / "photos"
                         photos_dir.mkdir(parents=True, exist_ok=True)
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
