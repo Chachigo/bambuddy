@@ -5626,6 +5626,7 @@ export default {
     filteringFor: '필터링 중: {{material}}',
     noKProfile: 'K 프로필 없음 (기본값 0.020 사용)',
     noMatchingKProfiles: '일치하는 K 프로필을 찾을 수 없습니다. 기본값 K=0.020이 사용됩니다.',
+    otherKProfiles: '이 프린터의 다른 K 프로필',
     selectFilamentFirst: '먼저 필라멘트 프로필을 선택하세요',
     kFromCalibration: 'K={{value}} (프린터 보정에서)',
     customColorLabel: '사용자 지정 색상 (선택사항)',

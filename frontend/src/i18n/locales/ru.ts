@@ -5613,6 +5613,7 @@ export default {
     filteringFor: "Фильтр по материалу: {{material}}",
     noKProfile: "Без K-профиля (стандартное значение 0,020)",
     noMatchingKProfiles: "Подходящие K-профили не найдены. Будет использовано стандартное значение K=0,020.",
+    otherKProfiles: "Другие K-профили на этом принтере",
     selectFilamentFirst: "Сначала выберите профиль филамента",
     kFromCalibration: "K={{value}} из калибровки принтера",
     customColorLabel: "Пользовательский цвет (необязательно)",

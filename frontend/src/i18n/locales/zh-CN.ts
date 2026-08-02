@@ -5923,6 +5923,7 @@ export default {
     filteringFor: '筛选：{{material}}',
     noKProfile: '无 K 值配置（使用默认值 0.020）',
     noMatchingKProfiles: '未找到匹配的 K 值配置。将使用默认 K=0.020。',
+    otherKProfiles: '此打印机上的其他 K 值配置',
     selectFilamentFirst: '请先选择耗材配置',
     kFromCalibration: 'K={{value}}（来自打印机校准）',
     customColorLabel: '自定义颜色（可选）',

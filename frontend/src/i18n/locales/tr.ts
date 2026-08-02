@@ -5880,6 +5880,7 @@ export default {
     filteringFor: 'Şu için filtreleniyor: {{material}}',
     noKProfile: 'K profili yok (varsayılan 0.020 kullan)',
     noMatchingKProfiles: 'Eşleşen K profili bulunamadı. Varsayılan K=0.020 kullanılacak.',
+    otherKProfiles: 'Bu yazıcıdaki diğer K profilleri',
     selectFilamentFirst: 'Önce bir filament profili seçin',
     kFromCalibration: 'Yazıcı kalibrasyonundan K={{value}}',
     customColorLabel: 'Özel Renk (isteğe bağlı)',

@@ -5925,6 +5925,7 @@ export default {
     filteringFor: 'Filtrage pour : {{material}}',
     noKProfile: 'Pas de profil K (utiliser défaut 0.020)',
     noMatchingKProfiles: 'Aucun profil K trouvé. K=0.020 par défaut sera utilisé.',
+    otherKProfiles: 'Autres profils K sur cette imprimante',
     selectFilamentFirst: 'Sélectionnez d\'abord un profil filament',
     kFromCalibration: 'K={{value}} de la calibration imprimante',
     customColorLabel: 'Couleur personnalisée (optionnel)',

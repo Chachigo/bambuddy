@@ -5979,6 +5979,7 @@ export default {
     filteringFor: "Фільтрування за: {{material}}",
     noKProfile: "Немає профілю K (використовуйте значення за замовчуванням 0,020)",
     noMatchingKProfiles: "Не знайдено відповідних K профілів. Використовуватиметься K=0,020 за замовчуванням.",
+    otherKProfiles: "Інші K-профілі на цьому принтері",
     selectFilamentFirst: "Спочатку виберіть профіль філаменту",
     kFromCalibration: "K={{value}} від калібрування принтера",
     customColorLabel: "Власний колір (необов’язково)",
