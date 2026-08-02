@@ -44,6 +44,8 @@ def _state() -> SimpleNamespace:
         big_fan1_speed=0,
         big_fan2_speed=0,
         heatbreak_fan_speed=0,
+        left_aux_fan_speed=None,
+        exhaust_fan_present=False,
     )
 
 

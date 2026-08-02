@@ -247,3 +247,63 @@ class TestExhaustFanLabelModels:
         assert uses_exhaust_fan_label(None) is False
         assert uses_exhaust_fan_label("") is False
         assert uses_exhaust_fan_label("SomeFutureModel") is False
+
+
+class TestExhaustLabelModelListsAgree:
+    """The exhaust-label model list is duplicated across the stack.
+
+    The backend keeps ``EXHAUST_FAN_LABEL_MODELS`` (display names plus the N7/N6
+    internal codes, since the API can be handed either) and the frontend keeps
+    ``MODELS_WITH_EXHAUST_LABEL`` in PrintersPage.tsx (display names only —
+    ``printer.model`` is always a display name by the time it reaches the card).
+    Both are correct as written, but nothing stopped them drifting apart: adding
+    a model to one and forgetting the other silently produces a card labelled
+    "Exhaust" whose control toast says "Chamber fan", or vice versa.
+    """
+
+    def _frontend_models(self) -> set[str]:
+        import re
+        from pathlib import Path
+
+        import pytest
+
+        # Walk up rather than hard-coding a parent depth, so the test survives
+        # the file being moved and works whatever directory pytest runs from.
+        relative = Path("frontend") / "src" / "pages" / "PrintersPage.tsx"
+        source = next(
+            (candidate for parent in Path(__file__).resolve().parents if (candidate := parent / relative).is_file()),
+            None,
+        )
+        if source is None:
+            pytest.skip("frontend sources not present in this checkout")
+        text = source.read_text(encoding="utf-8")
+        match = re.search(
+            r"const MODELS_WITH_EXHAUST_LABEL:[^=]*=\s*new Set\(\[(.*?)\]\)",
+            text,
+            re.DOTALL,
+        )
+        assert match, "MODELS_WITH_EXHAUST_LABEL not found in PrintersPage.tsx"
+        return set(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
+
+    def test_frontend_list_is_the_display_name_subset_of_the_backend_list(self):
+        from backend.app.utils.printer_models import EXHAUST_FAN_LABEL_MODELS
+
+        frontend = self._frontend_models()
+        assert frontend, "frontend list parsed as empty"
+        missing = frontend - set(EXHAUST_FAN_LABEL_MODELS)
+        assert not missing, (
+            f"models {sorted(missing)} label the fan 'Exhaust' in the UI but the backend "
+            f"would report 'Chamber fan' — add them to EXHAUST_FAN_LABEL_MODELS"
+        )
+
+    def test_every_backend_display_name_is_handled_by_the_frontend(self):
+        from backend.app.utils.printer_models import EXHAUST_FAN_LABEL_MODELS
+
+        # N7/N6 are internal codes that never reach the card, so exclude them.
+        internal_codes = {"N7", "N6"}
+        backend_display = set(EXHAUST_FAN_LABEL_MODELS) - internal_codes
+        missing = backend_display - self._frontend_models()
+        assert not missing, (
+            f"models {sorted(missing)} say 'Exhaust fan' in the API response but the card "
+            f"would still show 'Chamber Fan' — add them to MODELS_WITH_EXHAUST_LABEL"
+        )

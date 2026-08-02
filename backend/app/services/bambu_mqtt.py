@@ -477,8 +477,15 @@ class PrinterState:
     # Studio's AIR_FUN enum) — the firmware does NOT mirror it into any flat
     # big_fanX_speed field, which is why it was previously dropped. 0-100 percent.
     left_aux_fan_speed: int | None = None
-    # Chamber exhaust fan (P2S/X2D External Exhaust Fan kit). Presence is derived
-    # from the airduct parts list containing decoded id 3; a base P2S omits it.
+    # Chamber exhaust fan, derived from the airduct parts list containing decoded
+    # id 3. On the P2S this is the External Exhaust Fan kit and a base machine
+    # omits it, which is the case this flag exists to detect.
+    #
+    # NOTE: the flag is not P2S/X2D-specific despite the name. The H2 series
+    # (H2C/H2D/H2S) also reports part 3, so this goes True there too. That is
+    # harmless because only the P2S/X2D badge consults it — those models keep
+    # their unconditional "Chamber Fan" badge — but do not read this as
+    # "an exhaust kit is fitted" without also checking the model.
     exhaust_fan_present: bool = False
     # Tray change history during current print: [(global_tray_id, layer_num), ...]
     # Used by usage tracker to split filament weight on mid-print tray switch
@@ -3488,7 +3495,12 @@ class BambuMQTTClient:
                         if not isinstance(part, dict):
                             continue
                         try:
-                            part_id = int(part["id"]) >> 4
+                            # Studio reads the id with get_flag_bits(id, 4, 8),
+                            # so mask after shifting for the same reason `state`
+                            # is masked below. Every id seen in the wild
+                            # (16/32/48/160) decodes identically either way —
+                            # this is consistency, not a live bug.
+                            part_id = (int(part["id"]) >> 4) & 0xFF
                             # `state` is bit-packed like its sibling `range`
                             # (end << 16 | start), so take only the low 8 bits —
                             # the same decode Bambu Studio does with
@@ -3498,6 +3510,9 @@ class BambuMQTTClient:
                             part_state = int(part["state"]) & 0xFF
                         except (KeyError, ValueError, TypeError):
                             continue
+                        # Ids seen across the support-package archive:
+                        #   1 part cooling, 2 aux, 3 chamber/exhaust,
+                        #   6 (H2 series, unmapped), 10 left aux.
                         if part_id == 10:
                             left_aux_speed = max(0, min(100, part_state))
                         elif part_id == 3:
