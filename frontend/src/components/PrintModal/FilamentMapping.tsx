@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Circle, Check, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Palette } from 'lucide-react';
@@ -38,34 +38,46 @@ export function FilamentMapping({
   // normal auto-match, without touching any *other* manual picks the user
   // made by hand.
   const [usingArchiveMapping, setUsingArchiveMapping] = useState(false);
+  // Which slot IDs the ON branch below actually wrote into manualMappings —
+  // so OFF can undo exactly those and leave any *other* manual pick the user
+  // made by hand (before or after pressing the button) untouched.
+  const appliedSlotIdsRef = useRef<number[]>([]);
 
   // Reset the toggle whenever the saved mapping it would apply changes — a
-  // different plate selection or a different archive entirely. Without this
-  // the button can read ON (green) from a previous archive/plate even though
-  // it was never pressed against the mapping currently in scope.
+  // different printer, plate selection, or archive entirely. Without this
+  // the button can read ON (green) from a previous printer/archive/plate
+  // even though it was never pressed against the mapping currently in scope.
   useEffect(() => {
     setUsingArchiveMapping(false);
-  }, [archiveAmsMapping, plateLabel]);
+    appliedSlotIdsRef.current = [];
+  }, [archiveAmsMapping, plateLabel, printerId]);
 
   const toggleArchiveMapping = () => {
     if (!archiveAmsMapping || !filamentReqs?.filaments) return;
     if (usingArchiveMapping) {
       const next = { ...manualMappings };
-      for (const req of filamentReqs.filaments) {
-        if (req.slot_id > 0) delete next[req.slot_id];
+      for (const slotId of appliedSlotIdsRef.current) {
+        delete next[slotId];
       }
       onManualMappingChange(next);
+      appliedSlotIdsRef.current = [];
       setUsingArchiveMapping(false);
       return;
     }
     const next = { ...manualMappings };
+    const appliedSlotIds: number[] = [];
     for (const req of filamentReqs.filaments) {
       const idx = req.slot_id - 1;
+      // A negative value (e.g. the external spool sentinel) means the
+      // slicer didn't resolve this filament to an AMS tray — leave that
+      // slot's existing auto-match/manual pick alone rather than clearing it.
       if (req.slot_id > 0 && idx >= 0 && idx < archiveAmsMapping.length && archiveAmsMapping[idx] >= 0) {
         next[req.slot_id] = archiveAmsMapping[idx];
+        appliedSlotIds.push(req.slot_id);
       }
     }
     onManualMappingChange(next);
+    appliedSlotIdsRef.current = appliedSlotIds;
     setUsingArchiveMapping(true);
   };
 

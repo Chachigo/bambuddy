@@ -1113,7 +1113,13 @@ function ArchiveCard({
         {/* Slicer's own saved AMS-slot pick (see "Save AMS mapping" VP setting) —
             a reprint reuses this exact physical spool instead of re-deriving
             one from the file's type/color. */}
-        {Array.isArray((archive.extra_data as Record<string, unknown> | null)?.slicer_ams_mapping) && (
+        {Array.isArray(
+          (
+            (archive.extra_data as Record<string, unknown> | null)?.slicer_ams_mapping as
+              | { mapping?: unknown }
+              | undefined
+          )?.mapping,
+        ) && (
           <div className="flex items-center gap-1.5 text-bambu-green text-xs mb-3" title={t('archives.card.slicerAmsMappingTooltip')}>
             <CheckCircle2 className="w-3.5 h-3.5" />
             {t('archives.card.slicerAmsMapping')}

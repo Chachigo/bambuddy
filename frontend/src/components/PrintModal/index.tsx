@@ -327,10 +327,21 @@ export function PrintModal({
 
   // The archive's own saved AMS-slot pick from the slicer (see the "Save AMS
   // mapping" virtual-printer setting) — undefined for library files or
-  // archives that predate the feature / had it off at print time.
-  const archiveSlicerAmsMapping = !isLibraryFile
-    ? (archiveDetails?.extra_data?.slicer_ams_mapping as number[] | undefined)
+  // archives that predate the feature / had it off at print time. Stored as
+  // `{mapping, printer_id}`: the tray IDs are only meaningful against the
+  // specific printer's AMS layout they were resolved from, so only surface
+  // them when reprinting on that same printer — a different printer's slot 3
+  // can hold a completely different spool.
+  const archiveSlicerAmsMappingRaw = !isLibraryFile
+    ? (archiveDetails?.extra_data?.slicer_ams_mapping as
+        | { mapping?: number[]; printer_id?: number }
+        | undefined)
     : undefined;
+  const archiveSlicerAmsMapping =
+    archiveSlicerAmsMappingRaw?.printer_id === effectivePrinterId &&
+    Array.isArray(archiveSlicerAmsMappingRaw.mapping)
+      ? archiveSlicerAmsMappingRaw.mapping
+      : undefined;
 
   // Fetch plates for archives
   const { data: archivePlatesData, isError: archivePlatesError } = useQuery({
@@ -1441,6 +1452,7 @@ export function PrintModal({
                   onForceColorMatchChange={(slotId, value) =>
                     setForceColorMatch((prev) => ({ ...prev, [slotId]: value }))
                   }
+                  archiveAmsMapping={archiveSlicerAmsMapping}
                 />
               );
             })}

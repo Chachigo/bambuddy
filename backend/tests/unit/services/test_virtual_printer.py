@@ -1880,6 +1880,7 @@ class TestVirtualPrinterInstance:
             base_dir=tmp_path,
             session_factory=mock_session_factory,
             save_ams_mapping=False,
+            target_printer_id=7,
         )
 
         file_path = tmp_path / "test.3mf"
@@ -1913,9 +1914,8 @@ class TestVirtualPrinterInstance:
         assert item.ams_mapping is not None
         assert _json.loads(item.ams_mapping) == [4, -1, 12, -1]
 
-        # Toggle is off: the archive's print_data must NOT carry the mapping.
-        print_data = mock_archive_print.await_args.kwargs["print_data"]
-        assert print_data["ams_mapping"] is None
+        # Toggle is off: archive_print must not be told to persist a mapping.
+        assert mock_archive_print.await_args.kwargs["slicer_ams_mapping"] is None
 
     @pytest.mark.asyncio
     async def test_add_to_print_queue_persists_ams_mapping_to_archive_when_toggle_on(self, tmp_path):
@@ -1948,6 +1948,7 @@ class TestVirtualPrinterInstance:
             base_dir=tmp_path,
             session_factory=mock_session_factory,
             save_ams_mapping=True,
+            target_printer_id=7,
         )
 
         file_path = tmp_path / "test.3mf"
@@ -1979,8 +1980,75 @@ class TestVirtualPrinterInstance:
         assert len(added_items) == 1
         assert _json.loads(added_items[0].ams_mapping) == [4, -1, 12, -1]
 
-        print_data = mock_archive_print.await_args.kwargs["print_data"]
-        assert print_data["ams_mapping"] == [4, -1, 12, -1]
+        assert mock_archive_print.await_args.kwargs["slicer_ams_mapping"] == [4, -1, 12, -1]
+        assert mock_archive_print.await_args.kwargs["slicer_ams_mapping_printer_id"] == 7
+
+    @pytest.mark.asyncio
+    async def test_add_to_print_queue_ignores_ams_mapping_for_model_based_vp(self, tmp_path):
+        """A model-based VP (`target_printer_id=None`, dispatched later by the
+        scheduler to whichever printer matches) has no MQTT bridge to a real
+        printer, so the slicer has no live AMS layout to resolve tray IDs
+        against. Whatever it sends must be ignored on both the queue item and
+        the archive — trusting it would dispatch the eventually-chosen
+        printer onto a tray resolved against nothing (#2700 review).
+        """
+        import json as _json
+
+        from backend.app.services.virtual_printer.manager import VirtualPrinterInstance
+
+        added_items = []
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock(side_effect=added_items.append)
+        mock_db.commit = AsyncMock()
+        mock_session_factory = MagicMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_factory.return_value = mock_session_ctx
+
+        inst = VirtualPrinterInstance(
+            vp_id=451,
+            name="AMSMappingModelBased",
+            mode="queue",
+            model="X1C",
+            access_code="12345678",
+            serial_suffix="391800451",
+            base_dir=tmp_path,
+            session_factory=mock_session_factory,
+            save_ams_mapping=True,
+            target_printer_id=None,
+        )
+
+        file_path = tmp_path / "test.3mf"
+        file_path.write_bytes(b"fake3mf")
+
+        await inst.on_print_command(
+            file_path.name,
+            {"command": "project_file", "ams_mapping": [4, -1, 12, -1]},
+        )
+
+        mock_archive = MagicMock()
+        mock_archive.id = 1
+        mock_archive.print_name = "test"
+
+        with (
+            patch(
+                "backend.app.api.routes.settings.get_setting",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "backend.app.services.archive.ArchiveService.archive_print",
+                new_callable=AsyncMock,
+                return_value=mock_archive,
+            ) as mock_archive_print,
+        ):
+            await inst._add_to_print_queue(file_path, "192.168.1.100")
+
+        assert len(added_items) == 1
+        assert added_items[0].ams_mapping is None
+        assert mock_archive_print.await_args.kwargs["slicer_ams_mapping"] is None
+        assert mock_archive_print.await_args.kwargs["slicer_ams_mapping_printer_id"] is None
 
     @pytest.mark.asyncio
     async def test_add_to_print_queue_ignores_unresolved_ams_mapping_sentinel(self, tmp_path):
@@ -2010,6 +2078,7 @@ class TestVirtualPrinterInstance:
             base_dir=tmp_path,
             session_factory=mock_session_factory,
             save_ams_mapping=True,
+            target_printer_id=7,
         )
 
         file_path = tmp_path / "test.3mf"
@@ -2040,8 +2109,7 @@ class TestVirtualPrinterInstance:
 
         assert len(added_items) == 1
         assert added_items[0].ams_mapping is None
-        print_data = mock_archive_print.await_args.kwargs["print_data"]
-        assert print_data["ams_mapping"] is None
+        assert mock_archive_print.await_args.kwargs["slicer_ams_mapping"] is None
 
     @pytest.mark.asyncio
     async def test_add_to_print_queue_nozzle_pick_replicated_across_plates(self, tmp_path, monkeypatch):
@@ -2227,6 +2295,205 @@ class TestVirtualPrinterInstance:
         assert params["bed_levelling"] == "off"  # MQTT bed_leveling → column bed_levelling (tri-state)
         # Recent-queue tracking dict is cleared after the patch.
         assert file_path.name not in inst._recent_queue_items
+
+    @pytest.mark.asyncio
+    async def test_on_print_command_late_mqtt_retroactively_stamps_archive_ams_mapping(self, tmp_path):
+        """Same #1780-round-3 race as the test above, but for `ams_mapping`
+        specifically: the archive was already created (with no
+        `slicer_ams_mapping`, since the slicer's pick hadn't arrived yet)
+        before this late MQTT lands. With the toggle on and a fixed target
+        printer, the archive must be retroactively patched too — otherwise a
+        reprint from this archive would never see the badge or the Mapping
+        button, even though the queue item itself dispatches correctly.
+        """
+        import json as _json
+
+        from backend.app.services.virtual_printer.manager import VirtualPrinterInstance
+
+        added_items: list = []
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock(
+            side_effect=lambda item: (added_items.append(item), setattr(item, "id", 100 + len(added_items)))[0]
+        )
+        mock_db.flush = AsyncMock()
+        mock_db.commit = AsyncMock()
+
+        mock_archive_row = MagicMock()
+        mock_archive_row.id = 55
+        mock_archive_row.extra_data = None
+
+        position_max_result = MagicMock()
+        position_max_result.scalar = MagicMock(return_value=None)
+        select_pending_result = MagicMock()
+        # (queue_item_id, archive_id) — matches the id set by db.add above.
+        select_pending_result.all = MagicMock(return_value=[(101, 55)])
+        update_result = MagicMock()
+        select_archives_result = MagicMock()
+        select_archives_result.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[mock_archive_row])))
+        mock_db.execute = AsyncMock(
+            side_effect=[position_max_result, select_pending_result, update_result, select_archives_result]
+        )
+
+        mock_session_factory = MagicMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_factory.return_value = mock_session_ctx
+
+        inst = VirtualPrinterInstance(
+            vp_id=98,
+            name="LateMQTTArchivePatch",
+            mode="queue",
+            model="X1C",
+            access_code="12345678",
+            serial_suffix="391800098",
+            base_dir=tmp_path,
+            session_factory=mock_session_factory,
+            save_ams_mapping=True,
+            target_printer_id=7,
+        )
+        inst._mqtt = MagicMock()
+
+        file_path = tmp_path / "test.3mf"
+        file_path.write_bytes(b"fake3mf")
+
+        mock_archive = MagicMock()
+        mock_archive.id = 55
+        mock_archive.print_name = "test"
+
+        with (
+            patch(
+                "backend.app.api.routes.settings.get_setting",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "backend.app.services.archive.ArchiveService.archive_print",
+                new_callable=AsyncMock,
+                return_value=mock_archive,
+            ),
+            patch(
+                "backend.app.services.virtual_printer.manager._SLICER_OPTIONS_WAIT_TIMEOUT",
+                0.05,
+            ),
+        ):
+            await inst._add_to_print_queue(file_path, "192.168.1.100")
+
+        assert len(added_items) == 1
+        assert added_items[0].ams_mapping is None  # MQTT was never received in time
+
+        # MQTT project_file arrives late, carrying the slicer's AMS pick.
+        await inst.on_print_command(
+            file_path.name,
+            {
+                "command": "project_file",
+                "file": file_path.name,
+                "ams_mapping": [4, -1, 12, -1],
+            },
+        )
+
+        # 3rd execute() is the queue-item UPDATE; 4th is the archive SELECT.
+        update_call = mock_db.execute.await_args_list[2]
+        compiled = update_call.args[0].compile(compile_kwargs={"literal_binds": False})
+        assert _json.loads(dict(compiled.params)["ams_mapping"]) == [4, -1, 12, -1]
+
+        assert mock_archive_row.extra_data == {
+            "slicer_ams_mapping": {"mapping": [4, -1, 12, -1], "printer_id": 7},
+        }
+
+    @pytest.mark.asyncio
+    async def test_on_print_command_late_mqtt_skips_archive_patch_for_model_based_vp(self, tmp_path):
+        """The archive patch above must not fire for a model-based VP
+        (`target_printer_id=None`) either — same rationale as the immediate
+        path: no fixed printer means no live AMS layout to have resolved the
+        late mapping against.
+        """
+        import json as _json
+
+        from backend.app.services.virtual_printer.manager import VirtualPrinterInstance
+
+        added_items: list = []
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock(
+            side_effect=lambda item: (added_items.append(item), setattr(item, "id", 200 + len(added_items)))[0]
+        )
+        mock_db.flush = AsyncMock()
+        mock_db.commit = AsyncMock()
+
+        position_max_result = MagicMock()
+        position_max_result.scalar = MagicMock(return_value=None)
+        select_pending_result = MagicMock()
+        select_pending_result.all = MagicMock(return_value=[(201, 65)])
+        update_result = MagicMock()
+        # No 4th execute() expected — the archive patch must be skipped
+        # entirely, so only 3 calls should ever happen.
+        mock_db.execute = AsyncMock(side_effect=[position_max_result, select_pending_result, update_result])
+
+        mock_session_factory = MagicMock()
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_factory.return_value = mock_session_ctx
+
+        inst = VirtualPrinterInstance(
+            vp_id=97,
+            name="LateMQTTModelBased",
+            mode="queue",
+            model="X1C",
+            access_code="12345678",
+            serial_suffix="391800097",
+            base_dir=tmp_path,
+            session_factory=mock_session_factory,
+            save_ams_mapping=True,
+            target_printer_id=None,
+        )
+        inst._mqtt = MagicMock()
+
+        file_path = tmp_path / "test.3mf"
+        file_path.write_bytes(b"fake3mf")
+
+        mock_archive = MagicMock()
+        mock_archive.id = 65
+        mock_archive.print_name = "test"
+
+        with (
+            patch(
+                "backend.app.api.routes.settings.get_setting",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "backend.app.services.archive.ArchiveService.archive_print",
+                new_callable=AsyncMock,
+                return_value=mock_archive,
+            ),
+            patch(
+                "backend.app.services.virtual_printer.manager._SLICER_OPTIONS_WAIT_TIMEOUT",
+                0.05,
+            ),
+        ):
+            await inst._add_to_print_queue(file_path, "192.168.1.100")
+
+        await inst.on_print_command(
+            file_path.name,
+            {
+                "command": "project_file",
+                "file": file_path.name,
+                "ams_mapping": [4, -1, 12, -1],
+                # An unrelated field so `patch` isn't empty and the UPDATE
+                # actually runs — isolates the assertion to "ams_mapping was
+                # excluded" rather than "nothing happened at all".
+                "timelapse": True,
+            },
+        )
+
+        # 3rd execute() is the queue-item UPDATE — ams_mapping must be absent
+        # from it. No 4th execute() (the archive SELECT) should follow.
+        assert mock_db.execute.await_count == 3
+        update_call = mock_db.execute.await_args_list[2]
+        compiled = update_call.args[0].compile(compile_kwargs={"literal_binds": False})
+        assert "ams_mapping" not in dict(compiled.params)
+        assert dict(compiled.params)["timelapse"] is True
 
     @pytest.mark.asyncio
     async def test_add_to_print_queue_catches_mqtt_stashed_post_wait_timeout(self, tmp_path):

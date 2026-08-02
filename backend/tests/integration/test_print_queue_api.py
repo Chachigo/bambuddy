@@ -264,13 +264,16 @@ class TestPrintQueueAPI:
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):
         """When the caller sends no explicit ams_mapping, but the archive
-        carries the slicer's own saved pick (extra_data.slicer_ams_mapping,
-        written by a VP with "Save AMS mapping" on), the queue item should
-        inherit it — the same exact-physical-spool reuse the "Mapping"
-        button gives you, but automatic when nothing was hand-edited.
+        carries the slicer's own saved pick for this exact printer
+        (extra_data.slicer_ams_mapping, written by a VP with "Save AMS
+        mapping" on), the queue item should inherit it — the same
+        exact-physical-spool reuse the "Mapping" button gives you, but
+        automatic when nothing was hand-edited.
         """
         printer = await printer_factory()
-        archive = await archive_factory(extra_data={"slicer_ams_mapping": [5, -1, 2, -1]})
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": printer.id}}
+        )
 
         data = {
             "printer_id": printer.id,
@@ -283,6 +286,54 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_add_to_queue_ignores_archive_slicer_ams_mapping_for_different_printer(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """A saved mapping's tray IDs only mean something relative to the
+        printer they were resolved against. Reprinting the same archive on a
+        *different* printer must not inherit it — tray 5 on printer A can
+        hold a completely different spool than tray 5 on printer B.
+        """
+        origin_printer = await printer_factory()
+        other_printer = await printer_factory()
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": origin_printer.id}}
+        )
+
+        data = {
+            "printer_id": other_printer.id,
+            "archive_id": archive.id,
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_add_to_queue_ignores_archive_slicer_ams_mapping_for_model_based_dispatch(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """A model-based item (no fixed printer_id) can't know in advance
+        which printer the scheduler will pick, so a saved mapping resolved
+        against one specific printer must never be inherited here either.
+        """
+        origin_printer = await printer_factory()
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": origin_printer.id}}
+        )
+
+        data = {
+            "target_model": "X1C",
+            "archive_id": archive.id,
+        }
+        response = await async_client.post("/api/v1/queue/", json=data)
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ams_mapping"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_add_to_queue_explicit_ams_mapping_wins_over_archive_fallback(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):
@@ -291,7 +342,9 @@ class TestPrintQueueAPI:
         pick — the fallback only fires when the caller sent nothing at all.
         """
         printer = await printer_factory()
-        archive = await archive_factory(extra_data={"slicer_ams_mapping": [5, -1, 2, -1]})
+        archive = await archive_factory(
+            extra_data={"slicer_ams_mapping": {"mapping": [5, -1, 2, -1], "printer_id": printer.id}}
+        )
 
         data = {
             "printer_id": printer.id,

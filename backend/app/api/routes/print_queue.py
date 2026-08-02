@@ -657,15 +657,27 @@ async def add_to_queue(
     # to the exact same physical spool instead of the scheduler re-deriving a
     # (possibly ambiguous) mapping from just the file's static type/color.
     #
-    # Note this is unconditional — it applies regardless of whether the
-    # physical spool in that slot has changed since the original print. #1308
-    # covers re-verifying a stored mapping against live AMS state at dispatch
-    # time; that check is a separate PR and, once merged, will also catch a
-    # stale slot inherited through this fallback.
-    if ams_mapping_json is None and archive and archive.extra_data:
-        saved_mapping = archive.extra_data.get("slicer_ams_mapping")
-        if isinstance(saved_mapping, list) and saved_mapping:
-            ams_mapping_json = json.dumps(saved_mapping)
+    # Global tray IDs only mean something relative to the specific printer
+    # they were resolved against, so this only fires when the reprint targets
+    # that exact printer (`extra_data.slicer_ams_mapping.printer_id`) — never
+    # for a model-based dispatch (data.printer_id is None) or a reprint aimed
+    # at a different printer, where the same tray number can hold a
+    # completely different spool (#2700 review).
+    #
+    # Note this is otherwise unconditional — it applies regardless of whether
+    # the physical spool in that slot has changed since the original print.
+    # #1308 covers re-verifying a stored mapping against live AMS state at
+    # dispatch time; that check is a separate PR and, once merged, will also
+    # catch a stale slot inherited through this fallback.
+    if ams_mapping_json is None and archive and archive.extra_data and data.printer_id is not None:
+        saved = archive.extra_data.get("slicer_ams_mapping")
+        if (
+            isinstance(saved, dict)
+            and saved.get("printer_id") == data.printer_id
+            and isinstance(saved.get("mapping"), list)
+            and saved["mapping"]
+        ):
+            ams_mapping_json = json.dumps(saved["mapping"])
     items = []
     for i in range(quantity):
         item = PrintQueueItem(
