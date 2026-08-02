@@ -438,6 +438,19 @@ class NotificationService:
         if not bot_token or not chat_id:
             return False, "Bot token and chat ID are required"
 
+        # Optional forum topic (#1518).  Telegram expects message_thread_id as an
+        # integer in the JSON sendMessage body — a string 400s there even though
+        # the multipart sendPhoto call below would happily accept one.  Coerce it
+        # once, up front, so both call sites agree and a bad value fails loudly
+        # instead of silently breaking only the text notifications.
+        thread_id_raw = str(config.get("message_thread_id") or "").strip()
+        message_thread_id: int | None = None
+        if thread_id_raw:
+            try:
+                message_thread_id = int(thread_id_raw)
+            except ValueError:
+                return False, f"Invalid message thread ID: {thread_id_raw!r} is not a number"
+
         # Escape underscores in the message body so Telegram Markdown
         # parsing doesn't break on job names like "A1_plate_8" or error
         # codes like "0300_0001".  The title is already wrapped in *bold*
@@ -452,18 +465,23 @@ class NotificationService:
         if image_data:
             # Use sendPhoto to attach the thumbnail with the caption
             url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+            form: dict[str, Any] = {"chat_id": chat_id, "caption": message, "parse_mode": "Markdown"}
+            if message_thread_id is not None:
+                form["message_thread_id"] = message_thread_id
             response = await client.post(
                 url,
-                data={"chat_id": chat_id, "caption": message, "parse_mode": "Markdown"},
+                data=form,
                 files={"photo": ("photo.jpg", image_data, "image/jpeg")},
             )
         else:
             url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            data = {
+            data: dict[str, Any] = {
                 "chat_id": chat_id,
                 "text": message,
                 "parse_mode": "Markdown",
             }
+            if message_thread_id is not None:
+                data["message_thread_id"] = message_thread_id
             response = await client.post(url, json=data)
 
         if response.status_code == 200:

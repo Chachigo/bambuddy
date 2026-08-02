@@ -160,6 +160,15 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
       }
     }
 
+    // Telegram forum topic must be a plain integer (#1518) — type="number"
+    // still lets "1e5" and "-" through, and Telegram would 400 on those.
+    if (providerType === 'telegram' && config.message_thread_id?.trim()) {
+      if (!/^\d+$/.test(config.message_thread_id.trim())) {
+        setError(t('notifications.telegramThreadIdInvalid'));
+        return;
+      }
+    }
+
     const finalConfig: Record<string, unknown> =
       providerType === 'ntfy' && Object.keys(eventPriorities).length > 0
         ? { ...config, event_priorities: eventPriorities }
@@ -245,6 +254,16 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
         return [
           { key: 'bot_token', label: 'Bot Token', placeholder: 'Bot token from @BotFather', type: 'password', required: true },
           { key: 'chat_id', label: 'Chat ID', placeholder: 'Your chat or group ID', type: 'text', required: true },
+          // Optional forum topic (#1518). Left empty, Telegram posts to the
+          // group's General topic exactly as before.
+          {
+            key: 'message_thread_id',
+            label: t('notifications.telegramThreadId'),
+            placeholder: '123',
+            type: 'number',
+            required: false,
+            help: t('notifications.telegramThreadIdHelp'),
+          },
         ];
       case 'email':
         return [
@@ -422,6 +441,9 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
                     placeholder={field.placeholder}
                     className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
+                )}
+                {'help' in field && (field as { help?: string }).help && (
+                  <p className="text-xs text-bambu-gray mt-1">{(field as { help?: string }).help}</p>
                 )}
               </div>
             ))}

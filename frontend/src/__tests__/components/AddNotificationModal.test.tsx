@@ -571,3 +571,93 @@ describe('AddNotificationModal — Bark provider (#1495)', () => {
     });
   });
 });
+
+describe('AddNotificationModal — Telegram forum topic (#1518)', () => {
+  const telegramProvider = (config: Record<string, unknown> = { bot_token: 'x', chat_id: '-100123' }) =>
+    buildProvider({ provider_type: 'telegram', config });
+
+  it('offers the Forum Topic ID field as optional for telegram', async () => {
+    render(<AddNotificationModal provider={telegramProvider()} onClose={() => undefined} />);
+
+    const label = await screen.findByText(/forum topic id/i);
+    // Required fields are marked with a trailing asterisk — this one must not be.
+    expect(label.textContent).not.toContain('*');
+    expect(screen.getByText(/leave empty for the general topic/i)).toBeInTheDocument();
+  });
+
+  it('does not offer the field for other providers', async () => {
+    render(<AddNotificationModal provider={buildProvider()} onClose={() => undefined} />);
+
+    await screen.findByDisplayValue('My ntfy');
+    expect(screen.queryByText(/forum topic id/i)).not.toBeInTheDocument();
+  });
+
+  it('round-trips the topic id into config on save', async () => {
+    let captured: { config: Record<string, unknown> } | null = null;
+    server.use(
+      http.patch('*/api/v1/notifications/1', async ({ request }) => {
+        captured = (await request.json()) as { config: Record<string, unknown> };
+        return HttpResponse.json({ id: 1 });
+      }),
+    );
+
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<AddNotificationModal provider={telegramProvider()} onClose={onClose} />);
+
+    await user.type(await screen.findByPlaceholderText('123'), '25');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(captured).not.toBeNull();
+    expect(captured!.config).toMatchObject({ chat_id: '-100123', message_thread_id: '25' });
+  });
+
+  it('keeps the config free of the key when the field is left empty', async () => {
+    let captured: { config: Record<string, unknown> } | null = null;
+    server.use(
+      http.patch('*/api/v1/notifications/1', async ({ request }) => {
+        captured = (await request.json()) as { config: Record<string, unknown> };
+        return HttpResponse.json({ id: 1 });
+      }),
+    );
+
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(<AddNotificationModal provider={telegramProvider()} onClose={onClose} />);
+
+    await screen.findByPlaceholderText('123');
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(captured!.config).not.toHaveProperty('message_thread_id');
+  });
+
+  it('blocks save on a non-numeric topic id', async () => {
+    // Reaches the form via a config written by the API rather than the picker —
+    // the number input itself already filters most junk out.
+    let patched = false;
+    server.use(
+      http.patch('*/api/v1/notifications/1', async () => {
+        patched = true;
+        return HttpResponse.json({ id: 1 });
+      }),
+    );
+
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <AddNotificationModal
+        provider={telegramProvider({ bot_token: 'x', chat_id: '-100123', message_thread_id: 'General' })}
+        onClose={onClose}
+      />,
+    );
+
+    await screen.findByText(/forum topic id/i);
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(await screen.findByText(/forum topic id must be a number/i)).toBeInTheDocument();
+    expect(patched).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
