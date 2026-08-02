@@ -1,6 +1,7 @@
 """Camera streaming API endpoints for Bambu Lab printers."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import subprocess
@@ -97,6 +98,14 @@ _disconnect_events: dict[str, asyncio.Event] = {}
 
 # Track last frame time per stream_id (not just per printer_id) for stale detection
 _stream_last_frame_times: dict[str, float] = {}
+
+# How much of a streaming ffmpeg's stderr to retain: enough for the input
+# analysis plus a burst of errors, capped so a long-running stream can't grow it.
+_FFMPEG_STDERR_TAIL_BYTES = 16384
+
+# Live stderr collectors by pid — see _FfmpegStderrTail. Present means "this
+# process's stderr already has a reader; do not open a second one".
+_stderr_tails: dict[int, "_FfmpegStderrTail"] = {}
 
 
 def get_buffered_frame(printer_id: int) -> bytes | None:
@@ -338,10 +347,13 @@ async def _terminate_ffmpeg(process: asyncio.subprocess.Process, stream_id: str 
         _spawned_ffmpeg_pids.pop(process.pid, None)
         return  # Already dead
 
-    drainers = [
-        asyncio.create_task(_drain_pipe(process.stdout)),
-        asyncio.create_task(_drain_pipe(process.stderr)),
-    ]
+    drainers = [asyncio.create_task(_drain_pipe(process.stdout))]
+    # A streaming ffmpeg's stderr already has a reader (_FfmpegStderrTail), and
+    # it keeps draining right through teardown, which is all we need here. Adding
+    # a second reader would race it — asyncio rejects concurrent reads on one
+    # StreamReader — so only drain stderr when nobody else owns it.
+    if process.pid not in _stderr_tails:
+        drainers.append(asyncio.create_task(_drain_pipe(process.stderr)))
     try:
         process.terminate()
         try:
@@ -405,6 +417,82 @@ def _summarize_ffmpeg_stderr(text: str | None) -> str:
     return "\n".join(meaningful[-10:])
 
 
+class _FfmpegStderrTail:
+    """Owns a long-lived ffmpeg's stderr: drains it continuously, keeps the tail.
+
+    Reading stderr only when something has already gone wrong leaves a pipe
+    nobody reads for the whole life of the stream. ffmpeg writes its banner, the
+    input analysis and then a progress line at a steady rate, so a 64 KiB pipe
+    fills eventually and ffmpeg blocks writing to it — at which point it stops
+    producing frames, the stream's own read timeout fires, and the log says
+    "RTSP read timeout" with no hint that we starved it ourselves.
+
+    How long that takes is unmeasured and may be a long time: one H2D upstream
+    ran 21m36s continuously without stalling, so this is a bounded resource
+    being treated as unbounded rather than an observed failure. Draining removes
+    the ceiling either way, and the tail is *better* diagnostic material than
+    the old on-demand read: it holds ffmpeg's most recent output at the moment
+    things went wrong, where reading the buffered pipe returned whatever was
+    printed first (usually the startup banner, which the summariser then strips).
+
+    Registers itself in ``_stderr_tails`` so the two other readers of this pipe
+    can defer to it — asyncio raises if two coroutines read one StreamReader
+    concurrently. See ``_read_ffmpeg_stderr`` and ``_terminate_ffmpeg``.
+    """
+
+    def __init__(self, process: asyncio.subprocess.Process) -> None:
+        self._process = process
+        self._buffer = bytearray()
+        self._task: asyncio.Task | None = None
+        if process.stderr is None:
+            return
+        self._task = asyncio.create_task(self._pump())
+        _stderr_tails[process.pid] = self
+
+    async def _pump(self) -> None:
+        reader = self._process.stderr
+        try:
+            while True:
+                chunk = await reader.read(8192)
+                if not chunk:
+                    return  # EOF — ffmpeg has exited
+                self._buffer.extend(chunk)
+                excess = len(self._buffer) - _FFMPEG_STDERR_TAIL_BYTES
+                if excess > 0:
+                    del self._buffer[:excess]
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a broken pipe just ends the tail
+            return
+
+    def text(self) -> str | None:
+        """The retained tail, summarised. None when nothing was captured.
+
+        Goes through _summarize_ffmpeg_stderr like every other stderr log in
+        this module: ffmpeg echoes its input URL, which carries the access code.
+        """
+        if not self._buffer:
+            return None
+        return _summarize_ffmpeg_stderr(self._buffer.decode(errors="replace")) or None
+
+    async def aclose(self) -> None:
+        """Stop draining and release ownership of the pipe. Idempotent.
+
+        Awaits the cancelled pump rather than firing and forgetting, so the task
+        is finished before the caller moves on — an abandoned pending task
+        becomes an "unraisable exception" warning at an arbitrary later point,
+        usually during interpreter or loop teardown.
+        """
+        task, self._task = self._task, None
+        if _stderr_tails.get(self._process.pid) is self:
+            del _stderr_tails[self._process.pid]
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 async def _read_ffmpeg_stderr(process: asyncio.subprocess.Process) -> str | None:
     """Read whatever ffmpeg has written to stderr so far (best-effort).
 
@@ -415,8 +503,18 @@ async def _read_ffmpeg_stderr(process: asyncio.subprocess.Process) -> str | None
     banner + stream-analysis lines ffmpeg already printed. Reading in bounded
     chunks returns the buffered output promptly whether or not ffmpeg has
     exited. Returns the content with ffmpeg's boilerplate banner stripped.
+
+    When a _FfmpegStderrTail owns this process's stderr — every streaming
+    ffmpeg — its retained tail is returned instead. Reading the pipe here as
+    well would race that collector, and asyncio refuses two concurrent readers
+    on one StreamReader outright.
     """
-    if not process or not process.stderr:
+    if not process:
+        return None
+    tail = _stderr_tails.get(getattr(process, "pid", None))
+    if tail is not None:
+        return tail.text()
+    if not process.stderr:
         return None
     chunks: list[bytes] = []
     total = 0
@@ -537,6 +635,7 @@ async def generate_rtsp_mjpeg_stream(
     jpeg_end = b"\xff\xd9"
     reconnect_count = 0
     process = None
+    stderr_tail: _FfmpegStderrTail | None = None
     got_any_frames = False
 
     try:
@@ -588,6 +687,14 @@ async def generate_rtsp_mjpeg_stream(
                     return
                 reconnect_count += 1
                 continue
+
+            # Take ownership of stderr for the life of this process. Started
+            # only after the immediate-failure check above, which reads the pipe
+            # directly (correct there: the process is already dead, so
+            # read-to-EOF returns at once and cannot be raced by a collector).
+            # Nothing is lost by starting late — the banner ffmpeg printed in the
+            # meantime is still sitting in the pipe.
+            stderr_tail = _FfmpegStderrTail(process)
 
             # Read JPEG frames from ffmpeg stdout
             buffer = b""
@@ -662,6 +769,12 @@ async def generate_rtsp_mjpeg_stream(
 
             # Clean up this ffmpeg process before reconnecting or exiting
             await _terminate_ffmpeg(process, stream_id)
+            # Released after teardown, not before: _terminate_ffmpeg deliberately
+            # leaves stderr to this collector, which has to keep draining while
+            # the process is stopped or wait() can't observe the exit.
+            if stderr_tail is not None:
+                await stderr_tail.aclose()
+                stderr_tail = None
             process = None
 
             if client_gone:
@@ -709,6 +822,10 @@ async def generate_rtsp_mjpeg_stream(
         if process:
             await _terminate_ffmpeg(process, stream_id)
             logger.info("Camera stream stopped for %s (stream_id=%s)", ip_address, stream_id)
+
+        # Same order as in the loop: terminate first, then release stderr.
+        if stderr_tail is not None:
+            await stderr_tail.aclose()
 
         # Shut down the TLS proxy
         proxy_server.close()
