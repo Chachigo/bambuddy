@@ -4928,6 +4928,12 @@ export default {
     clear: 'Effacer',
     date: 'Date',
     status: 'Statut',
+    trigger: 'Type',
+    triggers: {
+      manual: 'Sauvegarde (manuelle)',
+      scheduled: 'Sauvegarde (planifiée)',
+      restore: 'Restauration',
+    },
     commit: 'Commit',
 
     // Local Backup

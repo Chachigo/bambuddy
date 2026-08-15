@@ -4916,6 +4916,12 @@ export default {
     clear: 'Temizle',
     date: 'Tarih',
     status: 'Durum',
+    trigger: 'Tür',
+    triggers: {
+      manual: 'Yedek (manuel)',
+      scheduled: 'Yedek (zamanlanmış)',
+      restore: 'Geri yükleme',
+    },
     commit: 'Commit',
 
     // Yerel Yedekleme

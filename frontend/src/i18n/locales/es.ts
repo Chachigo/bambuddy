@@ -4947,6 +4947,12 @@ export default {
     clear: 'Borrar',
     date: 'Fecha',
     status: 'Estado',
+    trigger: 'Tipo',
+    triggers: {
+      manual: 'Copia (manual)',
+      scheduled: 'Copia (programada)',
+      restore: 'Restauración',
+    },
     commit: 'Confirmación',
 
     // Local Backup

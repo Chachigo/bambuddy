@@ -4939,6 +4939,12 @@ export default {
     clear: 'クリア',
     date: '日付',
     status: 'ステータス',
+    trigger: '種類',
+    triggers: {
+      manual: 'バックアップ（手動）',
+      scheduled: 'バックアップ（スケジュール）',
+      restore: '復元',
+    },
     commit: 'コミット',
 
     // Local Backup

@@ -1032,6 +1032,7 @@ export function GitHubBackupSettings() {
                   <thead>
                     <tr className="text-bambu-gray border-b border-bambu-dark-tertiary">
                       <th className="text-left py-2 px-2">{t('backup.date')}</th>
+                      <th className="text-left py-2 px-2">{t('backup.trigger')}</th>
                       <th className="text-left py-2 px-2">{t('backup.status')}</th>
                       <th className="text-left py-2 px-2">{t('backup.commit')}</th>
                     </tr>
@@ -1040,6 +1041,12 @@ export function GitHubBackupSettings() {
                     {logs.slice(0, 10).map((log) => (
                       <tr key={log.id} className="border-b border-bambu-dark-tertiary/50 hover:bg-bambu-dark-secondary">
                         <td className="py-2 px-2 text-white">{formatDateTime(log.started_at)}</td>
+                        {/* A restore writes a log row too, and without this it
+                            was indistinguishable from a backup: a successful
+                            run dated now, while Last backup said otherwise. */}
+                        <td className="py-2 px-2 text-bambu-gray">
+                          {t(`backup.triggers.${log.trigger}`, { defaultValue: log.trigger })}
+                        </td>
                         <td className="py-2 px-2"><StatusBadge status={log.status} /></td>
                         <td className="py-2 px-2">
                           {log.commit_sha ? (

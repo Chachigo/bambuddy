@@ -4987,6 +4987,12 @@ export default {
     clear: 'Clear',
     date: 'Date',
     status: 'Status',
+    trigger: 'Type',
+    triggers: {
+      manual: 'Backup (manual)',
+      scheduled: 'Backup (scheduled)',
+      restore: 'Restore',
+    },
     commit: 'Commit',
 
     // Local Backup

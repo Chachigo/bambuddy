@@ -4982,6 +4982,12 @@ export default {
     clear: "Очистити",
     date: "Дата",
     status: "Статус",
+    trigger: "Тип",
+    triggers: {
+      manual: "Резервна копія (вручну)",
+      scheduled: "Резервна копія (за розкладом)",
+      restore: "Відновлення",
+    },
     commit: "Коміт",
 
     // Local Backup

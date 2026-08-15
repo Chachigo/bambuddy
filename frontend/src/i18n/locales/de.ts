@@ -4939,6 +4939,12 @@ export default {
     clear: 'Löschen',
     date: 'Datum',
     status: 'Status',
+    trigger: 'Typ',
+    triggers: {
+      manual: 'Sicherung (manuell)',
+      scheduled: 'Sicherung (geplant)',
+      restore: 'Wiederherstellung',
+    },
     commit: 'Commit',
 
     // Local Backup

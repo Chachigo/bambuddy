@@ -4927,6 +4927,12 @@ export default {
     clear: '清除',
     date: '日期',
     status: '状态',
+    trigger: '类型',
+    triggers: {
+      manual: '备份（手动）',
+      scheduled: '备份（计划）',
+      restore: '恢复',
+    },
     commit: '提交',
 
     // Local Backup

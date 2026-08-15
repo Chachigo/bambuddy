@@ -4927,6 +4927,12 @@ export default {
     clear: 'Cancella',
     date: 'Data',
     status: 'Stato',
+    trigger: 'Tipo',
+    triggers: {
+      manual: 'Backup (manuale)',
+      scheduled: 'Backup (pianificato)',
+      restore: 'Ripristino',
+    },
     commit: 'Commit',
 
     // Local Backup

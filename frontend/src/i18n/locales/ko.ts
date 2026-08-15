@@ -4702,6 +4702,12 @@ export default {
     clear: '초기화',
     date: '날짜',
     status: '상태',
+    trigger: '유형',
+    triggers: {
+      manual: '백업(수동)',
+      scheduled: '백업(예약)',
+      restore: '복원',
+    },
     commit: '커밋',
     localBackup: '로컬 백업',
     localBackupDescription: '데이터베이스, 아카이브, 업로드 및 모든 파일을 포함한 Bambuddy 데이터의 전체 백업을 만듭니다.',
