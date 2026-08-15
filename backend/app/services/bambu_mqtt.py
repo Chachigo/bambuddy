@@ -760,7 +760,34 @@ class PrinterState:
     hms_errors: list = field(default_factory=list)  # List of HMSError
     kprofiles: list = field(default_factory=list)  # List of KProfile
     sdcard: bool = False  # SD card inserted
+    # Whether the printer has ever actually told us about `sdcard`. Without this
+    # the default False is indistinguishable from a real "no card", and any
+    # consumer that treats False as evidence would act on silence — which is how
+    # a storage gate turns into a regression for every printer whose firmware
+    # simply doesn't publish the field (#2780).
+    sdcard_reported: bool = False
     store_to_sdcard: bool = False  # Store sent files on SD card (home_flag bit 11)
+    # Scheme+path of a `project_file` dispatch seen on the request topic, from
+    # whoever sent it (the slicer or us). Bambu states where the sliced file
+    # went: `ftp://<name>` is external storage, which FTPS serves, while
+    # `brtc://emmc/<name>` is the printer's internal storage, which it does not.
+    #
+    # Two fields, because the two readers need different guarantees.
+    # ``current_project_url`` belongs to the print now running and is cleared
+    # when that print ends, so a print Bambuddy saw no dispatch for reads as
+    # "unknown" rather than inheriting the previous job's answer. That matters:
+    # 18% of the print starts in #2780's bundle had no dispatch on the request
+    # topic at all (touchscreen reprints, restart recovery), and a stale
+    # internal-storage URL would make those skip an FTPS sweep that could have
+    # found the file — losing an archive that works today.
+    #
+    # ``last_project_url`` is sticky and exists for reporting only: the
+    # connection diagnostic is usually run *after* the print that prompted it,
+    # by which point the per-print value is rightly gone.
+    #
+    # None means we never saw a dispatch — say nothing, don't guess.
+    current_project_url: str | None = None
+    last_project_url: str | None = None
     timelapse: bool = False  # Timelapse recording active
     ipcam: bool = False  # Live view / camera streaming enabled
     wifi_signal: int | None = None  # WiFi signal strength in dBm
@@ -1781,6 +1808,14 @@ class BambuMQTTClient:
             return
         command = print_data.get("command", "")
         if command == "project_file":
+            # Where the dispatcher put the sliced file. Captured for every
+            # project_file, ours included: we publish to this same topic and
+            # subscribe to it, so whoever dispatched last wins, which is exactly
+            # the print the archive lookup is about to go looking for (#2780).
+            url = print_data.get("url")
+            if isinstance(url, str) and url:
+                self.state.current_project_url = url
+                self.state.last_project_url = url
             if "ams_mapping" in print_data:
                 self._captured_ams_mapping = print_data["ams_mapping"]
                 logger.info(
@@ -4526,6 +4561,7 @@ class BambuMQTTClient:
                 self.state.sdcard = "HAS_SDCARD" in raw_sdcard.upper() or raw_sdcard.lower() in ("true", "normal", "1")
             else:
                 self.state.sdcard = bool(raw_sdcard)
+            self.state.sdcard_reported = True
 
         if home_flag is not None:
             store_to_sdcard = bool((home_flag >> 11) & 1)
@@ -5098,6 +5134,11 @@ class BambuMQTTClient:
                 }
             )
             self._captured_ams_mapping = None
+            # Same lifecycle as the mapping above: it described *this* print.
+            # Leaving it set would hand the next print an answer about where a
+            # different file went, and a stale "internal storage" reading costs
+            # an archive that the FTPS sweep would have found (#2780).
+            self.state.current_project_url = None
 
         self._previous_gcode_state = self.state.state
         if current_file:

@@ -51,6 +51,7 @@ from backend.app.services.bambu_ftp import (
     get_storage_info_async,
     list_files_async,
 )
+from backend.app.services.print_storage import print_file_reachable_over_ftp
 from backend.app.services.printer_diagnostic import run_connection_diagnostic
 from backend.app.services.printer_manager import (
     display_temperatures,
@@ -1217,6 +1218,19 @@ async def _produce_cover_image(
             break
 
     if not downloaded:
+        # The cover lives inside the 3MF, so it is only reachable if the 3MF is.
+        # When the printer kept the print on internal storage there is nothing
+        # at any of these paths, and walking all sixteen of them just to end on
+        # a 404 that reads as "this print has no cover" helps nobody (#2780).
+        storage = print_file_reachable_over_ftp(printer_manager.get_status(printer_id))
+        if not storage.reachable:
+            _cover_404_cache.setdefault(printer_id, set()).add(cache_key)
+            raise HTTPException(
+                404,
+                f"The print file for '{subtask_name}' is not on storage Bambuddy can read over FTPS "
+                f"({storage.reason}), so it has no cover to extract.",
+            )
+
         logger.info(
             f"Trying to download cover for '{subtask_name}' from {printer.ip_address} (trying {len(remote_paths)} paths)"
         )
@@ -1234,7 +1248,7 @@ async def _produce_cover_image(
                 raise HTTPException(
                     503,
                     f"Printer {printer.ip_address} is not answering its file service over TLS. "
-                    "Restart the printer and try again.",
+                    "Bambuddy will try again shortly.",
                 )
             try:
                 downloaded = await download_file_try_paths_async(

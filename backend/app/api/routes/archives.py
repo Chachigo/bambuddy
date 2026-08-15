@@ -31,6 +31,7 @@ from backend.app.schemas.slicer import SliceRequest
 from backend.app.services.archive import ArchiveService
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
+from backend.app.services.print_storage import REASON_INTERNAL_STORAGE, REASON_NO_EXTERNAL_STORAGE
 from backend.app.utils.http import build_content_disposition
 from backend.app.utils.safe_path import safe_join_under
 from backend.app.utils.threemf_tools import (
@@ -512,10 +513,23 @@ async def no_3mf_warning(
         )
     ),
 ):
-    """Whether to nudge the user about install step 4 ("Store sent files on
-    external storage"). True iff any archive in the last 30 days was created
-    via the no-3MF fallback path — that's the deterministic symptom of the
-    slicer-side variant of the setting being off.
+    """Whether to nudge the user about a print that archived without its 3MF,
+    and why. True iff any archive in the last 30 days was created via the
+    no-3MF fallback path.
+
+    Also returns ``reason``, because the advice differs and the original
+    single-cause wording sent people the wrong way. Historically the only
+    known cause was install step 4 ("Store sent files on external storage")
+    being off in the slicer, so the banner said so unconditionally. On
+    H2-series and P2S that advice is actively wrong: the setting is already on
+    and turning it on again changes nothing, because the printer keeps the
+    sliced file on internal storage that FTPS does not serve at all (#2780).
+
+    ``reason`` is the slug from :mod:`print_storage` when we recorded one,
+    else None for the original slicer-setting case. When archives disagree the
+    most specific known reason wins — one printer storing internally is a real
+    finding worth explaining, and it should not be masked by another printer's
+    plain missing-file fallback.
 
     Complements the connection-diagnostic ``external_storage`` check, which
     only catches the printer-side variant of the setting. On older slicers
@@ -536,10 +550,24 @@ async def no_3mf_warning(
     if user is not None and not can_read_all:
         conditions.append(PrintArchive.created_by_id == user.id)
     result = await db.execute(select(PrintArchive.extra_data).where(*conditions))
+    reasons: set[str] = set()
+    has_fallback = False
     for (extra_data,) in result.all():
-        if extra_data and extra_data.get("no_3mf_available"):
-            return {"has_fallback": True}
-    return {"has_fallback": False}
+        if not extra_data or not extra_data.get("no_3mf_available"):
+            continue
+        has_fallback = True
+        reason = extra_data.get("no_3mf_reason")
+        if reason:
+            reasons.add(reason)
+    if not has_fallback:
+        return {"has_fallback": False, "reason": None}
+    # Most specific first. Archives predating this field carry no reason at
+    # all, so an install with one H2C and three older printers still gets the
+    # H2C explanation rather than the generic one.
+    for candidate in (REASON_INTERNAL_STORAGE, REASON_NO_EXTERNAL_STORAGE):
+        if candidate in reasons:
+            return {"has_fallback": True, "reason": candidate}
+    return {"has_fallback": True, "reason": None}
 
 
 @router.get("/slim", response_model=list[ArchiveSlim])
@@ -2347,14 +2375,14 @@ async def scan_timelapse(
     if not files:
         # "Couldn't reach the printer" and "the printer has no timelapse
         # directory" are different problems with different fixes, and both used
-        # to come back as one 500 (#2780). A printer whose file service stopped
-        # answering over TLS needs a restart, and nothing here will work until
-        # it gets one.
+        # to come back as one 500 (#2780). Nothing here will work while the
+        # printer's file service is not answering over TLS, so say that rather
+        # than reporting an empty directory.
         if ftps_handshake_blocked(printer.ip_address):
             raise HTTPException(
                 503,
                 f"Printer {printer.ip_address} is not answering its file service over TLS. "
-                "Restart the printer and try again.",
+                "Bambuddy will try again shortly.",
             )
         raise HTTPException(404, "No timelapse directory found on the printer")
 

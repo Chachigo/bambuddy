@@ -108,6 +108,7 @@ from backend.app.services.notification_service import notification_service
 from backend.app.services.obico_detection import obico_detection_service
 from backend.app.services.print_cost_estimate import plate_scoped_run_estimate as _plate_scoped_run_estimate
 from backend.app.services.print_scheduler import scheduler as print_scheduler
+from backend.app.services.print_storage import external_storage_present, print_file_reachable_over_ftp
 from backend.app.services.printer_manager import (
     init_printer_connections,
     parse_plate_id,
@@ -3446,10 +3447,25 @@ async def on_print_start(printer_id: int, data: dict):
                 downloaded_filename = try_filename
                 break
 
+        # Does this printer keep the sliced file somewhere FTPS can reach? On
+        # H2-series and P2S the answer is routinely no — the file stays on
+        # internal eMMC and port 990 only ever serves external storage — and
+        # then the whole sweep below (six filenames x five directories x four
+        # retries, then the directory walk) is ~110 connections that cannot
+        # succeed. Skip it and say why (#2780).
+        storage = print_file_reachable_over_ftp(printer_manager.get_status(printer_id))
+        if not storage.reachable and not downloaded_filename:
+            logger.info(
+                "Skipping the 3MF lookup for printer %s: %s — the print file is not on storage "
+                "Bambuddy can read over FTPS, so no path would find it",
+                printer_id,
+                storage.reason,
+            )
+
         # Get FTP retry settings
         ftp_retry_enabled, ftp_retry_count, ftp_retry_delay, ftp_timeout = await get_ftp_retry_settings()
 
-        for try_filename in possible_names if not downloaded_filename else []:
+        for try_filename in possible_names if not downloaded_filename and storage.reachable else []:
             if not try_filename.endswith(".3mf"):
                 continue
 
@@ -3527,7 +3543,12 @@ async def on_print_start(printer_id: int, data: dict):
         # Different printer models use different directory structures. Skipped
         # when the printer's FTPS handshake is failing — the directory walk is
         # five more connections that cannot get further than the download did.
-        if not downloaded_filename and (filename or subtask_name) and not ftps_handshake_blocked(printer.ip_address):
+        if (
+            not downloaded_filename
+            and storage.reachable
+            and (filename or subtask_name)
+            and not ftps_handshake_blocked(printer.ip_address)
+        ):
             search_term = (subtask_name or filename).lower().replace(".gcode", "").replace(".3mf", "")
             logger.info("Direct FTP download failed, searching directories for '%s'", search_term)
             search_dirs = ["/cache", "/model", "/data", "/data/Metadata", "/"]
@@ -3742,7 +3763,15 @@ async def on_print_start(printer_id: int, data: dict):
                     subtask_id=subtask_id,
                     filament_type=mqtt_filament_meta.get("filament_type"),
                     filament_color=mqtt_filament_meta.get("filament_color"),
-                    extra_data={"no_3mf_available": True, "original_subtask": subtask_name, "_print_data": data},
+                    extra_data={
+                        "no_3mf_available": True,
+                        # Why the card is empty, when we know. The banner reads
+                        # this to stop telling H2/P2 owners to switch on a
+                        # setting that is already on and would not help (#2780).
+                        "no_3mf_reason": storage.reason,
+                        "original_subtask": subtask_name,
+                        "_print_data": data,
+                    },
                 )
 
                 db.add(fallback_archive)
@@ -3987,6 +4016,19 @@ async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
     from backend.app.services.bambu_ftp import list_files_async
 
     logger = logging.getLogger(__name__)
+
+    # No card in the slot means no /timelapse to walk — four connections that
+    # can only fail, on a path whose failures are swallowed and so would go on
+    # costing time silently forever (#2780).
+    #
+    # ``getattr`` rather than ``printer.id``: every dereference below happens
+    # inside the loop's own try/except, so a caller that passed something
+    # unexpected used to get an empty listing rather than an exception. Keep
+    # that, instead of making this gate the first thing that can raise here.
+    printer_id = getattr(printer, "id", None)
+    if printer_id is not None and not external_storage_present(printer_manager.get_status(printer_id)):
+        logger.debug("[TIMELAPSE] Skipping the scan for printer %s: it reports no external storage", printer_id)
+        return [], None
 
     for timelapse_path in ["/timelapse", "/timelapse/video", "/record", "/recording"]:
         try:
