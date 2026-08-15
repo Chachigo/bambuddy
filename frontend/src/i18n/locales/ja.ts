@@ -4929,6 +4929,7 @@ export default {
         kprofilesUnmatched: '{{nozzle}} 用のプロファイル {{count}} 件は {{printer}} に該当がありませんでした - 新規プロファイルとして追加しました',
         kprofilesSendFailed: '{{nozzle}} のプロファイルを {{printer}} ({{serial}}) に送信できませんでした',
         kprofilesRefused: '{{printer}} ({{serial}}) が {{nozzle}} のプロファイルを拒否しました: {{reason}}',
+        kprofilesStepFailed: 'K プロファイルの処理を完了できませんでした - {{reason}}。それまでに復元された内容は保存されています。',
       },
     },
 

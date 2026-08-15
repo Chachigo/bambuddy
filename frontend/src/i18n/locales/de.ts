@@ -4929,6 +4929,7 @@ export default {
         kprofilesUnmatched: '{{count}} Profile für {{nozzle}} hatten kein Gegenstück auf {{printer}} - als neue Profile hinzugefügt',
         kprofilesSendFailed: '{{nozzle}}-Profile konnten nicht an {{printer}} ({{serial}}) gesendet werden',
         kprofilesRefused: '{{printer}} ({{serial}}) hat die {{nozzle}}-Profile abgelehnt: {{reason}}',
+        kprofilesStepFailed: 'Der K-Profil-Schritt konnte nicht abgeschlossen werden - {{reason}}. Was zuvor wiederhergestellt wurde, ist trotzdem gespeichert.',
       },
     },
 

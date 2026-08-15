@@ -4917,6 +4917,7 @@ export default {
         kprofilesUnmatched: '{{count}} profili per {{nozzle}} non avevano corrispondenza su {{printer}} - aggiunti come nuovi profili',
         kprofilesSendFailed: 'Impossibile inviare i profili {{nozzle}} a {{printer}} ({{serial}})',
         kprofilesRefused: '{{printer}} ({{serial}}) ha rifiutato i profili {{nozzle}}: {{reason}}',
+        kprofilesStepFailed: 'Non è stato possibile completare il passaggio dei profili K - {{reason}}. Quanto ripristinato prima resta salvato.',
       },
     },
 

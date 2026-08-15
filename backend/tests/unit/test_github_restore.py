@@ -2322,6 +2322,140 @@ class TestApplyOrdering:
         assert db.commit.await_count == 0
 
 
+class TestKprofilePhaseFailure:
+    """The K-profile phase runs after _apply has committed everything else.
+
+    So an exception there used to reach run_restore's handler, which reports
+    ``success: False`` with an empty ``results`` — over archive, spool and
+    settings rows that are durable on disk. The honest-reporting theme of this
+    feature inverted on exactly the path where it matters, and the post-commit
+    MQTT reconfigure (downstream of the raise, inside the same try) was skipped,
+    leaving the relay pointed at the pre-restore broker.
+    """
+
+    _SETTINGS = {"version": "1.0", "settings": {"mqtt_broker": "restored.local", "currency": "EUR"}}
+
+    def _payload(self, profiles=None):
+        return {
+            SETTINGS_PATH: dict(self._SETTINGS),
+            "kprofiles/00M09A123456789/0.4.json": {
+                "profiles": [{"filament_id": "GFA00", "name": "Bambu PLA"}] if profiles is None else profiles
+            },
+        }
+
+    def _session_patch(self, db_session):
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=db_session)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return patch("backend.app.services.github_restore.async_session", return_value=cm)
+
+    async def _configured_service(self, db_session, payload):
+        from backend.app.models.github_backup import GitHubBackupConfig
+
+        config = GitHubBackupConfig(repository_url="https://github.com/o/r", access_token="tok", provider="github")
+        db_session.add(config)
+        await db_session.commit()
+
+        service = _service()
+        service._resolve_ref = AsyncMock(return_value=("a" * 40, "", None))
+        service._read_categories = AsyncMock(return_value=(payload, ""))
+        return service, config.id
+
+    @pytest.mark.asyncio
+    async def test_the_committed_categories_are_still_reported(self, db_session):
+        service = _service()
+        service._restore_kprofiles = AsyncMock(side_effect=RuntimeError("mqtt exploded"))
+
+        results = await service._apply(
+            db_session,
+            self._payload(),
+            [RestoreCategory.SETTINGS, RestoreCategory.KPROFILES],
+            False,
+        )
+
+        assert results[RestoreCategory.SETTINGS.value].restored == 2
+        rows = {s.key: s.value for s in (await db_session.execute(select(Settings))).scalars().all()}
+        assert rows == {"mqtt_broker": "restored.local", "currency": "EUR"}, "committed before the phase that failed"
+
+    @pytest.mark.asyncio
+    async def test_the_failure_is_counted_and_explained(self, db_session):
+        service = _service()
+        service._restore_kprofiles = AsyncMock(side_effect=RuntimeError("mqtt exploded"))
+
+        results = await service._apply(
+            db_session,
+            self._payload(profiles=[{"filament_id": "GFA00"}, {"filament_id": "GFB99"}]),
+            [RestoreCategory.SETTINGS, RestoreCategory.KPROFILES],
+            False,
+        )
+
+        tally = results[RestoreCategory.KPROFILES.value]
+        assert tally.failed == 2, "every profile the payload carried is unaccounted for"
+        assert tally.restored == 0
+        assert _codes(tally) == ["kprofilesStepFailed"]
+        assert tally.notes[0]["params"]["reason"] == "mqtt exploded"
+
+    @pytest.mark.asyncio
+    async def test_the_relay_is_reconfigured_even_though_the_phase_failed(self, db_session):
+        """The reconfigure sits downstream of the raise in run_restore's try."""
+        service, config_id = await self._configured_service(db_session, self._payload())
+        service._restore_kprofiles = AsyncMock(side_effect=RuntimeError("mqtt exploded"))
+        relay = MagicMock()
+        relay.configure = AsyncMock(return_value=True)
+
+        with self._session_patch(db_session), patch("backend.app.services.mqtt_relay.mqtt_relay", relay):
+            result = await service.run_restore(
+                config_id, "a" * 40, [RestoreCategory.SETTINGS, RestoreCategory.KPROFILES]
+            )
+
+        assert result["success"] is True
+        assert result["results"][RestoreCategory.SETTINGS.value]["restored"] == 2
+        assert result["results"][RestoreCategory.KPROFILES.value]["failed"] == 1
+        relay.configure.assert_awaited_once()
+        assert relay.configure.await_args.args[0]["mqtt_broker"] == "restored.local"
+
+    @pytest.mark.asyncio
+    async def test_a_failure_before_the_commit_still_reports_nothing_restored(self, db_session):
+        """Control: rolling back and saying so is right when nothing landed."""
+        service, config_id = await self._configured_service(db_session, self._payload())
+        service._restore_settings = AsyncMock(side_effect=RuntimeError("read failed"))
+        relay = MagicMock()
+        relay.configure = AsyncMock(return_value=True)
+
+        with self._session_patch(db_session), patch("backend.app.services.mqtt_relay.mqtt_relay", relay):
+            result = await service.run_restore(
+                config_id, "a" * 40, [RestoreCategory.SETTINGS, RestoreCategory.KPROFILES]
+            )
+
+        assert result["success"] is False
+        assert result["results"] == {}
+        assert (await db_session.execute(select(Settings))).scalars().first() is None
+        relay.configure.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_profiles_value_is_a_skipped_category_not_a_raise(self, db_session, printer_factory):
+        """Belt-and-braces: the pre-loop count ran ahead of the per-call guards.
+
+        ``sum(len(c.get("profiles") or []) ...)`` raises TypeError on a
+        hand-edited or truncated backup whose ``profiles`` is not a list — and it
+        raises after the database categories are already on disk.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        client = MagicMock()
+        client.state.connected = True
+        client.set_kprofiles_batch = MagicMock(return_value="7")
+        client.get_kprofiles = AsyncMock(return_value=[])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(profiles=5), tally)
+
+        client.set_kprofiles_batch.assert_not_called()
+        assert (tally.restored, tally.failed) == (0, 0)
+        assert "kprofilesStepFailed" not in _codes(tally)
+
+
 class TestResolveRef:
     @pytest.mark.asyncio
     async def test_concrete_sha_passes_through_without_an_api_call(self):

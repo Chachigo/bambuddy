@@ -4917,6 +4917,7 @@ export default {
         kprofilesUnmatched: '{{nozzle}} 的 {{count}} 个配置在 {{printer}} 上没有对应项 - 已作为新配置添加',
         kprofilesSendFailed: '无法将 {{nozzle}} 的配置发送到 {{printer}}（{{serial}}）',
         kprofilesRefused: '{{printer}}（{{serial}}）拒绝了 {{nozzle}} 的配置：{{reason}}',
+        kprofilesStepFailed: 'K 值配置步骤未能完成 - {{reason}}。在此之前恢复的内容仍已保存。',
       },
     },
 

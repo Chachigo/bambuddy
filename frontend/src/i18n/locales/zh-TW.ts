@@ -4917,6 +4917,7 @@ export default {
         kprofilesUnmatched: '{{nozzle}} 的 {{count}} 個設定檔在 {{printer}} 上沒有對應項 - 已新增為新設定檔',
         kprofilesSendFailed: '無法將 {{nozzle}} 的設定檔傳送到 {{printer}}（{{serial}}）',
         kprofilesRefused: '{{printer}}（{{serial}}）拒絕了 {{nozzle}} 的設定檔：{{reason}}',
+        kprofilesStepFailed: 'K 值設定檔步驟未能完成 - {{reason}}。在此之前還原的內容仍已儲存。',
       },
     },
 

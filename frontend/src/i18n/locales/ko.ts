@@ -4694,6 +4694,7 @@ export default {
         kprofilesUnmatched: '{{nozzle}}용 프로파일 {{count}}개가 {{printer}}에 대응 항목이 없습니다 - 새 프로파일로 추가했습니다',
         kprofilesSendFailed: '{{nozzle}} 프로파일을 {{printer}}({{serial}})에 보내지 못했습니다',
         kprofilesRefused: '{{printer}}({{serial}})이(가) {{nozzle}} 프로파일을 거부했습니다: {{reason}}',
+        kprofilesStepFailed: 'K 프로파일 단계를 완료하지 못했습니다 - {{reason}}. 그 전에 복원된 항목은 그대로 저장되어 있습니다.',
       },
     },
     history: '기록',

@@ -858,7 +858,32 @@ class GitHubRestoreService:
 
             self._progress = "Sending K-profiles to printers..."
             tally = _CategoryTally()
-            await self._restore_kprofiles(db, payload, tally)
+            try:
+                await self._restore_kprofiles(db, payload, tally)
+            except Exception as e:
+                # Everything above is committed and cannot be un-committed, so
+                # letting this reach run_restore's handler would report
+                # "nothing was restored" over durable archive, spool and
+                # settings rows — and skip the post-commit MQTT reconfigure,
+                # leaving the relay on the pre-restore broker. The K-profile
+                # phase is the last thing that runs, so containing it here is
+                # what keeps the result honest about what actually landed.
+                logger.exception("The K-profile step failed after the database categories were committed")
+                # Discards the phase's own read transaction. The rows above went
+                # in at the commit two statements up; this only stops a session
+                # left in a failed state by a database error from turning the
+                # caller's commit into that same false report.
+                await db.rollback()
+                outstanding = self._kprofile_profile_count(
+                    content for path, content in payload.items() if _KPROFILE_PATH_RE.match(path)
+                )
+                outstanding -= tally.restored + tally.skipped + tally.failed
+                tally.failed += max(outstanding, 0)
+                tally.note(
+                    "kprofilesStepFailed",
+                    f"The K-profile step could not be completed: {e}",
+                    reason=str(e)[:200],
+                )
             results[RestoreCategory.KPROFILES.value] = tally
 
         return results
@@ -1482,7 +1507,7 @@ class GitHubRestoreService:
         )
 
         for serial, entries in sorted(by_serial.items()):
-            profile_total = sum(len(c.get("profiles") or []) for _, c in entries)
+            profile_total = self._kprofile_profile_count(c for _, c in entries)
 
             printer = printers.get(serial)
             if printer is None:
@@ -1603,6 +1628,23 @@ class GitHubRestoreService:
                         serial=serial,
                         reason=detail,
                     )
+
+    @staticmethod
+    def _kprofile_profile_count(contents) -> int:
+        """Count the profiles across parsed K-profile files.
+
+        Defensive on purpose. A hand-edited or truncated backup can carry a
+        ``profiles`` value that is not a list, and this count runs *before* the
+        per-call guards in the loop below — after ``_apply`` has already
+        committed the database categories. A malformed file has to be a skipped
+        category, not an exception thrown over committed rows.
+        """
+        total = 0
+        for content in contents:
+            profiles = content.get("profiles") if isinstance(content, dict) else None
+            if isinstance(profiles, list):
+                total += len(profiles)
+        return total
 
     @staticmethod
     async def _kprofile_ack(client, seq: str, serial: str, nozzle: str) -> tuple[bool, str]:

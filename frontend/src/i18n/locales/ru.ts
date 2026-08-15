@@ -4686,6 +4686,7 @@ export default {
         kprofilesUnmatched: 'Профилей для {{nozzle}} без соответствия на {{printer}}: {{count}} - добавлены как новые профили',
         kprofilesSendFailed: 'Не удалось отправить профили {{nozzle}} на {{printer}} ({{serial}})',
         kprofilesRefused: '{{printer}} ({{serial}}) отклонил профили {{nozzle}}: {{reason}}',
+        kprofilesStepFailed: 'Не удалось завершить этап K-профилей - {{reason}}. Всё, что было восстановлено до него, сохранено.',
       },
     },
     history: "История",

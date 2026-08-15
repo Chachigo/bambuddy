@@ -4907,6 +4907,7 @@ export default {
         kprofilesUnmatched: '{{nozzle}} için {{count}} profilin {{printer}} üzerinde karşılığı yoktu - yeni profil olarak eklendi',
         kprofilesSendFailed: '{{nozzle}} profilleri {{printer}} ({{serial}}) yazıcısına gönderilemedi',
         kprofilesRefused: '{{printer}} ({{serial}}) {{nozzle}} profillerini reddetti: {{reason}}',
+        kprofilesStepFailed: 'K profili adımı tamamlanamadı - {{reason}}. Bundan önce geri yüklenenler yine de kaydedildi.',
       },
     },
 
