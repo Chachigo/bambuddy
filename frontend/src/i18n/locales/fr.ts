@@ -5010,6 +5010,7 @@ export default {
         archivesPrinterMissing: 'Certaines archives référençaient des imprimantes qui n\'existent plus - lien effacé',
         archivesProjectMissing: 'Certaines archives référençaient des projets qui n\'existent plus - lien effacé',
         archivesOwnerCleared: 'Certaines archives référençaient des utilisateurs qui n\'existent plus - propriétaire effacé, elles ne sont donc visibles que par les utilisateurs disposant de la permission archives:read_all jusqu\'à ce qu\'un administrateur les réattribue',
+        archivesOwnerUnmatched: 'Certaines archives désignent un propriétaire absent de cette instance - le propriétaire a été effacé plutôt que déduit de l\'identifiant utilisateur de la sauvegarde, elles ne sont donc visibles que par les utilisateurs disposant de la permission archives:read_all jusqu\'à ce qu\'un administrateur les réattribue',
         archivesOwnerUnknown: 'Certaines archives ont été restaurées sans propriétaire - cette sauvegarde n\'en enregistre aucun, elles ne sont donc visibles que par les utilisateurs disposant de la permission archives:read_all jusqu\'à ce qu\'un administrateur les réattribue',
         archivesUndeleted: 'Les archives supprimées depuis la sauvegarde sont de nouveau visibles - l\'écrasement était activé',
         archivesMetadataOnly: 'Les archives restaurées ne contiennent que des métadonnées - les fichiers 3MF et les miniatures ne sont pas dans une sauvegarde Git',

@@ -2390,6 +2390,239 @@ class TestRestoredArchiveOwnership:
         assert row.created_by_id == user.id, "a restored archive its owner cannot see is not restored"
 
 
+class TestArchiveOwnerNaturalKey:
+    """``created_by_username`` decides the owner; the id is only the fallback.
+
+    Restoring onto a rebuilt instance is this feature's main use case, and the
+    users table renumbers there. A raw ``created_by_id`` cannot tell a correct
+    match from a live id that now belongs to somebody else, so the id path hands
+    one person's print history to another under ``ARCHIVES_READ_OWN`` — silently,
+    because ``archivesOwnerCleared`` only fires for an id that is *absent*.
+    ``username`` is unique on ``users``, so resolving on it turns that silent
+    misattribution into an ownerless row with a note.
+    """
+
+    def _entry(self, **overrides):
+        entry = {
+            "id": 77,
+            "filename": "benchy.3mf",
+            "file_size": 2048,
+            "content_hash": "abc123",
+            "started_at": "2026-03-01 10:00:00",
+            "created_at": "2026-03-01 10:00:00",
+        }
+        entry.update(overrides)
+        return entry
+
+    async def _user(self, db, username):
+        user = User(username=username, role="operator")
+        db.add(user)
+        await db.flush()
+        return user
+
+    @pytest.mark.asyncio
+    async def test_the_name_resolves_across_a_renumbered_users_table(self, db_session):
+        """The whole point: same person, different id, restore still finds them."""
+        alice = await self._user(db_session, "alice")
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session,
+            {"archives": [self._entry(created_by_id=alice.id + 500, created_by_username="alice")]},
+            False,
+            tally,
+            {},
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == alice.id
+        assert not any("owner cleared" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_name_beats_a_live_id_belonging_to_someone_else(self, db_session):
+        """The misattribution case, and the one the id path cannot even detect.
+
+        Both ids exist locally, so the id path would write bob's — a valid row,
+        no note, alice's print history readable by bob.
+        """
+        alice = await self._user(db_session, "alice")
+        bob = await self._user(db_session, "bob")
+
+        await _service()._restore_archives(
+            db_session,
+            {"archives": [self._entry(created_by_id=bob.id, created_by_username="alice")]},
+            False,
+            _CategoryTally(),
+            {},
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == alice.id, "the name is the natural key; the id is from another instance"
+
+    @pytest.mark.asyncio
+    async def test_a_renamed_owner_lands_ownerless_with_a_note(self, db_session):
+        """No local match, so nothing to resolve — and the id is not a fallback here.
+
+        Falling back to it is exactly the guess the name exists to prevent, so
+        the row is cleared and said out loud instead.
+        """
+        bob = await self._user(db_session, "bob")
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session,
+            {"archives": [self._entry(created_by_id=bob.id, created_by_username="alice")]},
+            False,
+            tally,
+            {},
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id is None
+        assert tally.restored == 1 and tally.failed == 0
+        assert any("does not have" in note and "archives:read_all" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_unmatched_note_is_emitted_once_for_many_rows(self, db_session):
+        tally = _CategoryTally()
+        archives = [
+            self._entry(id=1, content_hash="h1", filename="a.3mf", created_by_username="alice"),
+            self._entry(id=2, content_hash="h2", filename="b.3mf", created_by_username="carol"),
+        ]
+
+        await _service()._restore_archives(db_session, {"archives": archives}, False, tally, {})
+        await db_session.commit()
+
+        assert sum(1 for note in _messages(tally) if "does not have" in note) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_unmatched_name_does_not_also_claim_no_owner_was_recorded(self, db_session):
+        """One row, one cause, one note — as with the stale-id branch."""
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_username="alice")]}, False, tally, {}
+        )
+        await db_session.commit()
+
+        assert any("does not have" in note for note in _messages(tally))
+        assert not any("without an owner" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_a_pre_username_backup_still_resolves_on_the_id(self, db_session):
+        """The fallback has to keep working — every backup taken before this change."""
+        alice = await self._user(db_session, "alice")
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=alice.id)]}, False, _CategoryTally(), {}
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == alice.id
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_ownerless_archive_reads_as_no_owner_not_as_unmatched(self, db_session):
+        """A current-format backup of an unowned archive writes both keys null."""
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session,
+            {"archives": [self._entry(created_by_id=None, created_by_username=None)]},
+            False,
+            tally,
+            {},
+        )
+        await db_session.commit()
+
+        assert any("without an owner" in note for note in _messages(tally))
+        assert not any("does not have" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_overwrite_leaves_the_owner_alone_when_neither_key_is_present(self, db_session):
+        """The absent-is-not-null rule still holds now that there are two keys."""
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+
+        await _service()._restore_archives(db_session, {"archives": [self._entry()]}, True, _CategoryTally(), {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == bob.id
+
+    @pytest.mark.asyncio
+    async def test_the_name_survives_collect_then_restore(self, db_session):
+        """Both halves, because the collector writing nothing looks harmless alone."""
+        from backend.app.services.github_backup import github_backup_service
+
+        alice = await self._user(db_session, "alice")
+        db_session.add(
+            PrintArchive(
+                filename="owned.3mf",
+                file_path="",
+                file_size=1024,
+                content_hash="hash-owned",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=alice.id,
+            )
+        )
+        await db_session.commit()
+
+        files: dict = {}
+        await github_backup_service._collect_archives(db_session, files)
+        payload = files[ARCHIVES_PATH]
+        assert payload["archives"][0]["created_by_username"] == "alice"
+
+        # Rebuilt instance: same person, and nothing else holds their old id.
+        await db_session.execute(PrintArchive.__table__.delete())
+        await db_session.execute(User.__table__.delete())
+        await db_session.commit()
+        rebuilt = await self._user(db_session, "alice")
+        await db_session.commit()
+
+        await _service()._restore_archives(db_session, payload, False, _CategoryTally(), {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == rebuilt.id
+
+    @pytest.mark.asyncio
+    async def test_the_collector_names_no_owner_for_an_unowned_archive(self, db_session):
+        """Null rather than absent, so a restore can tell "none" from "not recorded"."""
+        from backend.app.services.github_backup import github_backup_service
+
+        db_session.add(
+            PrintArchive(
+                filename="unowned.3mf",
+                file_path="",
+                file_size=1024,
+                content_hash="hash-unowned",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+            )
+        )
+        await db_session.commit()
+
+        files: dict = {}
+        await github_backup_service._collect_archives(db_session, files)
+
+        entry = files[ARCHIVES_PATH]["archives"][0]
+        assert entry["created_by_username"] is None
+        assert "created_by_username" in entry
+
+
 class TestCategoryPathMapping:
     def setup_method(self):
         self.service = _service()

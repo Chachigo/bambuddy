@@ -5028,6 +5028,7 @@ export default {
         archivesPrinterMissing: 'Algunos archivos hacían referencia a impresoras que ya no existen - enlace eliminado',
         archivesProjectMissing: 'Algunos archivos hacían referencia a proyectos que ya no existen - enlace eliminado',
         archivesOwnerCleared: 'Algunos archivos hacían referencia a usuarios que ya no existen - se ha borrado el propietario, por lo que solo son visibles para usuarios con el permiso archives:read_all hasta que un administrador los reasigne',
+        archivesOwnerUnmatched: 'Algunos archivos indican un propietario que no existe en esta instancia - se ha borrado el propietario en lugar de deducirlo del id de usuario de la copia de seguridad, por lo que solo son visibles para usuarios con el permiso archives:read_all hasta que un administrador los reasigne',
         archivesOwnerUnknown: 'Algunos archivos se restauraron sin propietario - esta copia de seguridad no registra ninguno, por lo que solo son visibles para usuarios con el permiso archives:read_all hasta que un administrador los reasigne',
         archivesUndeleted: 'Los archivos eliminados desde la copia vuelven a estar visibles - la sobrescritura estaba activada',
         archivesMetadataOnly: 'Los archivos restaurados solo contienen metadatos - los ficheros 3MF y las miniaturas no están en una copia de Git',

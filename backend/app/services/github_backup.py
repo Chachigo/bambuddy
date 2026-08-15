@@ -828,6 +828,14 @@ class GitHubBackupService:
         if not archives:
             return
 
+        # The natural key for an owner. created_by_id alone is only meaningful on
+        # the instance that wrote it: restoring onto a rebuilt instance — this
+        # feature's main use case — renumbers the users table, so a live id can
+        # land on a different person. username is unique on users, so the restore
+        # can resolve on it and treat a rename as unknown rather than guess.
+        # One query for the map; archives outnumber users by orders of magnitude.
+        user_names = dict((await db.execute(select(User.id, User.username))).all())
+
         archive_list = []
         for a in archives:
             archive_data = {
@@ -876,6 +884,12 @@ class GitHubBackupService:
                 # restored row without it is invisible to everyone but an admin —
                 # while the restore reports it restored.
                 "created_by_id": a.created_by_id,
+                # Preferred over the id on restore; the id stays as the fallback
+                # for an owner whose row has since gone. Null when the archive
+                # has no owner, or when it points at a user row that no longer
+                # exists locally — the same "absent is not null" rule the restore
+                # applies, so a backup can't claim an owner it cannot name.
+                "created_by_username": user_names.get(a.created_by_id),
             }
             archive_list.append(archive_data)
 

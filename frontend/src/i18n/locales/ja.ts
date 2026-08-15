@@ -5021,6 +5021,7 @@ export default {
         archivesPrinterMissing: '一部のアーカイブが存在しないプリンターを参照していました - リンクを解除しました',
         archivesProjectMissing: '一部のアーカイブが存在しないプロジェクトを参照していました - リンクを解除しました',
         archivesOwnerCleared: '一部のアーカイブが存在しないユーザーを参照していました - 所有者を解除したため、管理者が割り当て直すまで archives:read_all 権限を持つユーザーにしか表示されません',
+        archivesOwnerUnmatched: '一部のアーカイブはこのインスタンスに存在しない所有者を指しています - バックアップのユーザー ID から推測せずに所有者を解除したため、管理者が割り当て直すまで archives:read_all 権限を持つユーザーにしか表示されません',
         archivesOwnerUnknown: '一部のアーカイブは所有者なしで復元されました - このバックアップに所有者が記録されていないため、管理者が割り当てるまで archives:read_all 権限を持つユーザーにしか表示されません',
         archivesUndeleted: 'バックアップ後に削除されたアーカイブが再び表示されます - 上書きが有効でした',
         archivesMetadataOnly: '復元されたアーカイブはメタデータのみです - 3MF ファイルとサムネイルは Git バックアップに含まれません',

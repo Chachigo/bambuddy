@@ -942,14 +942,17 @@ class GitHubRestoreService:
         # (_ensure_archive_visible fails closed on it) and never appears in the
         # ownership-scoped list queries. Hoisted like the two above.
         #
-        # Note this is the one place a raw backup id is reused, against the
-        # module's own rule at the top of the file. Users have no natural key the
-        # backup carries today, and the id is validated rather than trusted, so a
-        # *stale* id clears instead of pointing somewhere wrong. What it cannot
-        # catch is a live id belonging to a different person on a different
-        # instance. Collecting username and resolving on that would close it;
-        # raised with the maintainer rather than decided here.
-        valid_users = set((await db.execute(select(User.id))).scalars().all())
+        # username is the natural key and wins, per the module's rule at the top
+        # of the file; created_by_id is the fallback for a pre-#2656 commit that
+        # carries no username. That ordering is what makes restoring onto a
+        # rebuilt instance safe: the users table renumbers there, so a live id
+        # can land on a different person, and the id path alone cannot tell that
+        # from a correct match. Resolving on the name instead means the one case
+        # it cannot resolve — a user renamed since the backup — falls through to
+        # ownerless-with-a-note below rather than misattributing in silence.
+        users = (await db.execute(select(User.id, User.username))).all()
+        valid_users = {user_id for user_id, _ in users}
+        users_by_name = {username: user_id for user_id, username in users}
 
         # Only metadata is backed up, never the 3MF/thumbnail bytes, and
         # print_archives.file_path is NOT NULL — so inserted rows get an empty
@@ -1008,7 +1011,7 @@ class GitHubRestoreService:
             fields["printer_id"] = printer_id
             fields["project_id"] = project_id
 
-            # created_by_id and deleted_at are the two late arrivals — a backup
+            # The ownership pair and deleted_at are the late arrivals — a backup
             # commit taken before the collector wrote them carries neither key.
             # Absent is NOT the same as null here, because the overwrite branch
             # below is a blanket setattr: treating a missing key as None would
@@ -1018,13 +1021,33 @@ class GitHubRestoreService:
             # deleted. So only carry a column the backup actually knows about;
             # on insert, an absent key just takes the model default.
             owner_cleared = False
-            if "created_by_id" in entry:
+            backup_username = entry.get("created_by_username")
+            if isinstance(backup_username, str) and backup_username:
+                # The natural-key path. A miss here is a user renamed or deleted
+                # since the backup, and there is nothing else to resolve on: the
+                # id alongside it is from the source instance's numbering, so
+                # trusting it is exactly the misattribution the name is here to
+                # prevent. Cleared rather than failing the row — the archive is
+                # still worth having, and an admin can reassign it — but said out
+                # loud, because a cleared owner is not silent-safe.
+                created_by_id = users_by_name.get(backup_username)
+                if created_by_id is None:
+                    tally.note(
+                        "archivesOwnerUnmatched",
+                        "Some archives name an owner this instance does not have — owner cleared rather than "
+                        "guessed from the backup's user id, so they are visible only to users with the "
+                        "archives:read_all permission until an admin reassigns them",
+                    )
+                    owner_cleared = True
+                fields["created_by_id"] = created_by_id
+            elif "created_by_id" in entry:
+                # Fallback for a commit taken before the collector recorded the
+                # username. Validated rather than trusted, so a *stale* id clears
+                # instead of pointing somewhere wrong; a live id belonging to a
+                # different person on a rebuilt instance is the case this path
+                # cannot see, and is why the branch above exists.
                 created_by_id = entry.get("created_by_id")
                 if created_by_id is not None and created_by_id not in valid_users:
-                    # Coerced rather than failing the row: the archive is still
-                    # worth having, and an admin can reassign it. Said out loud
-                    # because a cleared owner is not silent-safe — the archive
-                    # becomes visible only to archives:read_all until someone does.
                     tally.note(
                         "archivesOwnerCleared",
                         "Some archives referenced users that no longer exist — owner cleared, so they are "

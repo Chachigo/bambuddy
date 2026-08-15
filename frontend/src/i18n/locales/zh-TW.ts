@@ -5009,6 +5009,7 @@ export default {
         archivesPrinterMissing: '部分封存參照了已不存在的印表機 - 已清除連結',
         archivesProjectMissing: '部分封存參照了已不存在的專案 - 已清除連結',
         archivesOwnerCleared: '部分封存參照了已不存在的使用者 - 已清除擁有者，因此在管理員重新指派之前，只有具備 archives:read_all 權限的使用者才看得到',
+        archivesOwnerUnmatched: '部分封存指向本執行個體沒有的使用者 - 已清除擁有者，而非依備份中的使用者 ID 推測，因此在管理員重新指派之前，只有具備 archives:read_all 權限的使用者才看得到',
         archivesOwnerUnknown: '部分封存還原時沒有擁有者 - 此備份未記錄擁有者，因此在管理員指派之前，只有具備 archives:read_all 權限的使用者才看得到',
         archivesUndeleted: '備份之後刪除的封存重新可見 - 當時啟用了覆寫',
         archivesMetadataOnly: '還原的封存僅含中繼資料 - 3MF 檔案與縮圖不在 Git 備份中',
