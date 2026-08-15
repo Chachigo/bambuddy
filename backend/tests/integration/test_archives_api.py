@@ -21,7 +21,7 @@ class TestArchivesAPI:
     @pytest.mark.integration
     @pytest.mark.parametrize("prefer_filename_for_name", [True, False])
     async def test_upload_archive_forwards_prefer_filename_for_name(
-        self, async_client: AsyncClient, archive_factory, printer_factory, db_session, prefer_filename_for_name
+        self, async_client: AsyncClient, archive_factory, printer_factory, prefer_filename_for_name
     ):
         """POST /archives/upload must forward prefer_filename_for_name to
         ArchiveService.archive_print unchanged — this flag lets a caller (e.g.
@@ -56,7 +56,7 @@ class TestArchivesAPI:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_upload_archive_defaults_prefer_filename_for_name_false(
-        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+        self, async_client: AsyncClient, archive_factory, printer_factory
     ):
         """Omitting the query param must not change existing behavior for
         callers that predate this flag."""
@@ -80,7 +80,7 @@ class TestArchivesAPI:
     @pytest.mark.integration
     @pytest.mark.parametrize("prefer_filename_for_name", [True, False])
     async def test_upload_archives_bulk_forwards_prefer_filename_for_name(
-        self, async_client: AsyncClient, archive_factory, printer_factory, db_session, prefer_filename_for_name
+        self, async_client: AsyncClient, archive_factory, printer_factory, prefer_filename_for_name
     ):
         """POST /archives/upload-bulk must forward prefer_filename_for_name to
         ArchiveService.archive_print for every file in the batch, keeping this
@@ -109,7 +109,7 @@ class TestArchivesAPI:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_upload_archives_bulk_defaults_prefer_filename_for_name_false(
-        self, async_client: AsyncClient, archive_factory, printer_factory, db_session
+        self, async_client: AsyncClient, archive_factory, printer_factory
     ):
         """Omitting the query param on the bulk route must not change existing
         behavior for callers that predate this flag."""

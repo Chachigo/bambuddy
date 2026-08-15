@@ -3429,17 +3429,27 @@ async def get_plate_preview(
 async def upload_archive(
     file: UploadFile = File(...),
     printer_id: int | None = None,
-    prefer_filename_for_name: bool = False,
+    prefer_filename_for_name: bool = Query(
+        False,
+        description=(
+            "Name the archive after the uploaded filename instead of the print_name "
+            "embedded in the 3MF's metadata. Off by default, which keeps the embedded "
+            "name. Turn it on when the filename you send is the meaningful one — an "
+            "integration naming files after its own jobs, or a file whose embedded "
+            "title is a stale name from whoever originally sliced it."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.ARCHIVES_CREATE),
 ):
     """Manually upload a 3MF file to archive.
 
-    prefer_filename_for_name: When True, use the uploaded filename stem as the
-    archive's display name even if the 3MF embeds a `print_name` in its
-    metadata. Same flag already used by the FTP review flow and virtual-printer
-    dispatch (see ArchiveService.archive_print) — this endpoint just didn't
-    expose it (#1152 follow-up).
+    prefer_filename_for_name is the same flag the FTP review flow and
+    virtual-printer dispatch already pass to ArchiveService.archive_print —
+    this endpoint just didn't expose it (#1152 follow-up). Those callers derive
+    it from the VP-scoped `virtual_printer_archive_name_source` setting; here it
+    is per-request, because the caller is an API client that knows whether the
+    filename it sent is the meaningful one (#2609).
     """
     if not file.filename or not file.filename.endswith(".3mf"):
         raise HTTPException(400, "File must be a .3mf file")
@@ -3482,14 +3492,21 @@ async def upload_archive(
 async def upload_archives_bulk(
     files: list[UploadFile] = File(...),
     printer_id: int | None = None,
-    prefer_filename_for_name: bool = False,
+    prefer_filename_for_name: bool = Query(
+        False,
+        description=(
+            "Name each archive after its uploaded filename instead of the print_name "
+            "embedded in the 3MF's metadata. Applies to every file in the batch. Off "
+            "by default, which keeps the embedded name."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     current_user: User | None = RequirePermissionIfAuthEnabled(Permission.ARCHIVES_CREATE),
 ):
     """Bulk upload multiple 3MF files to archive.
 
-    prefer_filename_for_name: applied to every file in the batch. See
-    upload_archive for details.
+    prefer_filename_for_name applies to every file in the batch. See
+    upload_archive for the flag's lineage.
     """
     from backend.app.api.routes.library import validate_print_file_upload
 
