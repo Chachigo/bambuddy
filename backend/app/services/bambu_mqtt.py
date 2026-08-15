@@ -274,6 +274,99 @@ def apply_tray_exist_bits(
     return cleared
 
 
+# --- H2C nozzle-rack dispatch mapping (#2800) -------------------------------
+#
+# Physical nozzle IDs the H2C reports for its six rack slots. The two hotend
+# carriage positions are 0 and 1 in the same namespace, which is why a rack
+# position can never be confused with an extruder index by value.
+_RACK_NOZZLE_IDS = frozenset(range(16, 22))
+
+# BambuStudio dispatches a fixed-length nozzle_mapping on rack models: one
+# physical nozzle ID per filament slot, -1 for slots the plate does not print.
+_RACK_WIRE_SLOTS = 32
+
+# The extruder the rack feeds. On the H2C the swappable hotend sits on the
+# right carriage, which the slicer's physical_extruder_map numbers 0 (left is
+# 1) -- so a slot assigned extruder 0 is a slot that prints from whichever
+# rack nozzle is currently mounted.
+#
+# This is the one value here taken from a single hardware observation (#2800)
+# rather than from something the printer reports. It is safe to be wrong about
+# for a job that prints entirely from one side: if the rack were really on
+# extruder 1, no slot would match and the mapping would simply be omitted,
+# which is the behaviour that existed before any of this. Only a job that
+# prints from both nozzles at once could be actively harmed by a flip, and
+# that is what a second hardware capture needs to confirm.
+_RACK_EXTRUDER_ID = 0
+
+
+def resolve_rack_nozzle_mapping(
+    slot_extruders: list[int],
+    rack_nozzle_id: int | None,
+) -> list[int] | None:
+    """Expand a per-slot extruder mapping into an H2C physical nozzle_mapping.
+
+    ``slot_extruders`` is the compact form stored on the queue item: MQTT
+    extruder index per filament slot (index 0 = slot 1), -1 for a slot the
+    plate does not print. ``rack_nozzle_id`` is the rack position the printer
+    reports as live.
+
+    Returns a ``_RACK_WIRE_SLOTS``-long list of physical nozzle IDs, or None
+    when the mapping cannot be resolved with confidence -- in which case the
+    caller omits the field entirely and the firmware falls back to its own
+    nozzle pick, exactly as it did before this translation existed. Omitting
+    is deliberately the failure mode: a *wrong* physical ID makes the printer
+    level with one nozzle and print with another several millimetres off the
+    bed, which is far worse than letting the firmware choose.
+
+    Returns None specifically when:
+
+    - a slot needs the rack but the printer has not reported a live rack
+      position (mid-swap, or a stale connection);
+    - no slot needs the rack at all. The non-rack hotend's own physical ID is
+      not yet confirmed against a known-good BambuStudio capture, and this
+      code will not guess one. Such a job dispatches as it does today.
+    - the plate needs more slots than the wire format carries;
+    - the input is not a list of whole numbers.
+
+    Total by construction: it raises nothing, because the only caller is
+    building an MQTT print command with no exception handler above it and the
+    queue item has already been committed as `printing` by then. An
+    unparseable input has to degrade to "let the firmware pick", not to a job
+    wedged in a state no print will ever leave.
+    """
+    if not isinstance(slot_extruders, list) or not slot_extruders:
+        return None
+    if len(slot_extruders) > _RACK_WIRE_SLOTS:
+        return None
+    if not isinstance(rack_nozzle_id, int) or isinstance(rack_nozzle_id, bool):
+        return None
+    if rack_nozzle_id not in _RACK_NOZZLE_IDS:
+        return None
+
+    # Normalise first so the checks below, and the values that reach the wire,
+    # are known ints. bool is an int subclass and would otherwise serialise as
+    # a JSON `true`; None means "slot not printed" and is folded into -1.
+    normalised: list[int] = []
+    for extruder in slot_extruders:
+        if extruder is None:
+            normalised.append(-1)
+        elif isinstance(extruder, int) and not isinstance(extruder, bool):
+            normalised.append(extruder)
+        else:
+            return None
+
+    if _RACK_EXTRUDER_ID not in normalised:
+        return None
+
+    wire = [-1] * _RACK_WIRE_SLOTS
+    for index, extruder in enumerate(normalised):
+        if extruder < 0:
+            continue
+        wire[index] = rack_nozzle_id if extruder == _RACK_EXTRUDER_ID else extruder
+    return wire
+
+
 @dataclass
 class MQTTLogEntry:
     """Log entry for MQTT message debugging."""
@@ -490,6 +583,14 @@ class PrinterState:
     h2d_extruder_snow: dict = field(default_factory=dict)
     # H2C nozzle rack: full device.nozzle.info array for tool-changer printers (>2 nozzles)
     nozzle_rack: list = field(default_factory=list)
+    # H2C rack position currently mounted / being moved to, from
+    # device.nozzle.src_id / tar_id. These are PHYSICAL nozzle IDs (16-21 for
+    # the six rack slots), not extruder indices, and they are what the
+    # dispatch `nozzle_mapping` array has to carry (#2800). Only the printer
+    # can tell us which hotend is in the carriage right now, so this is read
+    # live rather than derived from the queued job.
+    nozzle_rack_src_id: int | None = None
+    nozzle_rack_tar_id: int | None = None
     # Timestamp of last AMS data update (for RFID refresh detection)
     last_ams_update: float = 0.0
     # Printable objects for skip object functionality: {identify_id: object_name}
@@ -4285,6 +4386,36 @@ class BambuMQTTClient:
         if "device" in data and isinstance(data["device"], dict):
             device = data["device"]
             nozzle_data = device.get("nozzle", {})
+
+            # H2C rack position (#2800). `tar_id` is where the carriage is
+            # headed, `src_id` where it came from; mid-swap they differ, so
+            # dispatch prefers tar_id and falls back to src_id. Both are
+            # sticky — the field is only pushed when it changes, so an
+            # absent key must leave the last known value alone rather than
+            # reset it to None.
+            if isinstance(nozzle_data, dict):
+                for key, attr in (("src_id", "nozzle_rack_src_id"), ("tar_id", "nozzle_rack_tar_id")):
+                    if key not in nozzle_data:
+                        continue
+                    try:
+                        parsed_id = int(nozzle_data[key])
+                    except (TypeError, ValueError):
+                        continue
+                    if getattr(self.state, attr) != parsed_id:
+                        setattr(self.state, attr, parsed_id)
+                        # DEBUG, not INFO: these move on every tool change, so
+                        # a long multi-material print would otherwise write
+                        # thousands of lines. The dispatch log records both
+                        # values once per print, which is where triage needs
+                        # them. Same reasoning as the one-shot `nozzle_info`
+                        # log below.
+                        logger.debug(
+                            "[%s] Nozzle rack %s -> %s",
+                            self.serial_number,
+                            key,
+                            parsed_id,
+                        )
+
             nozzle_info = nozzle_data.get("info", [])
             if isinstance(nozzle_info, list):
                 # H2 series: nozzle_info contains extended nozzle data (wear, serial,
@@ -4946,6 +5077,7 @@ class BambuMQTTClient:
         use_ams: bool = True,
         nozzle_offset_cali: str = "auto",
         nozzle_mapping: str | None = None,
+        nozzle_slot_extruders: str | None = None,
     ):
         """Start a print job on the printer.
 
@@ -4972,6 +5104,14 @@ class BambuMQTTClient:
                 firmware honours the user's slicer pick instead of falling
                 back to "last matching nozzle" auto-pick. Silently ignored
                 on single-nozzle printers.
+            nozzle_slot_extruders: Opaque JSON string of per-filament-slot
+                MQTT extruder indices, derived from the 3MF when no
+                BambuStudio capture exists (#2800). Consulted only on
+                nozzle-rack models (H2C) and only when `nozzle_mapping` did
+                not already supply one; resolved here into physical rack
+                positions using the live `device.nozzle` state. When it
+                cannot be resolved the field is omitted and the firmware
+                picks, as it did before this existed.
 
         Returns True when the start command was published, False otherwise
         (not connected, or the printer is already busy — see the run-state
@@ -5017,7 +5157,7 @@ class BambuMQTTClient:
             # model name for the brief window after connect before push data
             # arrives. _is_dual_nozzle only ever flips False→True, so it's safe
             # as the primary signal.
-            from backend.app.utils.printer_models import is_dual_nozzle_model
+            from backend.app.utils.printer_models import is_dual_nozzle_model, is_nozzle_rack_model
 
             is_dual_nozzle = self._is_dual_nozzle or is_dual_nozzle_model(self.model)
 
@@ -5226,6 +5366,52 @@ class BambuMQTTClient:
                         self.serial_number,
                         nozzle_mapping,
                     )
+
+            # Nozzle-rack fallback (#2800). Only consulted when BambuStudio
+            # never saw the job, so it can never override a real capture. The
+            # queue stores extruder indices per filament slot; the physical
+            # rack position they resolve to is only knowable here, because the
+            # mounted hotend can change between queueing and dispatch.
+            if is_nozzle_rack_model(self.model) and nozzle_slot_extruders and "nozzle_mapping" not in command["print"]:
+                try:
+                    slot_extruders = json.loads(nozzle_slot_extruders)
+                except (json.JSONDecodeError, TypeError):
+                    # TypeError covers a caller handing us the list itself
+                    # rather than its JSON — the field is opaque by contract,
+                    # and a print must not die over the difference.
+                    slot_extruders = None
+                    logger.warning(
+                        "[%s] Invalid nozzle_slot_extruders JSON on dispatch, "
+                        "omitting nozzle_mapping (firmware will auto-pick): %r",
+                        self.serial_number,
+                        nozzle_slot_extruders,
+                    )
+
+                if isinstance(slot_extruders, list):
+                    rack_nozzle_id = (
+                        self.state.nozzle_rack_tar_id
+                        if self.state.nozzle_rack_tar_id in _RACK_NOZZLE_IDS
+                        else self.state.nozzle_rack_src_id
+                    )
+                    resolved = resolve_rack_nozzle_mapping(slot_extruders, rack_nozzle_id)
+                    if resolved is None:
+                        logger.info(
+                            "[%s] Nozzle rack slots %s not resolvable (tar_id=%s src_id=%s); "
+                            "omitting nozzle_mapping so the firmware picks",
+                            self.serial_number,
+                            slot_extruders,
+                            self.state.nozzle_rack_tar_id,
+                            self.state.nozzle_rack_src_id,
+                        )
+                    else:
+                        logger.info(
+                            "[%s] Nozzle rack mapping: slots=%s rack_id=%s -> %s",
+                            self.serial_number,
+                            slot_extruders,
+                            rack_nozzle_id,
+                            resolved,
+                        )
+                        command["print"]["nozzle_mapping"] = resolved
 
             logger.info("[%s] Sending print command: %s", self.serial_number, json.dumps(command))
             self._client.publish(self.topic_publish, json.dumps(command), qos=1)

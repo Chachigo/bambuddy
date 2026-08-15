@@ -55,7 +55,12 @@ from backend.app.services.printer_manager import (
 )
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.utils.filename import derive_remote_filename
-from backend.app.utils.printer_models import is_gcode_compatible, normalize_printer_model
+from backend.app.utils.printer_models import (
+    is_gcode_compatible,
+    is_nozzle_rack_model,
+    normalize_printer_model,
+)
+from backend.app.utils.threemf_tools import extract_slot_extruders_from_3mf
 
 logger = logging.getLogger(__name__)
 
@@ -4697,11 +4702,34 @@ class PrintScheduler:
         # FINISH-state fallback — no need to force a video.
         effective_timelapse = bool(item.timelapse)
 
+        # Nozzle-rack fallback (#2800). A job that never passed through the
+        # Virtual Printer carries no Bambu Studio nozzle pick, and an H2C then
+        # dispatches with no nozzle field at all and chooses for itself — which
+        # is how a print levelled on one hotend and then printed on another,
+        # millimetres above the plate. Derive the per-slot extruder assignment
+        # from the file being dispatched.
+        #
+        # Done here rather than at queue time because this is the first point
+        # that knows both the actual printer and the actual file: an item can
+        # be created without a printer (model-based assignment), reassigned
+        # afterwards, or have its file swapped for a G-code-injected copy just
+        # above. Every queue-creation path — the print dialog, a bulk library
+        # add, the webhook, a pipeline run — is covered by the one call.
+        # Skipped when the item already carries a Bambu Studio capture: that
+        # one wins downstream anyway, so reading the 3MF again would be work
+        # thrown away on every dispatch.
+        nozzle_slot_extruders = None
+        if not item.nozzle_mapping and file_path is not None and is_nozzle_rack_model(printer.model):
+            slot_extruders = extract_slot_extruders_from_3mf(file_path)
+            if slot_extruders:
+                nozzle_slot_extruders = json.dumps(slot_extruders)
+
         # Start the print with AMS mapping, plate_id and print options.
         # nozzle_mapping rides through verbatim — JSON string captured from
         # Bambu Studio's project_file on VP intake (#1780); the MQTT layer
         # parses + injects it only for dual-nozzle models so a null on every
-        # other model is a transparent pass-through.
+        # other model is a transparent pass-through. The rack fallback is
+        # resolved down there too, where the live rack position is known.
         started = printer_manager.start_print(
             item.printer_id,
             remote_filename,
@@ -4715,6 +4743,7 @@ class PrintScheduler:
             use_ams=item.use_ams,
             nozzle_offset_cali=item.nozzle_offset_cali,
             nozzle_mapping=item.nozzle_mapping,
+            nozzle_slot_extruders=nozzle_slot_extruders,
         )
 
         if started:

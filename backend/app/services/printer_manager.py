@@ -871,6 +871,7 @@ class PrinterManager:
         use_ams: bool = True,
         nozzle_offset_cali: str = "auto",
         nozzle_mapping: str | None = None,
+        nozzle_slot_extruders: str | None = None,
     ) -> bool:
         """Start a print on a connected printer.
 
@@ -878,6 +879,10 @@ class PrinterManager:
         project_file MQTT command (H2C rack-swap slicer pick preservation,
         #1780). It rides through to the MQTT client untouched; the dispatch
         builder there parses + injects it only on dual-nozzle models.
+
+        ``nozzle_slot_extruders`` is the fallback for a job that never passed
+        through BambuStudio (#2800): per-slot extruder indices the MQTT layer
+        resolves into physical rack positions, and only on rack models.
         """
         caller = traceback.extract_stack(limit=3)[0]
         logger.info(
@@ -901,6 +906,7 @@ class PrinterManager:
                 use_ams=use_ams,
                 nozzle_offset_cali=nozzle_offset_cali,
                 nozzle_mapping=nozzle_mapping,
+                nozzle_slot_extruders=nozzle_slot_extruders,
             )
         return False
 

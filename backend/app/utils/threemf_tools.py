@@ -310,6 +310,53 @@ def extract_embedded_presets_from_3mf(zf: zipfile.ZipFile) -> dict[str, str | No
     return result
 
 
+# Ceiling on the dense per-slot form below. Deliberately larger than the 32
+# entries a print command carries, so a legitimate file is never silently
+# truncated at the limit -- it is either usable or rejected outright.
+_MAX_DENSE_FILAMENT_SLOTS = 64
+
+
+def extract_slot_extruders_from_3mf(file_path: Path) -> list[int] | None:
+    """Per-slot extruder assignment as a dense list, or None (#2800).
+
+    Same data as :func:`extract_nozzle_mapping_from_3mf`, reshaped for the
+    dispatcher: index 0 is filament slot 1, and a slot this file does not
+    print is ``-1``. Nozzle-rack printers (H2C) need it to build the physical
+    ``nozzle_mapping`` the firmware expects — without one they fall back to
+    picking a nozzle themselves, which can level with one hotend and print
+    with another, several millimetres off the bed.
+
+    Takes a path rather than an open archive because the dispatcher is
+    handling the file, not the zip, and a broken file there must not take the
+    print down: an unreadable or non-3MF path returns None, and the caller
+    dispatches exactly as it did before this existed.
+    """
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            by_slot = extract_nozzle_mapping_from_3mf(zf)
+    except (zipfile.BadZipFile, OSError) as exc:
+        logger.warning("Failed to read nozzle mapping from %s: %s", file_path, exc)
+        return None
+
+    if not by_slot:
+        return None
+
+    # The slot IDs are whatever the file says, so the dense form has to be
+    # bounded before it is built: a corrupt or hostile 3MF declaring
+    # `filament id="50000000"` would otherwise allocate a fifty-million-entry
+    # list here, on the dispatch path. Nothing above 32 is usable anyway --
+    # that is the length of the array the printer is sent.
+    highest_slot = max(by_slot)
+    if highest_slot < 1 or highest_slot > _MAX_DENSE_FILAMENT_SLOTS:
+        logger.warning(
+            "Ignoring nozzle mapping from %s: highest filament slot %s is out of range",
+            file_path,
+            highest_slot,
+        )
+        return None
+    return [by_slot.get(slot, -1) for slot in range(1, highest_slot + 1)]
+
+
 def extract_nozzle_mapping_from_3mf(zf: zipfile.ZipFile) -> dict[int, int] | None:
     """Extract per-slot nozzle/extruder mapping from a 3MF file.
 
