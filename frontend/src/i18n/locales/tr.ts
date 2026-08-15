@@ -4853,7 +4853,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: 'Geri Yükle',
+      button: 'Git\'ten Geri Yükle',
       title: 'Git yedeğinden geri yükle',
       subtitle: 'Bir commit ve geri yüklenecek verileri seçin',
       commitLabel: 'Yedek commit\'i',

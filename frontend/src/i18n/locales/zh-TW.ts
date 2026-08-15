@@ -4863,7 +4863,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: '還原',
+      button: '從 Git 還原',
       title: '從 Git 備份還原',
       subtitle: '選擇提交以及要還原的項目',
       commitLabel: '備份提交',

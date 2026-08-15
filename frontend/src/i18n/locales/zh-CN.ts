@@ -4863,7 +4863,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: '恢复',
+      button: '从 Git 恢复',
       title: '从 Git 备份恢复',
       subtitle: '选择提交以及要恢复的内容',
       commitLabel: '备份提交',

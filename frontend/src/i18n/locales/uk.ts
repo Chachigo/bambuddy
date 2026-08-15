@@ -4918,7 +4918,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: "Відновити",
+      button: "Відновити з Git",
       title: "Відновлення з резервної копії Git",
       subtitle: "Виберіть коміт і вкажіть, що відновити",
       commitLabel: "Коміт резервної копії",

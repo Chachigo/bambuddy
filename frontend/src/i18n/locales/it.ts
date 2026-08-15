@@ -4863,7 +4863,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: 'Ripristina',
+      button: 'Ripristina da Git',
       title: 'Ripristina dal backup Git',
       subtitle: 'Scegli un commit e cosa ripristinare',
       commitLabel: 'Commit del backup',

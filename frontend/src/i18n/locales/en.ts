@@ -4918,7 +4918,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: 'Restore',
+      button: 'Restore from Git',
       title: 'Restore from Git Backup',
       subtitle: 'Pick a commit and choose what to restore',
       commitLabel: 'Backup commit',

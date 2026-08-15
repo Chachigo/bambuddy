@@ -4640,7 +4640,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: '복원',
+      button: 'Git에서 복원',
       title: 'Git 백업에서 복원',
       subtitle: '커밋과 복원할 항목을 선택하세요',
       commitLabel: '백업 커밋',

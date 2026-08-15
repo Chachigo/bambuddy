@@ -4875,7 +4875,7 @@ export default {
 
     // Restore from Git backup (#2656)
     restoreFromGit: {
-      button: '復元',
+      button: 'Git から復元',
       title: 'Git バックアップから復元',
       subtitle: 'コミットと復元する項目を選択します',
       commitLabel: 'バックアップのコミット',
