@@ -110,6 +110,7 @@ import { MQTTDebugModal } from '../components/MQTTDebugModal';
 import { HMSErrorModal, filterKnownHMSErrors } from '../components/HMSErrorModal';
 import { AiDetectionModal } from '../components/AiDetectionModal';
 import { PrinterQueueWidget } from '../components/PrinterQueueWidget';
+import { PrinterHASensorRow } from '../components/PrinterHASensorRow';
 import { AMSHistoryModal } from '../components/AMSHistoryModal';
 import { AmsBackupModal } from '../components/AmsBackupModal';
 import { HeaterHistoryModal } from '../components/HeaterHistoryModal';
@@ -6017,6 +6018,11 @@ function PrinterCard({
             )}
           </div>
         )}
+
+        {/* Home Assistant sensors (#1148). Outside the smartPlug block above:
+            a printer can have an enclosure door contact without having a plug,
+            and nesting it there would hide the row on exactly those setups. */}
+        <PrinterHASensorRow printerId={printer.id} />
 
         {/* Connection Info & Actions */}
         <div className="pt-4">
