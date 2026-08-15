@@ -1236,10 +1236,17 @@ class TestRestoreKprofiles:
         """One profile as the printer currently reports it."""
         return SimpleNamespace(slot_id=slot_id, filament_id=filament_id, name=name, setting_id=setting_id)
 
-    def _client(self, live=None, sent=True):
+    def _client(self, live=None, sent="7", ack=(True, "")):
+        """A connected printer client.
+
+        ``set_kprofiles_batch`` returns the sequence_id it published under, not
+        a success flag (#2718), and the verdict arrives separately from
+        ``await_cali_ack`` as ``(ok, detail)``.
+        """
         client = MagicMock()
         client.state.connected = True
         client.set_kprofiles_batch = MagicMock(return_value=sent)
+        client.await_cali_ack = AsyncMock(return_value=ack)
         client.get_kprofiles = AsyncMock(return_value=list(live or []))
         return client
 
@@ -1266,9 +1273,7 @@ class TestRestoreKprofiles:
     @pytest.mark.asyncio
     async def test_sends_batch_to_connected_printer(self, db_session, printer_factory):
         printer = await printer_factory(serial_number="00M09A123456789")
-        client = MagicMock()
-        client.state.connected = True
-        client.set_kprofiles_batch = MagicMock(return_value=True)
+        client = self._client()
         tally = _CategoryTally()
 
         with patch("backend.app.services.github_restore.printer_manager") as manager:
@@ -1293,9 +1298,10 @@ class TestRestoreKprofiles:
             manager.get_client = MagicMock(return_value=client)
             await _service()._restore_kprofiles(db_session, self._payload(), tally)
 
-        # The printer does answer extrusion_cali_set, but it reports "fail" on
-        # writes that land, so the note must not promise either way.
+        # A refusal is now read and counted failed, so the caveat is narrowed to
+        # what is genuinely left uncertain: a printer that never answers.
         assert any("verify the profiles on the printer" in note for note in _messages(tally))
+        assert any("does not answer still counts as restored" in note for note in _messages(tally))
         assert not any("without acknowledgement" in note for note in _messages(tally))
         assert any("always overwrite" in note for note in _messages(tally))
 
@@ -1560,10 +1566,10 @@ class TestRestoreKprofiles:
 
     @pytest.mark.asyncio
     async def test_publish_failure_counts_as_failed(self, db_session, printer_factory):
+        # None is what set_kprofiles_batch returns when it could not publish —
+        # a disconnected client. There is no ack to wait for in that case.
         await printer_factory(serial_number="00M09A123456789")
-        client = MagicMock()
-        client.state.connected = True
-        client.set_kprofiles_batch = MagicMock(return_value=False)
+        client = self._client(sent=None)
         tally = _CategoryTally()
 
         with patch("backend.app.services.github_restore.printer_manager") as manager:
@@ -1572,6 +1578,9 @@ class TestRestoreKprofiles:
 
         assert tally.failed == 1
         assert tally.restored == 0
+        assert "kprofilesSendFailed" in _codes(tally)
+        assert "kprofilesRefused" not in _codes(tally), "nothing was sent, so the printer refused nothing"
+        client.await_cali_ack.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_publish_exception_is_contained(self, db_session, printer_factory):
@@ -1587,13 +1596,96 @@ class TestRestoreKprofiles:
 
         assert tally.failed == 1
 
+    # --- the printer's verdict decides the tally, not the publish ------------
+    #
+    # #2718 changed set_kprofiles_batch from returning a bool to returning the
+    # sequence_id it published under. A sequence_id string is truthy, so a
+    # restore that branches on the return value alone reports every refused
+    # write as saved — the defect that fix closed in every other caller.
+
+    @pytest.mark.asyncio
+    async def test_awaits_the_ack_for_the_sequence_id_it_was_given(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(sent="4211")
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        client.await_cali_ack.assert_awaited_once_with("4211")
+        assert tally.restored == 1
+
+    @pytest.mark.asyncio
+    async def test_a_refused_batch_counts_failed_not_restored(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789", name="Shelf Printer")
+        client = self._client(ack=(False, "invalid tray_id"))
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        assert tally.restored == 0
+        assert tally.failed == 1
+        assert "kprofilesRefused" in _codes(tally)
+        assert "kprofilesSendFailed" not in _codes(tally), "it was sent — the printer answered no"
+        note = next(n for n in tally.notes if n["code"] == "kprofilesRefused")
+        assert note["params"]["reason"] == "invalid tray_id", "the printer's own reason has to survive"
+        assert "Shelf Printer" in note["message"] and "invalid tray_id" in note["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_silent_printer_still_counts_restored(self, db_session, printer_factory):
+        # maziggy's rule, and await_cali_ack's own contract: no answer is not
+        # evidence of refusal. Firmware that predates the ack never answers.
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(ack=(True, "no acknowledgement from printer"))
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        assert tally.restored == 1
+        assert tally.failed == 0
+        assert "kprofilesRefused" not in _codes(tally)
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_ack_does_not_fail_the_batch(self, db_session, printer_factory):
+        # Same situation one layer up: the write most likely landed, so this
+        # degrades the way a timeout does rather than inventing a failure.
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client()
+        client.await_cali_ack = AsyncMock(side_effect=RuntimeError("mqtt down"))
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        assert tally.restored == 1
+        assert tally.failed == 0
+
+    @pytest.mark.asyncio
+    async def test_one_refused_nozzle_does_not_condemn_the_other(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        payload = {**self._payload(nozzle="0.4"), **self._payload(nozzle="0.8")}
+        client = self._client()
+        client.await_cali_ack = AsyncMock(side_effect=[(False, "busy"), (True, "")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        assert tally.restored == 1
+        assert tally.failed == 1
+
     @pytest.mark.asyncio
     async def test_each_nozzle_is_sent_separately(self, db_session, printer_factory):
         await printer_factory(serial_number="00M09A123456789")
         payload = {**self._payload(nozzle="0.4"), **self._payload(nozzle="0.8")}
-        client = MagicMock()
-        client.state.connected = True
-        client.set_kprofiles_batch = MagicMock(return_value=True)
+        client = self._client()
         tally = _CategoryTally()
 
         with patch("backend.app.services.github_restore.printer_manager") as manager:

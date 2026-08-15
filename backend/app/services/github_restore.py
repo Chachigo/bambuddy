@@ -1473,9 +1473,12 @@ class GitHubRestoreService:
         # the profile occupying a slot, so writing is always an overwrite on the
         # printer side.
         tally.note("kprofilesAlwaysOverwrite", "K-profiles always overwrite the matching slot on the printer")
+        # A refusal is now believed and counted failed (#2718 made the ack worth
+        # reading), but silence still counts restored, so the caveat stands —
+        # narrowed to what is actually left uncertain.
         tally.note(
             "kprofilesAckUnreliable",
-            "The printer's acknowledgement is not reliable — verify the profiles on the printer",
+            "A printer that does not answer still counts as restored — verify the profiles on the printer",
         )
 
         for serial, entries in sorted(by_serial.items()):
@@ -1565,14 +1568,12 @@ class GitHubRestoreService:
                     )
 
                 try:
-                    sent = client.set_kprofiles_batch(profile_dicts, nozzle)
+                    seq = client.set_kprofiles_batch(profile_dicts, nozzle)
                 except Exception as e:
                     logger.warning("K-profile restore failed for %s nozzle %s: %s", serial, nozzle, e)
-                    sent = False
+                    seq = None
 
-                if sent:
-                    tally.restored += len(profile_dicts)
-                else:
+                if not seq:
                     tally.failed += len(profile_dicts)
                     tally.note(
                         "kprofilesSendFailed",
@@ -1581,6 +1582,44 @@ class GitHubRestoreService:
                         printer=printer.name,
                         serial=serial,
                     )
+                    continue
+
+                # What came back is the sequence_id the command was published
+                # under, not a verdict (#2718) — a truthy string only means the
+                # command left the building. The printer answers separately, and
+                # every other caller of this API now reads that answer; without
+                # this the restore would be the one path left that reports a
+                # refused write as saved.
+                ok, detail = await self._kprofile_ack(client, seq, serial, nozzle)
+                if ok:
+                    tally.restored += len(profile_dicts)
+                else:
+                    tally.failed += len(profile_dicts)
+                    tally.note(
+                        "kprofilesRefused",
+                        f"{printer.name} ({serial}) refused the {nozzle} profiles: {detail}",
+                        nozzle=nozzle,
+                        printer=printer.name,
+                        serial=serial,
+                        reason=detail,
+                    )
+
+    @staticmethod
+    async def _kprofile_ack(client, seq: str, serial: str, nozzle: str) -> tuple[bool, str]:
+        """Read the printer's verdict on one batch write.
+
+        ``await_cali_ack`` already treats silence as success — no answer is not
+        evidence of refusal, and firmware that predates the ack never answers at
+        all. An exception reading it is the same situation one layer up, so it
+        degrades the same way rather than turning a write that most likely
+        landed into a reported failure.
+        """
+        try:
+            ok, detail = await client.await_cali_ack(seq)
+            return bool(ok), str(detail or "")
+        except Exception as e:
+            logger.warning("Could not read the K-profile ack for %s nozzle %s: %s", serial, nozzle, e)
+            return True, ""
 
     @staticmethod
     async def _current_kprofile_index(client, nozzle: str, serial: str) -> list:
