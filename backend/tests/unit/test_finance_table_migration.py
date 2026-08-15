@@ -5,12 +5,14 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.app.core.database import (
     _migrate_add_print_archive_cost_center,
     _migrate_create_finance_indexes,
     _migrate_create_finance_tables,
+    _migrate_finance_money_to_numeric,
 )
 
 EXPECTED_TABLES = {
@@ -69,13 +71,17 @@ async def test_legacy_cost_center_indexes_are_delayed_until_columns_exist():
                 await _migrate_create_finance_tables(conn)
 
             await conn.execute(text("ALTER TABLE cost_centers ADD COLUMN code VARCHAR(32)"))
+            await conn.execute(text("CREATE INDEX ix_cost_centers_code ON cost_centers (code)"))
+            await conn.execute(text("INSERT INTO cost_centers (id, name, code) VALUES (1, 'One', 'one')"))
             await _migrate_create_finance_indexes(conn)
 
-            result = await conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ix_cost_centers_code'")
-            )
+            result = await conn.execute(text("PRAGMA index_list(cost_centers)"))
+            code_index = next(row for row in result if row[1] == "ix_cost_centers_code")
 
-        assert result.scalar_one() == "ix_cost_centers_code"
+            with pytest.raises(IntegrityError):
+                await conn.execute(text("INSERT INTO cost_centers (id, name, code) VALUES (2, 'Two', 'one')"))
+
+        assert code_index[2] == 1
     finally:
         await engine.dispose()
 
@@ -134,6 +140,26 @@ async def test_postgres_finance_ddl_uses_postgres_types():
 
 
 @pytest.mark.asyncio
+async def test_postgres_finance_money_columns_are_migrated_to_numeric():
+    statements: list[str] = []
+
+    async def capture_statement(_conn, sql: str) -> None:
+        statements.append(sql)
+
+    with (
+        patch("backend.app.core.database.is_sqlite", return_value=False),
+        patch("backend.app.core.database._safe_execute", side_effect=capture_statement),
+    ):
+        await _migrate_finance_money_to_numeric(object())
+
+    assert len(statements) == 6
+    assert all("TYPE NUMERIC(14,2)" in sql for sql in statements)
+    assert all("USING ROUND(" in sql for sql in statements)
+    assert any("wallet_transactions ALTER COLUMN amount" in sql for sql in statements)
+    assert any("wallet_transactions ALTER COLUMN balance_after" in sql for sql in statements)
+
+
+@pytest.mark.asyncio
 async def test_finance_tables_are_created_idempotently_on_postgres():
     database_url = os.getenv("BAMBUDDY_TEST_POSTGRES_URL")
     if not database_url:
@@ -151,6 +177,14 @@ async def test_finance_tables_are_created_idempotently_on_postgres():
             with patch("backend.app.core.database.is_sqlite", return_value=False):
                 await _migrate_create_finance_tables(conn)
                 await _migrate_create_finance_tables(conn)
+                await conn.execute(
+                    text(
+                        "ALTER TABLE wallet_transactions ALTER COLUMN amount "
+                        "TYPE DOUBLE PRECISION USING amount::double precision"
+                    )
+                )
+                await _migrate_finance_money_to_numeric(conn)
+                await _migrate_finance_money_to_numeric(conn)
                 await _migrate_add_print_archive_cost_center(conn)
                 await _migrate_add_print_archive_cost_center(conn)
                 await _migrate_create_finance_indexes(conn)
@@ -170,6 +204,17 @@ async def test_finance_tables_are_created_idempotently_on_postgres():
                     "AND table_name = 'cost_centers' AND column_name = 'created_at'"
                 )
             )
+            money_types = await conn.execute(
+                text(
+                    "SELECT table_name, column_name, data_type, numeric_precision, numeric_scale "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND (table_name, column_name) IN ("
+                    "('cost_centers', 'total_budget'), ('cost_centers', 'monthly_budget'), "
+                    "('user_wallets', 'balance'), ('wallet_transactions', 'amount'), "
+                    "('wallet_transactions', 'balance_after'), ('budget_reservations', 'amount'))"
+                )
+            )
+            money_type_rows = money_types.all()
             archive_cost_center = await conn.execute(
                 text(
                     "SELECT c.data_type, rc.delete_rule "
@@ -189,6 +234,8 @@ async def test_finance_tables_are_created_idempotently_on_postgres():
 
         assert {row[0] for row in rows} == EXPECTED_TABLES
         assert timestamp_type.scalar_one() == "timestamp without time zone"
+        assert len(money_type_rows) == 6
+        assert all(row[2:] == ("numeric", 14, 2) for row in money_type_rows)
         assert archive_cost_center.one() == ("integer", "SET NULL")
     finally:
         await engine.dispose()

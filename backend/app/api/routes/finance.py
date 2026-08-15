@@ -38,6 +38,7 @@ from backend.app.schemas.finance import (
     WalletTransactionResponse,
 )
 from backend.app.services.finance_balance import (
+    calculate_personal_balance,
     is_personal_transaction,
     personal_balance_condition,
     sync_personal_wallet_balance,
@@ -410,8 +411,7 @@ async def get_my_balance(
 ):
     """Return the current user's wallet balance."""
     user = await _require_authenticated_user(current_user)
-    wallet = await _get_or_create_wallet(db, user.id)
-    return _to_balance_response(wallet)
+    return await _get_wallet_balance_read_only(db, user.id)
 
 
 @router.get("/me/transactions", response_model=WalletTransactionListResponse)
@@ -576,6 +576,7 @@ async def edit_transaction(
     from backend.app.core.database import repair_wallet_ledger_internal
 
     await repair_wallet_ledger_internal(db)
+    await db.refresh(tx)
 
     return tx
 
@@ -619,6 +620,7 @@ async def create_manual_print(
     from backend.app.core.database import repair_wallet_ledger_internal
 
     await repair_wallet_ledger_internal(db)
+    await db.refresh(tx)
 
     return tx
 
@@ -679,8 +681,7 @@ async def get_user_balance(
     """Return a specific user's wallet balance."""
     await _require_authenticated_user(current_user)
     user = await _get_user_or_404(db, user_id)
-    wallet = await _get_or_create_wallet(db, user.id)
-    return _to_balance_response(wallet)
+    return await _get_wallet_balance_read_only(db, user.id)
 
 
 @router.get("/users/{user_id}/transactions", response_model=list[WalletTransactionResponse])
@@ -874,10 +875,10 @@ async def update_cost_center(
     await _require_authenticated_user(current_user)
     center = await _get_cost_center_or_404(db, cost_center_id)
 
-    if center.is_private and body.is_active is False:
+    if center.is_private:
         raise HTTPException(
             status_code=400,
-            detail="Private cost centers cannot be deactivated; set their budget to 0 to prevent printing",
+            detail=("Private cost centers cannot be deactivated or renamed; set their budget to 0 to prevent printing"),
         )
 
     if body.name is not None:

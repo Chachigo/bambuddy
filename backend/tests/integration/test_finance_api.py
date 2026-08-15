@@ -5,6 +5,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from backend.app.core.auth import get_password_hash
+from backend.app.core.database import repair_wallet_ledger_internal
 from backend.app.models.archive import PrintArchive
 from backend.app.models.finance import BudgetReservation, CostCenter, UserWallet, WalletTransaction
 from backend.app.models.group import Group
@@ -75,6 +76,60 @@ class TestFinanceAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_balance_get_does_not_create_wallet(
+        self,
+        async_client: AsyncClient,
+        auth_headers: dict[str, str],
+        db_session,
+    ):
+        target = User(
+            username="balance-without-wallet",
+            email="balance-without-wallet@example.com",
+            password_hash=get_password_hash("Regularpass1!"),
+            role="user",
+            is_active=True,
+        )
+        db_session.add(target)
+        await db_session.commit()
+        await db_session.refresh(target)
+        assert await db_session.scalar(select(UserWallet).where(UserWallet.user_id == target.id)) is None
+
+        response = await async_client.get(f"/api/v1/finance/users/{target.id}/balance", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.json()["balance"] == 0
+        assert await db_session.scalar(select(UserWallet).where(UserWallet.user_id == target.id)) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_wallet_ledger_rebuild_processes_more_than_one_batch(
+        self,
+        db_session,
+        admin_user: User,
+    ):
+        wallet = UserWallet(user_id=admin_user.id, balance=0)
+        db_session.add(wallet)
+        await db_session.flush()
+        await db_session.execute(
+            WalletTransaction.__table__.insert(),
+            [{"user_id": admin_user.id, "transaction_type": "deposit", "amount": 0.01} for _ in range(1001)],
+        )
+
+        await repair_wallet_ledger_internal(db_session)
+        await db_session.refresh(wallet)
+        last_transaction = await db_session.scalar(
+            select(WalletTransaction)
+            .where(WalletTransaction.user_id == admin_user.id)
+            .order_by(WalletTransaction.created_at.desc(), WalletTransaction.id.desc())
+            .limit(1)
+        )
+
+        assert wallet.balance == 10.01
+        assert last_transaction is not None
+        assert last_transaction.balance_after == 10.01
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_create_cost_center_assign_member_and_list_mine(
         self,
         async_client: AsyncClient,
@@ -84,6 +139,13 @@ class TestFinanceAPI:
         await self._enable_basic_user_creation(db_session)
         created_user = await self._create_user_via_api(async_client, auth_headers, "carol")
         user_headers = await self._login_user(async_client, "carol")
+
+        negative_budget_response = await async_client.post(
+            "/api/v1/finance/cost-centers",
+            json={"name": "Invalid Budget", "total_budget": -1},
+            headers=auth_headers,
+        )
+        assert negative_budget_response.status_code == 422
 
         create_response = await async_client.post(
             "/api/v1/finance/cost-centers",
@@ -164,6 +226,22 @@ class TestFinanceAPI:
         assert "cannot be deactivated" in deactivate_response.json()["detail"]
         await db_session.refresh(private_center)
         assert private_center.is_active is True
+
+        rename_response = await async_client.patch(
+            f"/api/v1/finance/cost-centers/{private_center.id}",
+            json={"name": "Renamed private center"},
+            headers=auth_headers,
+        )
+        assert rename_response.status_code == 400
+        await db_session.refresh(private_center)
+        assert private_center.name == "private-budget-user"
+
+        negative_budget_response = await async_client.patch(
+            f"/api/v1/finance/cost-centers/{private_center.id}/budgets",
+            json={"monthly_budget": -0.01},
+            headers=auth_headers,
+        )
+        assert negative_budget_response.status_code == 422
 
         budget_response = await async_client.patch(
             f"/api/v1/finance/cost-centers/{private_center.id}/budgets",
@@ -723,7 +801,7 @@ class TestFinanceAPI:
         payload = {
             "user_id": user.id,
             "cost_center_id": private_cc.id,
-            "amount": -4.0,
+            "amount": 4.0,
             "description": "Manual adjustment for a print",
             "created_at": "2026-05-12T12:00:00Z",
         }
@@ -740,6 +818,13 @@ class TestFinanceAPI:
 
         # The response includes the computed running balance for the transaction
         assert resp_json.get("balance_after") == -4.0
+
+        negative_amount_response = await async_client.post(
+            "/api/v1/finance/transactions/manual",
+            json={**payload, "amount": -1},
+            headers=auth_headers,
+        )
+        assert negative_amount_response.status_code == 422
 
         invalid_user_response = await async_client.post(
             "/api/v1/finance/transactions/manual",

@@ -489,7 +489,7 @@ export function FinancePage() {
       data: {
         user_id: editTransactionUserId || undefined,
         cost_center_id: editTransactionCostCenterId || undefined,
-        amount: amount || undefined,
+        amount: amount ?? undefined,
         description: editTransactionDescription || undefined,
       },
     });
@@ -510,7 +510,7 @@ export function FinancePage() {
       showToast(t('finance.amountInvalid', 'Amount must be a valid number'), 'error');
       return;
     }
-    if (amount > 0) amount = -Math.abs(amount);
+    amount = Math.abs(amount);
 
     manualPrintMutation.mutate({
       user_id: manualPrintUserId,

@@ -1033,9 +1033,7 @@ async def _migrate_create_finance_tables(conn) -> None:
     PostgreSQL schema.  The finance column migrations below must therefore not
     assume these tables already exist.
 
-    ``UserWallet`` is mapped to ``user_wallets``.  The invitation table is kept
-    as a compatibility table for pre-release billing databases; current code
-    does not map or query it.
+    ``UserWallet`` is mapped to ``user_wallets``.
     """
     if is_sqlite():
         statements = [
@@ -1047,8 +1045,8 @@ async def _migrate_create_finance_tables(conn) -> None:
                 is_active BOOLEAN NOT NULL DEFAULT 1,
                 is_private BOOLEAN NOT NULL DEFAULT 0,
                 owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                total_budget FLOAT,
-                monthly_budget FLOAT,
+                total_budget NUMERIC(14,2),
+                monthly_budget NUMERIC(14,2),
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -1057,7 +1055,7 @@ async def _migrate_create_finance_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS user_wallets (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-                balance FLOAT NOT NULL DEFAULT 0.0,
+                balance NUMERIC(14,2) NOT NULL DEFAULT 0.0,
                 currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -1073,25 +1071,13 @@ async def _migrate_create_finance_tables(conn) -> None:
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS cost_center_invitations (
-                id INTEGER PRIMARY KEY,
-                cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
-                email VARCHAR(320) NOT NULL,
-                token VARCHAR(255) NOT NULL UNIQUE,
-                invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                expires_at DATETIME,
-                accepted_at DATETIME,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            """
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
                 transaction_type VARCHAR(40) NOT NULL,
-                amount FLOAT NOT NULL,
-                balance_after FLOAT,
+                amount NUMERIC(14,2) NOT NULL,
+                balance_after NUMERIC(14,2),
                 description TEXT,
                 created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 print_run_id VARCHAR(100),
@@ -1108,7 +1094,7 @@ async def _migrate_create_finance_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS budget_reservations (
                 id INTEGER PRIMARY KEY,
                 cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
-                amount FLOAT NOT NULL,
+                amount NUMERIC(14,2) NOT NULL,
                 status VARCHAR(20) NOT NULL,
                 source_type VARCHAR(50) NOT NULL,
                 source_id INTEGER,
@@ -1128,8 +1114,8 @@ async def _migrate_create_finance_tables(conn) -> None:
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
                 is_private BOOLEAN NOT NULL DEFAULT FALSE,
                 owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                total_budget FLOAT,
-                monthly_budget FLOAT,
+                total_budget NUMERIC(14,2),
+                monthly_budget NUMERIC(14,2),
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -1138,7 +1124,7 @@ async def _migrate_create_finance_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS user_wallets (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-                balance FLOAT NOT NULL DEFAULT 0.0,
+                balance NUMERIC(14,2) NOT NULL DEFAULT 0.0,
                 currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
                 updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -1154,25 +1140,13 @@ async def _migrate_create_finance_tables(conn) -> None:
             )
             """,
             """
-            CREATE TABLE IF NOT EXISTS cost_center_invitations (
-                id SERIAL PRIMARY KEY,
-                cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
-                email VARCHAR(320) NOT NULL,
-                token VARCHAR(255) NOT NULL UNIQUE,
-                invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                expires_at TIMESTAMP,
-                accepted_at TIMESTAMP,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """,
-            """
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
                 transaction_type VARCHAR(40) NOT NULL,
-                amount FLOAT NOT NULL,
-                balance_after FLOAT,
+                amount NUMERIC(14,2) NOT NULL,
+                balance_after NUMERIC(14,2),
                 description TEXT,
                 created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 print_run_id VARCHAR(100),
@@ -1189,7 +1163,7 @@ async def _migrate_create_finance_tables(conn) -> None:
             CREATE TABLE IF NOT EXISTS budget_reservations (
                 id SERIAL PRIMARY KEY,
                 cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
-                amount FLOAT NOT NULL,
+                amount NUMERIC(14,2) NOT NULL,
                 status VARCHAR(20) NOT NULL,
                 source_type VARCHAR(50) NOT NULL,
                 source_id INTEGER,
@@ -1206,15 +1180,15 @@ async def _migrate_create_finance_tables(conn) -> None:
 
 async def _migrate_create_finance_indexes(conn) -> None:
     """Create finance indexes after legacy tables have received new columns."""
+    # Older billing migrations created this as a non-unique index. Recreate it
+    # so upgraded databases enforce the same constraint as the ORM model.
+    await _safe_execute(conn, "DROP INDEX IF EXISTS ix_cost_centers_code")
     indexes = [
-        "CREATE INDEX IF NOT EXISTS ix_cost_centers_code ON cost_centers (code)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_cost_centers_code ON cost_centers (code)",
         "CREATE INDEX IF NOT EXISTS ix_cost_centers_name ON cost_centers (name)",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_user_wallets_user_id ON user_wallets (user_id)",
         "CREATE INDEX IF NOT EXISTS ix_cost_center_members_cost_center_id ON cost_center_members (cost_center_id)",
         "CREATE INDEX IF NOT EXISTS ix_cost_center_members_user_id ON cost_center_members (user_id)",
-        "CREATE INDEX IF NOT EXISTS ix_cost_center_invitations_cost_center_id "
-        "ON cost_center_invitations (cost_center_id)",
-        "CREATE INDEX IF NOT EXISTS ix_cost_center_invitations_email ON cost_center_invitations (email)",
         "CREATE INDEX IF NOT EXISTS ix_wallet_transactions_user_id ON wallet_transactions (user_id)",
         "CREATE INDEX IF NOT EXISTS ix_wallet_transactions_cost_center_id ON wallet_transactions (cost_center_id)",
         "CREATE INDEX IF NOT EXISTS ix_wallet_transactions_transaction_type ON wallet_transactions (transaction_type)",
@@ -1232,6 +1206,28 @@ async def _migrate_create_finance_indexes(conn) -> None:
     ]
     for statement in indexes:
         await _safe_execute(conn, statement)
+
+
+async def _migrate_finance_money_to_numeric(conn) -> None:
+    """Convert persisted finance money columns on PostgreSQL upgrades."""
+    if is_sqlite():
+        # SQLite uses dynamic type affinity. New tables declare NUMERIC, while
+        # existing values remain protected by cent-rounding at write/rebuild.
+        return
+
+    columns = {
+        "cost_centers": ("total_budget", "monthly_budget"),
+        "user_wallets": ("balance",),
+        "wallet_transactions": ("amount", "balance_after"),
+        "budget_reservations": ("amount",),
+    }
+    for table_name, column_names in columns.items():
+        for column_name in column_names:
+            await _safe_execute(
+                conn,
+                f"ALTER TABLE {table_name} ALTER COLUMN {column_name} "
+                f"TYPE NUMERIC(14,2) USING ROUND({column_name}::numeric, 2)",
+            )
 
 
 async def _migrate_add_print_archive_cost_center(conn) -> None:
@@ -1331,8 +1327,8 @@ async def run_migrations(conn):
         conn,
         "ALTER TABLE cost_centers ADD COLUMN owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL",
     )
-    await _safe_execute(conn, "ALTER TABLE cost_centers ADD COLUMN total_budget FLOAT")
-    await _safe_execute(conn, "ALTER TABLE cost_centers ADD COLUMN monthly_budget FLOAT")
+    await _safe_execute(conn, "ALTER TABLE cost_centers ADD COLUMN total_budget NUMERIC(14,2)")
+    await _safe_execute(conn, "ALTER TABLE cost_centers ADD COLUMN monthly_budget NUMERIC(14,2)")
     timestamp_type = "DATETIME" if is_sqlite() else "TIMESTAMP"
     await _safe_execute(conn, f"ALTER TABLE cost_centers ADD COLUMN created_at {timestamp_type}")
     await _safe_execute(conn, f"ALTER TABLE cost_centers ADD COLUMN updated_at {timestamp_type}")
@@ -1374,6 +1370,7 @@ async def run_migrations(conn):
 
     # CREATE TABLE IF NOT EXISTS is a no-op for an older, incomplete table.
     # Delay indexes until every legacy column they reference has been added.
+    await _migrate_finance_money_to_numeric(conn)
     await _migrate_create_finance_indexes(conn)
 
     # Migration: Add missing-spool-assignment print-start notification toggle
@@ -2994,58 +2991,6 @@ async def run_migrations(conn):
         conn,
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_wallet_transactions_archive"
         " ON wallet_transactions (transaction_type, print_archive_id) WHERE print_run_id IS NULL",
-    )
-
-    # Migration: Persist active budget reservations for accepted background dispatch jobs.
-    if is_sqlite():
-        await _safe_execute(
-            conn,
-            """
-            CREATE TABLE IF NOT EXISTS budget_reservations (
-                id INTEGER PRIMARY KEY,
-                cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
-                amount FLOAT NOT NULL,
-                status VARCHAR(20),
-                source_type VARCHAR(50),
-                source_id INTEGER,
-                print_archive_id INTEGER REFERENCES print_archives(id) ON DELETE SET NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                released_at DATETIME
-            )
-            """,
-        )
-    else:
-        await _safe_execute(
-            conn,
-            """
-            CREATE TABLE IF NOT EXISTS budget_reservations (
-                id SERIAL PRIMARY KEY,
-                cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
-                amount FLOAT NOT NULL,
-                status VARCHAR(20),
-                source_type VARCHAR(50),
-                source_id INTEGER,
-                print_archive_id INTEGER REFERENCES print_archives(id) ON DELETE SET NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                released_at TIMESTAMP
-            )
-            """,
-        )
-    await _safe_execute(
-        conn, "CREATE INDEX IF NOT EXISTS ix_budget_reservations_cost_center_id ON budget_reservations (cost_center_id)"
-    )
-    await _safe_execute(
-        conn, "CREATE INDEX IF NOT EXISTS ix_budget_reservations_status ON budget_reservations (status)"
-    )
-    await _safe_execute(
-        conn, "CREATE INDEX IF NOT EXISTS ix_budget_reservations_source_type ON budget_reservations (source_type)"
-    )
-    await _safe_execute(
-        conn, "CREATE INDEX IF NOT EXISTS ix_budget_reservations_source_id ON budget_reservations (source_id)"
-    )
-    await _safe_execute(
-        conn,
-        "CREATE INDEX IF NOT EXISTS ix_budget_reservations_print_archive_id ON budget_reservations (print_archive_id)",
     )
 
     # Migration: Add backup_spools and backup_archives columns to github_backup_config

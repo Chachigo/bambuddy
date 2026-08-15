@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from backend.app.core.database import Base
@@ -44,7 +44,7 @@ class UserWallet(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
-    balance: Mapped[float] = mapped_column(Float, default=0.0)
+    balance: Mapped[float] = mapped_column(Numeric(14, 2, asdecimal=False), default=0.0)
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -63,8 +63,8 @@ class CostCenter(Base):
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
     owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
-    total_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
-    monthly_budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_budget: Mapped[float | None] = mapped_column(Numeric(14, 2, asdecimal=False), nullable=True)
+    monthly_budget: Mapped[float | None] = mapped_column(Numeric(14, 2, asdecimal=False), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -101,7 +101,7 @@ class BudgetReservation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     cost_center_id: Mapped[int] = mapped_column(ForeignKey("cost_centers.id", ondelete="CASCADE"), index=True)
-    amount: Mapped[float] = mapped_column(Float)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2, asdecimal=False))
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     source_type: Mapped[str] = mapped_column(String(50), index=True)
     source_id: Mapped[int | None] = mapped_column(index=True)
@@ -133,8 +133,8 @@ class WalletTransaction(Base):
     )
 
     transaction_type: Mapped[str] = mapped_column(String(40), index=True)
-    amount: Mapped[float] = mapped_column(Float)
-    balance_after: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount: Mapped[float] = mapped_column(Numeric(14, 2, asdecimal=False))
+    balance_after: Mapped[float | None] = mapped_column(Numeric(14, 2, asdecimal=False), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_by_user_id: Mapped[int | None] = mapped_column(
