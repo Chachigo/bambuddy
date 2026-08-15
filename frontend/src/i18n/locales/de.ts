@@ -4912,6 +4912,7 @@ export default {
         archivesPrinterMissing: 'Einige Archive verwiesen auf nicht mehr vorhandene Drucker - Verknüpfung entfernt',
         archivesProjectMissing: 'Einige Archive verwiesen auf nicht mehr vorhandene Projekte - Verknüpfung entfernt',
         archivesOwnerCleared: 'Einige Archive verwiesen auf nicht mehr vorhandene Benutzer - Eigentümer entfernt. Sie sind daher nur für Benutzer mit der Berechtigung archives:read_all sichtbar, bis ein Administrator sie neu zuweist',
+        archivesOwnerUnknown: 'Einige Archive wurden ohne Eigentümer wiederhergestellt - diese Sicherung enthält keinen, daher sind sie nur für Benutzer mit der Berechtigung archives:read_all sichtbar, bis ein Administrator sie neu zuweist',
         archivesUndeleted: 'Seit dem Backup gelöschte Archive sind wieder sichtbar - Überschreiben war aktiv',
         archivesMetadataOnly: 'Wiederhergestellte Archive enthalten nur Metadaten - die 3MF- und Vorschaudateien sind nicht im Git-Backup enthalten',
         spoolUsageUnresolved: '{{count}} Verbrauchseinträge übersprungen - ihre Spule ist nicht in der Spulenliste dieses Backups, es gibt also nichts, woran sie hängen könnten.',

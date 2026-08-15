@@ -4900,6 +4900,7 @@ export default {
         archivesPrinterMissing: 'Alguns arquivos referenciavam impressoras que não existem mais - vínculo removido',
         archivesProjectMissing: 'Alguns arquivos referenciavam projetos que não existem mais - vínculo removido',
         archivesOwnerCleared: 'Alguns arquivos referenciavam usuários que não existem mais - o proprietário foi limpo, então eles só ficam visíveis para usuários com a permissão archives:read_all até que um administrador os reatribua',
+        archivesOwnerUnknown: 'Alguns arquivos foram restaurados sem proprietário - este backup não registra nenhum, então eles só ficam visíveis para usuários com a permissão archives:read_all até que um administrador os atribua',
         archivesUndeleted: 'Arquivos excluídos desde o backup voltaram a ficar visíveis - a sobrescrita estava ligada',
         archivesMetadataOnly: 'Os arquivos restaurados contêm apenas metadados - os arquivos 3MF e as miniaturas não ficam em um backup Git',
         spoolUsageUnresolved: '{{count}} registros de consumo ignorados - o carretel deles não está na lista de carretéis deste backup, então não há a que vinculá-los.',

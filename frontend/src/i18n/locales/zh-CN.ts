@@ -4900,6 +4900,7 @@ export default {
         archivesPrinterMissing: '部分归档引用了已不存在的打印机 - 已清除关联',
         archivesProjectMissing: '部分归档引用了已不存在的项目 - 已清除关联',
         archivesOwnerCleared: '部分归档引用了已不存在的用户 - 已清除归属，因此在管理员重新指派之前，只有拥有 archives:read_all 权限的用户才能看到它们',
+        archivesOwnerUnknown: '部分归档在恢复时没有归属 - 此备份未记录归属，因此在管理员指派之前，只有拥有 archives:read_all 权限的用户才能看到它们',
         archivesUndeleted: '备份之后被删除的归档重新可见 - 当时启用了覆盖',
         archivesMetadataOnly: '恢复的归档仅含元数据 - 3MF 文件和缩略图不在 Git 备份中',
         spoolUsageUnresolved: '已跳过 {{count}} 条使用记录 - 其耗材卷不在此备份的耗材列表中，没有可挂接的对象。',

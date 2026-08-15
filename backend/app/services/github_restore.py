@@ -1017,6 +1017,7 @@ class GitHubRestoreService:
             # column was added to fix) and silently un-delete a row the user
             # deleted. So only carry a column the backup actually knows about;
             # on insert, an absent key just takes the model default.
+            owner_cleared = False
             if "created_by_id" in entry:
                 created_by_id = entry.get("created_by_id")
                 if created_by_id is not None and created_by_id not in valid_users:
@@ -1030,6 +1031,7 @@ class GitHubRestoreService:
                         "visible only to users with the archives:read_all permission until an admin reassigns them",
                     )
                     created_by_id = None
+                    owner_cleared = True
                 fields["created_by_id"] = created_by_id
             if "deleted_at" in entry:
                 # A soft-deleted archive is still in the backup (its row is kept
@@ -1064,6 +1066,24 @@ class GitHubRestoreService:
                     "Restored archives carry metadata only — the 3MF and thumbnail files are not in a Git backup",
                 )
                 warned_files = True
+
+            # Insert-only, and the mirror of the "absent is not null" rule above:
+            # on overwrite an unknown owner correctly leaves the local one alone,
+            # but there is no local row here to fall back on, so the archive
+            # lands ownerless — a 404 for everyone without archives:read_all.
+            # Two ways to get here: a commit taken before the collector recorded
+            # the column (every pre-#2656 backup), or an archive that genuinely
+            # had no owner on the source instance. Both restore fine and both
+            # were silent, so the tally said "N archives restored" while the user
+            # who asked for them saw none. The stale-id case above already said
+            # its piece; don't say it twice for the same row.
+            if fields.get("created_by_id") is None and not owner_cleared:
+                tally.note(
+                    "archivesOwnerUnknown",
+                    "Some archives were restored without an owner — this backup does not record one, so they "
+                    "are visible only to users with the archives:read_all permission until an admin reassigns "
+                    "them",
+                )
 
             row = PrintArchive(
                 filename=entry.get("filename") or "restored-from-backup",

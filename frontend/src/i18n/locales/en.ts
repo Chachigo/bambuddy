@@ -4960,6 +4960,7 @@ export default {
         archivesPrinterMissing: 'Some archives referenced printers that no longer exist - link cleared',
         archivesProjectMissing: 'Some archives referenced projects that no longer exist - link cleared',
         archivesOwnerCleared: 'Some archives referenced users that no longer exist - owner cleared, so they are visible only to users with the archives:read_all permission until an admin reassigns them',
+        archivesOwnerUnknown: 'Some archives were restored without an owner - this backup does not record one, so they are visible only to users with the archives:read_all permission until an admin reassigns them',
         archivesUndeleted: 'Archive(s) deleted since the backup are visible again - overwrite was on',
         archivesMetadataOnly: 'Restored archives carry metadata only - the 3MF and thumbnail files are not in a Git backup',
         spoolUsageUnresolved: '{{count}} usage record(s) skipped - their spool is not in this backup\'s spool list, so there is nothing to attach them to.',

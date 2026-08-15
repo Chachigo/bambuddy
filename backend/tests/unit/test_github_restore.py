@@ -2063,8 +2063,14 @@ class TestRestoredArchiveOwnership:
         assert sum(1 for note in _messages(tally) if "owner cleared" in note) == 1
 
     @pytest.mark.asyncio
-    async def test_a_backup_without_the_key_still_restores(self, db_session):
-        """Backups taken before the collector recorded it just can't know the owner."""
+    async def test_a_backup_without_the_key_still_restores_and_says_so(self, db_session):
+        """Backups taken before the collector recorded it just can't know the owner.
+
+        The archive is worth restoring anyway, but it lands ownerless — which is
+        a 404 for everyone without ``archives:read_all``. Reporting N restored
+        while the user who asked for them sees none is the failure mode the note
+        exists to prevent.
+        """
         tally = _CategoryTally()
 
         await _service()._restore_archives(db_session, {"archives": [self._entry()]}, False, tally, {})
@@ -2072,7 +2078,70 @@ class TestRestoredArchiveOwnership:
 
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.created_by_id is None
+        assert tally.restored == 1
         assert not any("owner cleared" in note for note in _messages(tally))
+        assert any("without an owner" in note and "archives:read_all" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_ownerless_archive_is_reported_too(self, db_session):
+        """Same consequence, so the same note: the source row had no owner either."""
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=None)]}, False, tally, {}
+        )
+        await db_session.commit()
+
+        assert any("without an owner" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_a_stale_owner_is_not_reported_twice(self, db_session):
+        """One row, one cause, one note — the cleared-owner branch already spoke."""
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=4242)]}, False, tally, {}
+        )
+        await db_session.commit()
+
+        assert any("owner cleared" in note for note in _messages(tally))
+        assert not any("without an owner" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_a_known_owner_is_not_reported(self, db_session):
+        user = await self._user(db_session)
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=user.id)]}, False, tally, {}
+        )
+        await db_session.commit()
+
+        assert not any("without an owner" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_unknown_owner_note_is_not_emitted_on_overwrite(self, db_session):
+        """Overwrite keeps the local owner, so there is nothing to warn about."""
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(db_session, {"archives": [self._entry()]}, True, tally, {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == bob.id
+        assert not any("without an owner" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_overwrite_makes_the_local_owner_match_the_backup(self, db_session):

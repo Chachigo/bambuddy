@@ -4677,6 +4677,7 @@ export default {
         archivesPrinterMissing: '일부 아카이브가 더 이상 존재하지 않는 프린터를 참조했습니다 - 연결을 해제했습니다',
         archivesProjectMissing: '일부 아카이브가 더 이상 존재하지 않는 프로젝트를 참조했습니다 - 연결을 해제했습니다',
         archivesOwnerCleared: '일부 아카이브가 더 이상 존재하지 않는 사용자를 참조했습니다 - 소유자를 비웠으므로 관리자가 다시 지정하기 전까지 archives:read_all 권한이 있는 사용자에게만 보입니다',
+        archivesOwnerUnknown: '일부 아카이브가 소유자 없이 복원되었습니다 - 이 백업에 소유자가 기록되어 있지 않으므로 관리자가 지정하기 전까지 archives:read_all 권한이 있는 사용자에게만 보입니다',
         archivesUndeleted: '백업 이후 삭제된 아카이브가 다시 표시됩니다 - 덮어쓰기가 켜져 있었습니다',
         archivesMetadataOnly: '복원된 아카이브에는 메타데이터만 있습니다 - 3MF 파일과 썸네일은 Git 백업에 포함되지 않습니다',
         spoolUsageUnresolved: '사용 기록 {{count}}건을 건너뛰었습니다 - 해당 스풀이 이 백업의 스풀 목록에 없어 연결할 대상이 없습니다.',

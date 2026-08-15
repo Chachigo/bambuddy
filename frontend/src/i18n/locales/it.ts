@@ -4900,6 +4900,7 @@ export default {
         archivesPrinterMissing: 'Alcuni archivi facevano riferimento a stampanti non più esistenti - collegamento rimosso',
         archivesProjectMissing: 'Alcuni archivi facevano riferimento a progetti non più esistenti - collegamento rimosso',
         archivesOwnerCleared: 'Alcuni archivi facevano riferimento a utenti non più esistenti - proprietario rimosso, quindi sono visibili solo agli utenti con il permesso archives:read_all finché un amministratore non li riassegna',
+        archivesOwnerUnknown: 'Alcuni archivi sono stati ripristinati senza proprietario - questo backup non ne registra alcuno, quindi sono visibili solo agli utenti con il permesso archives:read_all finché un amministratore non li riassegna',
         archivesUndeleted: 'Gli archivi eliminati dopo il backup sono di nuovo visibili - la sovrascrittura era attiva',
         archivesMetadataOnly: 'Gli archivi ripristinati contengono solo metadati - i file 3MF e le miniature non sono in un backup Git',
         spoolUsageUnresolved: '{{count}} record di consumo saltati - la loro bobina non è nell\'elenco bobine di questo backup, quindi non c\'è nulla a cui collegarli.',
