@@ -12,6 +12,11 @@ from backend.app.services.git_providers.github import GitHubBackend
 
 logger = logging.getLogger(__name__)
 
+# Gitea clamps per_page to MAX_RESPONSE_ITEMS, which defaults to 50. Consulted
+# only when a tree response carries no usable total_count: a page at least this
+# long may be a clamped full page and cannot be assumed to be the last one.
+_ASSUMED_MIN_PAGE_SIZE = 50
+
 
 class GiteaBackend(GitHubBackend):
     """Backend for Gitea instances.
@@ -128,6 +133,7 @@ class GiteaBackend(GitHubBackend):
         blobs: dict[str, str] = {}
         seen = 0
         page = 1
+        page_size: int | None = None
         while page <= 50:
             response = await client.get(
                 f"{api_base}/repos/{owner}/{repo}/git/trees/{ref}",
@@ -170,7 +176,28 @@ class GiteaBackend(GitHubBackend):
             # silently, the exact failure this override exists to prevent.
             total = data.get("total_count")
             seen += len(entries)
-            if not isinstance(total, int) or seen >= total or not entries:
+            if page_size is None:
+                page_size = max(len(entries), _ASSUMED_MIN_PAGE_SIZE)
+
+            if not entries:
+                return blobs, ""
+            if isinstance(total, int):
+                if seen >= total:
+                    return blobs, ""
+            elif len(entries) < page_size:
+                # No usable total_count. This used to return here on the *first*
+                # page, i.e. fail open into a success holding whatever one page
+                # happened to be — 50 entries of an arbitrarily large tree under
+                # the default clamp — and the restore then reported every
+                # category beyond it as absent from the commit. Page until a
+                # short or empty page instead; the page-count ceiling below
+                # still gives the correct hard failure for a tree that really is
+                # too large. A page shorter than the first one (or than Gitea's
+                # default clamp, so a genuinely small tree stays one request)
+                # cannot be followed by another. The residual case is an
+                # instance whose MAX_RESPONSE_ITEMS is set *below* 50 and which
+                # also omits total_count; real Gitea and Forgejo always send it
+                # on this route.
                 return blobs, ""
             page += 1
 

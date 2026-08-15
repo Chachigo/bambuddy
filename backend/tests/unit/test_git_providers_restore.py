@@ -461,6 +461,83 @@ class TestGiteaAndForgejoInheritReads:
         assert len(result["paths"]) == total
         assert "f119.json" in result["paths"], "the tail of the tree is what a clamped pager loses"
 
+    # --- a response with no usable total_count must not fail open -----------
+    #
+    # The pager used to short-circuit into a *success* holding page 1 whenever
+    # total_count was missing or not an int — 50 entries of an arbitrarily large
+    # tree under Gitea's default clamp. The restore then reported the categories
+    # it could not see as "not present in this backup commit", the same silent
+    # skip this whole override exists to prevent. GitHub and GitLab both
+    # hard-fail in the equivalent spot; only Gitea guessed.
+
+    @staticmethod
+    def _page(start, count, **extra):
+        return _make_mock_response(
+            200,
+            {
+                "tree": [{"type": "blob", "path": f"f{i}.json", "sha": f"s{i}"} for i in range(start, start + count)],
+                **extra,
+            },
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("backend_cls", [GiteaBackend, ForgejoBackend])
+    async def test_a_countless_response_is_paged_to_the_end(self, backend_cls):
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[self._page(0, 50), self._page(50, 50), self._page(100, 0)])
+
+        result = await backend_cls().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is True
+        assert client.get.await_count == 3
+        assert len(result["paths"]) == 100
+        assert "f99.json" in result["paths"], "the tail is what a fail-open pager loses"
+
+    @pytest.mark.asyncio
+    async def test_a_countless_short_page_ends_the_paging(self):
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[self._page(0, 50), self._page(50, 7)])
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is True
+        assert client.get.await_count == 2
+        assert len(result["paths"]) == 57
+
+    @pytest.mark.asyncio
+    async def test_a_countless_single_page_tree_still_costs_one_request(self):
+        """Control: a small tree must not pay for the fix."""
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=self._page(0, 3))
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["paths"] == ["f0.json", "f1.json", "f2.json"]
+        assert client.get.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_non_int_total_count_is_treated_as_no_count(self):
+        """The arm the code was written to defend against, and then trusted."""
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[self._page(0, 50, total_count="120"), self._page(50, 4)])
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is True
+        assert client.get.await_count == 2
+        assert len(result["paths"]) == 54
+
+    @pytest.mark.asyncio
+    async def test_a_countless_tree_beyond_the_page_cap_still_fails(self):
+        """The page ceiling is what keeps "page until short" from truncating."""
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=self._page(0, 1000))
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is False
+        assert "listing limit" in result["message"]
+
     @pytest.mark.asyncio
     async def test_a_tree_beyond_the_page_cap_fails_rather_than_truncating(self):
         page = {"tree": [{"type": "blob", "path": f"f{i}.json", "sha": f"s{i}"} for i in range(1000)]}
