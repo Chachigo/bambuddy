@@ -26,6 +26,7 @@ from backend.app.schemas.github_backup import (
     GitHubRestoreResponse,
     GitHubTestConnectionResponse,
     ProviderType,
+    RestoreCategory,
 )
 from backend.app.services.github_backup import github_backup_service
 from backend.app.services.github_restore import github_restore_service
@@ -440,14 +441,35 @@ async def preview_restore(
 async def restore_backup(
     request: GitHubRestoreRequest,
     db: AsyncSession = Depends(get_db),
-    _: User | None = RequirePermissionIfAuthEnabled(Permission.GITHUB_RESTORE),
+    current_user: User | None = RequirePermissionIfAuthEnabled(Permission.GITHUB_RESTORE),
 ):
     """Restore selected categories from one backup commit.
 
     Note there is no private-repo gate here, unlike the config endpoints: that
     check exists to stop credentials leaving the instance, and this path only
     reads. A config can only be saved against a private repo anyway.
+
+    The settings category needs ``settings:update`` as well — see the check
+    below.
     """
+    if RestoreCategory.SETTINGS in request.categories and current_user is not None:
+        # The settings category rewrites arbitrary non-auth Settings rows, which
+        # is what PUT /api/v1/settings/ gates on settings:update. Backup and
+        # Settings are separate permission groups, so a role holding only Backup
+        # could otherwise change settings it cannot change through the endpoint
+        # that owns them. This module already makes that argument — it is why
+        # the four protected auth keys are refused outright — so the gap was an
+        # inconsistency in ours, not a new policy.
+        #
+        # current_user is None only when auth is disabled: github:restore is in
+        # _APIKEY_DENIED_PERMISSIONS, so an API key never gets past the
+        # dependency to reach this line.
+        if not current_user.has_all_permissions(Permission.SETTINGS_UPDATE.value):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing required permissions: {Permission.SETTINGS_UPDATE.value}",
+            )
+
     result = await db.execute(select(GitHubBackupConfig).limit(1))
     config = result.scalar_one_or_none()
 

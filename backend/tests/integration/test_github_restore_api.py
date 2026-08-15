@@ -27,9 +27,10 @@ def _mock_private_repo_check():
         yield m
 
 
-async def _create_config(async_client: AsyncClient) -> dict:
+async def _create_config(async_client: AsyncClient, token: str | None = None) -> dict:
     response = await async_client.post(
         "/api/v1/github-backup/config",
+        headers={"Authorization": f"Bearer {token}"} if token else {},
         json={
             "repository_url": "https://github.com/test/repo",
             "access_token": "ghp_testtoken123",
@@ -436,3 +437,121 @@ class TestRestoreDoesNotOpenTheMetricsEndpoint:
         authorised = await async_client.get("/api/v1/metrics", headers={"Authorization": "Bearer local-token"})
         assert authorised.status_code == 200
         assert "bambuddy_build_info" in authorised.text
+
+
+class TestSettingsRestoreNeedsSettingsUpdate(TestOwnershipPermissionsSetup):
+    """A Backup-only role must not reach around the gate that owns settings (#2656).
+
+    The settings category rewrites arbitrary non-auth ``Settings`` rows, which is
+    exactly what ``PUT /api/v1/settings/`` gates on ``settings:update``. Backup
+    and Settings are separate permission groups, so gating the restore endpoint
+    on ``github:restore`` alone let a role holding only Backup change settings it
+    could not change through the endpoint that owns them. This module already
+    makes that argument — it is why the four protected auth keys are refused
+    outright — so the gap was an inconsistency in ours.
+    """
+
+    async def _token_for(self, async_client: AsyncClient, admin_token: str, name: str, permissions: list[str]) -> str:
+        headers = {"Authorization": f"Bearer {admin_token}"}
+        group = await async_client.post(
+            "/api/v1/groups/",
+            headers=headers,
+            json={"name": name, "permissions": permissions},
+        )
+        assert group.status_code == 201, group.text
+        created = await async_client.post(
+            "/api/v1/users/",
+            headers=headers,
+            json={"username": name, "password": "Restorepass1!", "group_ids": [group.json()["id"]]},
+        )
+        assert created.status_code in (200, 201), created.text
+        login = await async_client.post(
+            "/api/v1/auth/login",
+            json={"username": name, "password": "Restorepass1!"},
+        )
+        assert login.status_code == 200, login.text
+        return login.json()["access_token"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_backup_only_role_cannot_restore_settings(self, async_client: AsyncClient, auth_setup):
+        token = await self._token_for(
+            async_client, auth_setup["admin_token"], "backuponly", ["github:backup", "github:restore"]
+        )
+        await _create_config(async_client, auth_setup["admin_token"])
+
+        with patch(
+            "backend.app.services.github_restore.github_restore_service.run_restore",
+            new=AsyncMock(return_value={"success": True, "message": "", "log_id": 1, "ref": "aaa1111", "results": {}}),
+        ) as mock:
+            response = await async_client.post(
+                "/api/v1/github-backup/restore",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"categories": ["settings"]},
+            )
+
+        assert response.status_code == 403
+        assert "settings:update" in response.json()["detail"]
+        mock.assert_not_awaited(), "the refusal has to happen before anything is written"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_same_role_can_still_restore_the_other_categories(self, async_client: AsyncClient, auth_setup):
+        """Control: the gate is per-category, not a blanket demotion of github:restore."""
+        token = await self._token_for(
+            async_client, auth_setup["admin_token"], "backuponly2", ["github:backup", "github:restore"]
+        )
+        await _create_config(async_client, auth_setup["admin_token"])
+
+        with patch(
+            "backend.app.services.github_restore.github_restore_service.run_restore",
+            new=AsyncMock(return_value={"success": True, "message": "", "log_id": 1, "ref": "aaa1111", "results": {}}),
+        ):
+            response = await async_client.post(
+                "/api/v1/github-backup/restore",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"categories": ["spools", "archives", "kprofiles"]},
+            )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_role_holding_both_can_restore_settings(self, async_client: AsyncClient, auth_setup):
+        """Control: the gate must not lock out a role that legitimately holds both."""
+        token = await self._token_for(
+            async_client,
+            auth_setup["admin_token"],
+            "backupandsettings",
+            ["github:backup", "github:restore", "settings:read", "settings:update"],
+        )
+        await _create_config(async_client, auth_setup["admin_token"])
+
+        with patch(
+            "backend.app.services.github_restore.github_restore_service.run_restore",
+            new=AsyncMock(return_value={"success": True, "message": "", "log_id": 1, "ref": "aaa1111", "results": {}}),
+        ):
+            response = await async_client.post(
+                "/api/v1/github-backup/restore",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"categories": ["settings"]},
+            )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_auth_disabled_is_unaffected(self, async_client: AsyncClient):
+        """Control: with auth off there is no user to check, and the dep returns None."""
+        await _create_config(async_client)
+
+        with patch(
+            "backend.app.services.github_restore.github_restore_service.run_restore",
+            new=AsyncMock(return_value={"success": True, "message": "", "log_id": 1, "ref": "aaa1111", "results": {}}),
+        ):
+            response = await async_client.post(
+                "/api/v1/github-backup/restore",
+                json={"categories": ["settings"]},
+            )
+
+        assert response.status_code == 200
