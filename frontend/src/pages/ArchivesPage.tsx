@@ -740,7 +740,8 @@ function ArchiveCard({
     { label: '', divider: true, onClick: () => {} },
     {
       label: archive.is_favorite ? t('archives.menu.removeFromFavorites') : t('archives.menu.addToFavorites'),
-      icon: <Star className={`w-4 h-4 ${archive.is_favorite ? 'fill-yellow-400 text-yellow-400' : ''}`} />,
+      // Preview the favourited state on hover so the row reads as clickable (#2791).
+      icon: <Star className={`w-4 h-4 ${archive.is_favorite ? 'fill-yellow-400 text-yellow-400' : canModify('archives', 'update', archive.created_by_id) ? 'group-hover:text-yellow-400' : ''}`} />,
       onClick: () => favoriteMutation.mutate(),
       disabled: !canModify('archives', 'update', archive.created_by_id),
       title: !canModify('archives', 'update', archive.created_by_id) ? t('archives.permission.noUpdateArchives') : undefined,
@@ -2138,7 +2139,8 @@ function ArchiveListRow({
     { label: '', divider: true, onClick: () => {} },
     {
       label: archive.is_favorite ? t('archives.menu.removeFromFavorites') : t('archives.menu.addToFavorites'),
-      icon: <Star className={`w-4 h-4 ${archive.is_favorite ? 'fill-yellow-400 text-yellow-400' : ''}`} />,
+      // Preview the favourited state on hover so the row reads as clickable (#2791).
+      icon: <Star className={`w-4 h-4 ${archive.is_favorite ? 'fill-yellow-400 text-yellow-400' : canModify('archives', 'update', archive.created_by_id) ? 'group-hover:text-yellow-400' : ''}`} />,
       onClick: () => favoriteMutation.mutate(),
       disabled: !canModify('archives', 'update', archive.created_by_id),
       title: !canModify('archives', 'update', archive.created_by_id) ? t('archives.permission.noUpdateArchives') : undefined,
