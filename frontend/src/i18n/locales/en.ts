@@ -3626,6 +3626,8 @@ export default {
       verifyButton: 'Verify',
       setTokenButton: 'Set Token',
       useToken: 'Use access token instead',
+      captchaTitle: 'Bambu Cloud is asking for a CAPTCHA',
+      captchaBody: 'Bambu is challenging your network before it will accept a sign-in, and the challenge cannot be answered from Bambuddy. Your email and password are not the problem. The block is tied to your public IP address and normally clears by itself within a few hours — retrying repeatedly makes it last longer. To sign in now, use an access token from a browser session instead.',
       useEmail: 'Login with email instead',
       toast: {
         loggedIn: 'Logged in successfully',
@@ -6847,8 +6849,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: 'Secure file-transfer handshake failed',
-        cause: 'The TLS handshake with the printer\'s file-transfer server failed. This is often a firewall or outdated printer firmware.',
-        fix: 'Update the printer firmware and check that no firewall or proxy intercepts the connection on port 990.',
+        cause: 'The printer\'s file service answered port 990 without TLS. Its file server has wedged — a printer-side fault, not a firewall or firmware problem.',
+        fix: 'Restart the printer. Until then print files, covers and timelapses cannot be fetched; printing itself is unaffected.',
+      },
+      'bambu-cloud-captcha': {
+        name: 'Bambu Cloud is asking for a CAPTCHA',
+        cause: 'Bambu\'s anti-abuse layer is challenging this network, so no Bambu Cloud sign-in can complete. It is tied to the public IP address, not to your account or this installation.',
+        fix: 'Wait — it normally clears within a few hours, and repeated sign-in attempts prolong it. To connect meanwhile, sign in with an access token taken from a browser session.',
       },
       'mqtt-connection-flapping': {
         name: 'Printer connection keeps dropping',

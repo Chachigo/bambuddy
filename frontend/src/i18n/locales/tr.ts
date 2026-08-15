@@ -3600,6 +3600,8 @@ export default {
       verifyButton: 'Doğrula',
       setTokenButton: 'Belirteç Ayarla',
       useToken: 'Erişim belirteci kullan',
+      captchaTitle: 'Bambu Cloud CAPTCHA istiyor',
+      captchaBody: 'Bambu, oturum açmayı kabul etmeden önce ağınızdan CAPTCHA doğrulaması istiyor ve bu doğrulama Bambuddy üzerinden yanıtlanamaz. Sorun e-postanız veya parolanız değil. Engel genel IP adresinize bağlıdır ve genellikle birkaç saat içinde kendiliğinden kalkar; sürekli yeniden denemek süreyi uzatır. Şimdi oturum açmak için tarayıcı oturumundan alınan bir erişim belirteci kullanın.',
       useEmail: 'E-posta ile giriş yap',
       toast: {
         loggedIn: 'Başarıyla giriş yapıldı',
@@ -6737,8 +6739,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: 'Güvenli dosya aktarım el sıkışması başarısız',
-        cause: 'Yazıcının dosya aktarım sunucusuyla TLS el sıkışması başarısız oldu. Bu genellikle bir güvenlik duvarı veya eski yazıcı firmware\'idir.',
-        fix: 'Yazıcı firmware\'ini güncelleyin ve port 990\'daki bağlantıyı hiçbir güvenlik duvarı veya proxy\'nin engellemediğini kontrol edin.',
+        cause: 'Yazıcının dosya hizmeti 990 numaralı bağlantı noktasında TLS olmadan yanıt verdi. Dosya sunucusu takılmış durumda: bu, güvenlik duvarı veya firmware sorunu değil, yazıcı kaynaklı bir arızadır.',
+        fix: 'Yazıcıyı yeniden başlatın. O zamana kadar baskı dosyaları, kapak görselleri ve timelapse videoları alınamaz; baskının kendisi etkilenmez.',
+      },
+      'bambu-cloud-captcha': {
+        name: 'Bambu Cloud CAPTCHA istiyor',
+        cause: 'Bambu\'nun kötüye kullanım koruması bu ağı denetliyor, bu yüzden hiçbir Bambu Cloud oturum açma işlemi tamamlanamıyor. Bu, hesabınıza veya bu kuruluma değil, genel IP adresine bağlıdır.',
+        fix: 'Bekleyin: genellikle birkaç saat içinde kalkar ve tekrarlanan denemeler süreyi uzatır. Bu sırada tarayıcı oturumundan alınan bir erişim belirteciyle bağlanın.',
       },
       'mqtt-connection-flapping': {
         name: 'Yazıcı bağlantısı sürekli düşüyor',

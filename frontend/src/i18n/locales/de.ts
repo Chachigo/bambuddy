@@ -3597,6 +3597,8 @@ export default {
       verifyButton: 'Bestätigen',
       setTokenButton: 'Token setzen',
       useToken: 'Stattdessen Zugriffstoken verwenden',
+      captchaTitle: 'Bambu Cloud verlangt ein CAPTCHA',
+      captchaBody: 'Bambu fordert für dein Netzwerk eine CAPTCHA-Prüfung, bevor eine Anmeldung akzeptiert wird, und diese Prüfung lässt sich aus Bambuddy heraus nicht beantworten. E-Mail und Passwort sind nicht das Problem. Die Sperre hängt an deiner öffentlichen IP-Adresse und löst sich normalerweise innerhalb weniger Stunden von selbst — wiederholte Versuche verlängern sie. Um dich jetzt anzumelden, verwende stattdessen ein Zugriffstoken aus einer Browser-Sitzung.',
       useEmail: 'Stattdessen mit E-Mail anmelden',
       toast: {
         loggedIn: 'Erfolgreich angemeldet',
@@ -6798,8 +6800,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: 'Sicherer Dateiübertragungs-Handshake fehlgeschlagen',
-        cause: 'Der TLS-Handshake mit dem Dateiübertragungs-Server des Druckers ist fehlgeschlagen. Häufig liegt das an einer Firewall oder veralteter Drucker-Firmware.',
-        fix: 'Aktualisiere die Drucker-Firmware und prüfe, dass keine Firewall oder Proxy die Verbindung auf Port 990 abfängt.',
+        cause: 'Der Dateidienst des Druckers antwortet auf Port 990 ohne TLS. Sein Dateiserver hat sich aufgehängt — ein Fehler im Drucker, kein Firewall- oder Firmware-Problem.',
+        fix: 'Starte den Drucker neu. Bis dahin lassen sich Druckdateien, Vorschaubilder und Timelapses nicht abrufen; das Drucken selbst ist nicht betroffen.',
+      },
+      'bambu-cloud-captcha': {
+        name: 'Bambu Cloud verlangt ein CAPTCHA',
+        cause: 'Der Missbrauchsschutz von Bambu prüft dieses Netzwerk, daher kann keine Bambu-Cloud-Anmeldung abgeschlossen werden. Das hängt an der öffentlichen IP-Adresse, nicht an deinem Konto oder dieser Installation.',
+        fix: 'Warte ab — normalerweise löst es sich innerhalb weniger Stunden, wiederholte Anmeldeversuche verlängern es. Zwischenzeitlich kannst du dich mit einem Zugriffstoken aus einer Browser-Sitzung anmelden.',
       },
       'mqtt-connection-flapping': {
         name: 'Druckerverbindung bricht ständig ab',

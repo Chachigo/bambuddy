@@ -3585,6 +3585,8 @@ export default {
       verifyButton: '验证',
       setTokenButton: '设置令牌',
       useToken: '改用访问令牌',
+      captchaTitle: 'Bambu Cloud 要求进行 CAPTCHA 验证',
+      captchaBody: 'Bambu 在接受登录之前要求你的网络通过 CAPTCHA 验证，而该验证无法在 Bambuddy 中完成。这与你的邮箱和密码无关。限制与你的公网 IP 地址绑定，通常几小时后会自动解除；反复重试只会延长限制。若要立即登录，请改用从浏览器会话中获取的访问令牌。',
       useEmail: '改用邮箱登录',
       toast: {
         loggedIn: '登录成功',
@@ -6786,8 +6788,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: '安全文件传输握手失败',
-        cause: '与打印机文件传输服务器的 TLS 握手失败。通常是防火墙或打印机固件过旧所致。',
-        fix: '请更新打印机固件，并检查没有防火墙或代理拦截 990 端口上的连接。',
+        cause: '打印机的文件服务在 990 端口上没有使用 TLS 响应。其文件服务器已卡死，这是打印机侧的故障，与防火墙或固件无关。',
+        fix: '请重启打印机。在此之前无法获取打印文件、封面图和延时视频；打印本身不受影响。',
+      },
+      'bambu-cloud-captcha': {
+        name: 'Bambu Cloud 要求进行 CAPTCHA 验证',
+        cause: 'Bambu 的防滥用机制正在验证此网络，因此无法完成 Bambu Cloud 登录。这与公网 IP 地址有关，与你的账号或此安装无关。',
+        fix: '请等待：通常几小时后会自动解除，反复登录只会延长时间。在此期间，可使用从浏览器会话中获取的访问令牌登录。',
       },
       'mqtt-connection-flapping': {
         name: '打印机连接反复断开',

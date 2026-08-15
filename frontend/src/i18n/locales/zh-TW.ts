@@ -3585,6 +3585,8 @@ export default {
       verifyButton: '驗證',
       setTokenButton: '設定權杖',
       useToken: '改用存取權杖',
+      captchaTitle: 'Bambu Cloud 要求進行 CAPTCHA 驗證',
+      captchaBody: 'Bambu 在接受登入之前要求你的網路通過 CAPTCHA 驗證，而該驗證無法在 Bambuddy 中完成。這與你的電子郵件和密碼無關。限制與你的公開 IP 位址綁定，通常幾小時後會自動解除；反覆重試只會延長限制。若要立即登入，請改用從瀏覽器工作階段取得的存取權杖。',
       useEmail: '改用信箱登入',
       toast: {
         loggedIn: '登入成功',
@@ -6786,8 +6788,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: '安全檔案傳輸交握失敗',
-        cause: '與印表機檔案傳輸伺服器的 TLS 交握失敗。通常是防火牆或印表機韌體過舊所致。',
-        fix: '請更新印表機韌體，並檢查沒有防火牆或代理伺服器攔截 990 連接埠上的連線。',
+        cause: '印表機的檔案服務在 990 連接埠上未使用 TLS 回應。其檔案伺服器已卡住，這是印表機端的故障，與防火牆或韌體無關。',
+        fix: '請重新啟動印表機。在此之前無法取得列印檔案、封面圖和縮時影片；列印本身不受影響。',
+      },
+      'bambu-cloud-captcha': {
+        name: 'Bambu Cloud 要求進行 CAPTCHA 驗證',
+        cause: 'Bambu 的防濫用機制正在驗證此網路，因此無法完成 Bambu Cloud 登入。這與公開 IP 位址有關，與你的帳號或此安裝無關。',
+        fix: '請等待：通常幾小時後會自動解除，反覆登入只會延長時間。在此期間，可使用從瀏覽器工作階段取得的存取權杖登入。',
       },
       'mqtt-connection-flapping': {
         name: '印表機連線反覆中斷',

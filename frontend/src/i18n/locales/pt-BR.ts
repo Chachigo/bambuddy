@@ -3585,6 +3585,8 @@ export default {
       verifyButton: 'Verificar',
       setTokenButton: 'Definir Token',
       useToken: 'Usar token de acesso em vez disso',
+      captchaTitle: 'O Bambu Cloud está pedindo um CAPTCHA',
+      captchaBody: 'O Bambu está exigindo um CAPTCHA da sua rede antes de aceitar um login, e esse desafio não pode ser respondido pelo Bambuddy. Seu e-mail e sua senha não são o problema. O bloqueio está ligado ao seu endereço IP público e costuma passar sozinho em algumas horas; tentar de novo repetidamente prolonga o bloqueio. Para entrar agora, use um token de acesso obtido em uma sessão do navegador.',
       useEmail: 'Entrar com email em vez disso',
       toast: {
         loggedIn: 'Conectado com sucesso',
@@ -6787,8 +6789,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: 'Falha no handshake seguro de transferência de arquivos',
-        cause: 'O handshake TLS com o servidor de transferência de arquivos da impressora falhou. Geralmente é causado por um firewall ou firmware desatualizado da impressora.',
-        fix: 'Atualize o firmware da impressora e verifique se nenhum firewall ou proxy intercepta a conexão na porta 990.',
+        cause: 'O serviço de arquivos da impressora respondeu na porta 990 sem TLS. O servidor de arquivos dela travou: é uma falha da impressora, não do firewall nem do firmware.',
+        fix: 'Reinicie a impressora. Até lá, arquivos de impressão, capas e timelapses não podem ser baixados; a impressão em si não é afetada.',
+      },
+      'bambu-cloud-captcha': {
+        name: 'O Bambu Cloud está pedindo um CAPTCHA',
+        cause: 'A proteção antiabuso do Bambu está verificando esta rede, então nenhum login no Bambu Cloud consegue ser concluído. Isso depende do endereço IP público, não da sua conta nem desta instalação.',
+        fix: 'Aguarde: costuma passar em algumas horas e novas tentativas prolongam o bloqueio. Enquanto isso, conecte-se com um token de acesso obtido em uma sessão do navegador.',
       },
       'mqtt-connection-flapping': {
         name: 'A conexão com a impressora cai repetidamente',

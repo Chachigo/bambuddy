@@ -3586,6 +3586,8 @@ export default {
       verifyButton: 'Vérifier',
       setTokenButton: 'Définir Jeton',
       useToken: 'Utiliser jeton d\'accès',
+      captchaTitle: 'Bambu Cloud demande un CAPTCHA',
+      captchaBody: 'Bambu impose un CAPTCHA à votre réseau avant d\'accepter une connexion, et ce défi ne peut pas être résolu depuis Bambuddy. Votre e-mail et votre mot de passe ne sont pas en cause. Le blocage est lié à votre adresse IP publique et disparaît généralement de lui-même en quelques heures ; réessayer sans cesse le prolonge. Pour vous connecter maintenant, utilisez plutôt un jeton d\'accès issu d\'une session de navigateur.',
       useEmail: 'Connexion par email',
       toast: {
         loggedIn: 'Connecté avec succès',
@@ -6788,8 +6790,13 @@ export default {
       },
       'ftp-ssl-error': {
         name: 'Échec de la négociation sécurisée du transfert de fichiers',
-        cause: 'La négociation TLS avec le serveur de transfert de fichiers de l\'imprimante a échoué. C\'est souvent dû à un pare-feu ou à un micrologiciel d\'imprimante obsolète.',
-        fix: 'Mettez à jour le micrologiciel de l\'imprimante et vérifiez qu\'aucun pare-feu ou proxy n\'intercepte la connexion sur le port 990.',
+        cause: 'Le service de fichiers de l\'imprimante a répondu sur le port 990 sans TLS. Son serveur de fichiers est bloqué : c\'est une panne côté imprimante, pas un problème de pare-feu ou de micrologiciel.',
+        fix: 'Redémarrez l\'imprimante. D\'ici là, les fichiers d\'impression, les vignettes et les timelapses ne peuvent pas être récupérés ; l\'impression elle-même n\'est pas affectée.',
+      },
+      'bambu-cloud-captcha': {
+        name: 'Bambu Cloud demande un CAPTCHA',
+        cause: 'La protection anti-abus de Bambu contrôle ce réseau, aucune connexion à Bambu Cloud ne peut donc aboutir. Cela dépend de l\'adresse IP publique, pas de votre compte ni de cette installation.',
+        fix: 'Patientez : cela disparaît généralement en quelques heures, et les tentatives répétées le prolongent. En attendant, connectez-vous avec un jeton d\'accès issu d\'une session de navigateur.',
       },
       'mqtt-connection-flapping': {
         name: 'La connexion à l\'imprimante se coupe sans cesse',
