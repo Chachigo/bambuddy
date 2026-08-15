@@ -34,22 +34,28 @@ class TestResolveProfile:
             return httpx.Response(200, json={"profile": {"line_width": "0.42", "wall_loops": "2"}})
 
         service = _service(handler)
-        assert await service.resolve_profile(PROCESS_STUB, "process") == {
-            "line_width": "0.42",
-            "wall_loops": "2",
-        }
+        result = await service.resolve_profile(PROCESS_STUB, "process")
+        assert result.values == {"line_width": "0.42", "wall_loops": "2"}
+        assert result.reason == "ok"
 
     @pytest.mark.asyncio
-    async def test_a_sidecar_without_the_endpoint_is_not_an_error(self):
-        # Older images 404 here. The panel degrades to schema defaults and says
-        # so; failing would make the modal unusable against an old sidecar.
+    async def test_a_sidecar_without_the_endpoint_is_reported_as_outdated(self):
+        # Older images 404 here. This is the dominant case in practice -- an
+        # install pulls SIDECAR_TAG:-latest regardless of its own release
+        # channel -- and it is the one with a fix the user can act on, so it
+        # must not be flattened into the generic failure.
         service = _service(lambda request: httpx.Response(404, json={"message": "Not Found"}))
-        assert await service.resolve_profile(PROCESS_STUB, "process") is None
+        result = await service.resolve_profile(PROCESS_STUB, "process")
+        assert result.values is None
+        assert result.reason == "sidecar_outdated"
 
     @pytest.mark.asyncio
-    async def test_a_sidecar_error_degrades_rather_than_raising(self):
+    async def test_a_sidecar_error_is_not_reported_as_outdated(self):
+        # A broken sidecar and an old one call for different advice.
         service = _service(lambda request: httpx.Response(500, json={"message": "boom"}))
-        assert await service.resolve_profile(PROCESS_STUB, "process") is None
+        result = await service.resolve_profile(PROCESS_STUB, "process")
+        assert result.values is None
+        assert result.reason == "sidecar_unavailable"
 
     @pytest.mark.asyncio
     async def test_unreachable_sidecar_still_raises(self):
@@ -62,15 +68,19 @@ class TestResolveProfile:
             await _service(handler).resolve_profile(PROCESS_STUB, "process")
 
     @pytest.mark.asyncio
-    async def test_unparseable_preset_content_returns_none(self):
+    async def test_unparseable_preset_content_blames_the_preset(self):
         service = _service(lambda request: httpx.Response(200, json={"profile": {}}))
-        assert await service.resolve_profile("not json", "process") is None
+        result = await service.resolve_profile("not json", "process")
+        assert result.values is None
+        assert result.reason == "preset_unresolved"
 
     @pytest.mark.asyncio
-    async def test_a_response_without_a_profile_object_returns_none(self):
+    async def test_a_response_without_a_profile_object_returns_no_values(self):
         # Guards against reading a differently-shaped body as if it were values.
         service = _service(lambda request: httpx.Response(200, json={"ok": True}))
-        assert await service.resolve_profile(PROCESS_STUB, "process") is None
+        result = await service.resolve_profile(PROCESS_STUB, "process")
+        assert result.values is None
+        assert result.reason == "sidecar_unavailable"
 
     @pytest.mark.asyncio
     async def test_an_already_flat_preset_round_trips(self):
@@ -81,7 +91,7 @@ class TestResolveProfile:
             assert "inherits" not in body["profile"]
             return httpx.Response(200, json={"profile": json.loads(flat)})
 
-        assert await _service(handler).resolve_profile(flat, "process") == {
+        assert (await _service(handler).resolve_profile(flat, "process")).values == {
             "line_width": "0.45",
             "type": "process",
         }

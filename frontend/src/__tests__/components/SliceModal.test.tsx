@@ -105,7 +105,7 @@ describe('SliceModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
-    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {} });
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
     mockApi.getSliceJob.mockResolvedValue({
       job_id: 42,
       status: 'running',
@@ -1559,7 +1559,7 @@ describe('SliceModal — process settings in "slice as designed" mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
-    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {} });
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
     mockApi.getSlicerPrinterModels.mockResolvedValue({});
     mockApi.getLibraryFilePlates.mockResolvedValue({
@@ -1643,7 +1643,7 @@ describe('SliceModal — process settings layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
-    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {} });
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
     mockApi.getLibraryFilePlates.mockResolvedValue({
       file_id: 100,

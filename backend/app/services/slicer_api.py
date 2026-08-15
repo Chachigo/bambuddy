@@ -54,6 +54,18 @@ class SlicerTimeoutError(SlicerApiError):
     """
 
 
+class ResolvedProfile(NamedTuple):
+    """A preset's effective values, or why they are unavailable.
+
+    ``reason`` is one of ``ok`` / ``sidecar_outdated`` / ``sidecar_unavailable``
+    / ``preset_unresolved``. It exists so the UI can say something actionable
+    instead of one generic "could not read the values" for four causes.
+    """
+
+    values: dict | None
+    reason: str
+
+
 class SliceResult(NamedTuple):
     """Result of a slice operation."""
 
@@ -310,7 +322,7 @@ class SlicerApiService:
             raise SlicerApiUnavailableError(f"Slicer sidecar /health returned {response.status_code}")
         return response.json()
 
-    async def resolve_profile(self, profile_json: str, category: str) -> dict | None:
+    async def resolve_profile(self, profile_json: str, category: str) -> "ResolvedProfile":
         """POST /profiles/resolve — flatten a preset's ``inherits:`` chain.
 
         Returns the effective key/value map the slicer would actually use, so
@@ -325,15 +337,19 @@ class SlicerApiService:
         the one baked into the running sidecar image — values from it would look
         authoritative and could quietly disagree with what gets sliced.
 
-        Returns ``None`` when the sidecar is too old to have the endpoint, so
-        callers can degrade to schema defaults instead of failing the modal.
-        Genuine transport failures still raise.
+        Returns a :class:`ResolvedProfile` whose ``reason`` distinguishes *why*
+        values are missing. That matters more than it looks: the common case in
+        practice is a sidecar older than this endpoint, because a Bambuddy
+        install pulls ``SIDECAR_TAG:-latest`` independently of its own release
+        channel. "Could not read the values" sends that user hunting; "your
+        sidecar image is older than this feature" is a one-line fix. Genuine
+        transport failures still raise.
         """
         try:
             payload = json.loads(profile_json)
         except json.JSONDecodeError:
             logger.warning("Cannot resolve %s preset: content is not valid JSON", category)
-            return None
+            return ResolvedProfile(None, "preset_unresolved")
 
         try:
             response = await self._client.post(
@@ -345,21 +361,25 @@ class SlicerApiService:
             raise SlicerApiUnavailableError(f"Slicer sidecar unreachable: {exc}") from exc
 
         if response.status_code == 404:
-            # Sidecar predates the endpoint. Not an error — the caller shows
-            # schema defaults and says so.
+            # Sidecar predates the endpoint. Not an error, and specifically not
+            # the same as a broken one — this is the case that has a fix the
+            # user can act on.
             logger.info("Slicer sidecar has no /profiles/resolve; falling back to schema defaults")
-            return None
+            return ResolvedProfile(None, "sidecar_outdated")
         if response.status_code >= 400:
             logger.warning(
                 "Slicer sidecar /profiles/resolve returned %s: %s",
                 response.status_code,
                 _format_sidecar_error(response),
             )
-            return None
+            return ResolvedProfile(None, "sidecar_unavailable")
 
         body = response.json()
         resolved = body.get("profile") if isinstance(body, dict) else None
-        return resolved if isinstance(resolved, dict) else None
+        if not isinstance(resolved, dict):
+            logger.warning("Slicer sidecar /profiles/resolve returned no profile object")
+            return ResolvedProfile(None, "sidecar_unavailable")
+        return ResolvedProfile(resolved, "ok")
 
     async def list_bundled_profiles(self) -> dict:
         """GET /profiles/bundled — return the slicer's stock profiles by slot.

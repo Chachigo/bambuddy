@@ -4267,6 +4267,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: '目前顯示切片器預設值：切片 sidecar 版本早於此功能，無法提供預設的實際值。更新 sidecar 映像即可查看。未變更的項目仍使用預設。',
+    presetValuesNotConfigured: '目前顯示切片器預設值：未設定切片 sidecar，無法讀取預設的實際值。未變更的項目仍使用預設。',
+    presetValuesSidecarUnavailable: '目前顯示切片器預設值：切片 sidecar 未回應，無法讀取預設的實際值。未變更的項目仍使用預設。',
     presetValuesUnavailable: '目前顯示切片器預設值：無法讀取所選預設的實際值。未變更的項目仍使用預設。',
     filamentDefault: '預設',
     fromFile: '來自檔案',

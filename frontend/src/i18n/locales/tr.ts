@@ -4268,6 +4268,9 @@ export default {
 
   // Dilimle (SliceModal ile slicer-API entegrasyonu)
   slicerSettings: {
+    presetValuesOutdatedSidecar: 'Dilimleyici varsayılanları gösteriliyor: dilimleyici sidecar bu özellikten eski olduğu için bir ön ayarın değerlerini bildiremiyor. Görmek için sidecar imajını güncelleyin. Değiştirmediğiniz her şey yine ön ayarı kullanır.',
+    presetValuesNotConfigured: 'Dilimleyici varsayılanları gösteriliyor: yapılandırılmış bir sidecar olmadığı için ön ayarın değerleri okunamıyor. Değiştirmediğiniz her şey yine ön ayarı kullanır.',
+    presetValuesSidecarUnavailable: 'Dilimleyici varsayılanları gösteriliyor: sidecar yanıt vermediği için ön ayarın değerleri okunamıyor. Değiştirmediğiniz her şey yine ön ayarı kullanır.',
     presetValuesUnavailable: 'Dilimleyici varsayılanları gösteriliyor: seçilen ön ayarın kendi değerleri okunamadı. Değiştirmediğiniz her şey yine ön ayarı kullanır.',
     filamentDefault: 'Varsayılan',
     fromFile: 'dosyadan',

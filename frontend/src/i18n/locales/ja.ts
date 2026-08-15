@@ -4279,6 +4279,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: 'スライサーの既定値を表示しています。スライサーサイドカーがこの機能より古く、プリセットの値を取得できません。値を表示するにはサイドカーのイメージを更新してください。変更しない項目は引き続きプリセットの値が使われます。',
+    presetValuesNotConfigured: 'スライサーの既定値を表示しています。スライサーサイドカーが設定されていないため、プリセットの値を読み取れません。変更しない項目は引き続きプリセットの値が使われます。',
+    presetValuesSidecarUnavailable: 'スライサーの既定値を表示しています。スライサーサイドカーが応答しなかったため、プリセットの値を読み取れません。変更しない項目は引き続きプリセットの値が使われます。',
     presetValuesUnavailable: 'スライサーの既定値を表示しています。選択したプリセットの値を読み取れませんでした。変更しない項目は引き続きプリセットの値が使われます。',
     filamentDefault: '既定',
     fromFile: 'ファイル由来',

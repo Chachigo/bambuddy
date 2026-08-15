@@ -4279,6 +4279,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: 'Es werden Slicer-Standardwerte angezeigt: Ihr Slicer-Sidecar ist älter als diese Funktion und kann die Werte eines Profils nicht liefern. Aktualisieren Sie das Sidecar-Image, um sie zu sehen. Alles, was Sie nicht ändern, verwendet weiterhin das Profil.',
+    presetValuesNotConfigured: 'Es werden Slicer-Standardwerte angezeigt: Es ist kein Slicer-Sidecar konfiguriert, daher können die Werte eines Profils nicht gelesen werden. Alles, was Sie nicht ändern, verwendet weiterhin das Profil.',
+    presetValuesSidecarUnavailable: 'Es werden Slicer-Standardwerte angezeigt: Das Slicer-Sidecar hat nicht geantwortet, daher können die Werte eines Profils nicht gelesen werden. Alles, was Sie nicht ändern, verwendet weiterhin das Profil.',
     presetValuesUnavailable: 'Es werden Slicer-Standardwerte angezeigt: Die Werte des gewählten Profils konnten nicht gelesen werden. Alles, was Sie nicht ändern, verwendet weiterhin das Profil.',
     filamentDefault: 'Standard',
     fromFile: 'aus Datei',

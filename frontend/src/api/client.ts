@@ -1614,11 +1614,28 @@ export interface PresetRef {
   source: PresetSource;
   id: string;
 }
+/**
+ * Why a preset's effective values are unavailable.
+ *
+ * `sidecar_outdated` is the one that matters in practice: an install pulls its
+ * sidecar as `SIDECAR_TAG:-latest` regardless of which Bambuddy channel it is
+ * on, so a user can perfectly well be running a current Bambuddy against a
+ * sidecar that predates this endpoint. That has a one-line fix, and saying so
+ * beats a generic "could not read the values".
+ */
+export type SlicerPresetValuesReason =
+  | 'ok'
+  | 'sidecar_outdated'
+  | 'sidecar_unavailable'
+  | 'not_configured'
+  | 'preset_unresolved';
+
 export interface SlicerPresetValues {
   /** False when the sidecar could not supply values; `values` is then empty. */
   resolved: boolean;
   /** Flattened key -> value map, in the string forms a process preset stores. */
   values: Record<string, string | string[]>;
+  reason: SlicerPresetValuesReason;
 }
 
 export interface SliceRequest {

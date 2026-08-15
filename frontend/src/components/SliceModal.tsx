@@ -440,6 +440,10 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
   // rather than blocking the panel on it.
   const presetValues = presetValuesQuery.data?.values as Record<string, SettingValue> | undefined;
   const presetValuesResolved = presetValuesQuery.data?.resolved ?? presetValuesQuery.isLoading;
+  // A failed request (rather than a 'resolved: false' answer) means we
+  // never reached the backend, which is the same situation as an
+  // unreachable sidecar as far as the user is concerned.
+  const presetValuesReason = presetValuesQuery.data?.reason ?? (presetValuesQuery.isError ? 'sidecar_unavailable' : undefined);
 
   // Slot list for the settings panel's filament pickers (support base and
   // interface, and the Multimaterial page's per-region options). Those store a
@@ -1051,6 +1055,7 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
                           filamentChoices={filamentChoices}
                           presetValues={presetValues}
                           presetValuesResolved={presetValuesResolved}
+                          presetValuesReason={presetValuesReason}
                           sourceOverrides={designOverrides}
                           sourceSelected={designKeys}
                           onToggleSource={(key, on) =>

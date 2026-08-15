@@ -26,6 +26,7 @@ import { disabledKeys, type ToggleRules } from '../lib/slicerToggle';
 import { baselineForDisplay, displaySidetext, isModified, numericBound, serializeOverrides } from '../lib/slicerSettings';
 import type { OptionMode, ProcessOption, ProcessSchema, ProcessUiTree, SettingValue } from '../types/slicerSettings';
 import type { DesignOverride } from '../types/plates';
+import type { SlicerPresetValuesReason } from '../api/client';
 
 interface SlicerData {
   schema: ProcessSchema;
@@ -81,6 +82,11 @@ interface Props {
   presetValues?: Record<string, SettingValue>;
   /** False when the preset's values could not be fetched. */
   presetValuesResolved?: boolean;
+  /**
+   * Why they could not be fetched, so the notice can name a fix. Left
+   * unset while the fetch is still in flight.
+   */
+  presetValuesReason?: SlicerPresetValuesReason;
 }
 
 export interface FilamentChoice {
@@ -123,6 +129,7 @@ export default function SlicerSettingsPanel({
   filamentChoices,
   presetValues,
   presetValuesResolved = true,
+  presetValuesReason,
 }: Props) {
   const { t } = useTranslation();
   const [data, setData] = useState<SlicerData | null>(null);
@@ -288,10 +295,25 @@ export default function SlicerSettingsPanel({
 
       {!presetValuesResolved && (
         <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[0.7rem] text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-200">
-          {t(
-            'slicerSettings.presetValuesUnavailable',
-            "Showing slicer defaults: the picked preset's own values could not be read. Anything you don't change still uses the preset.",
-          )}
+          {presetValuesReason === 'sidecar_outdated'
+            ? t(
+                'slicerSettings.presetValuesOutdatedSidecar',
+                "Showing slicer defaults: your slicer sidecar is older than this feature and can't report a preset's values. Update the sidecar image to see them. Anything you don't change still uses the preset.",
+              )
+            : presetValuesReason === 'not_configured'
+              ? t(
+                  'slicerSettings.presetValuesNotConfigured',
+                  "Showing slicer defaults: no slicer sidecar is configured, so a preset's values can't be read. Anything you don't change still uses the preset.",
+                )
+              : presetValuesReason === 'sidecar_unavailable'
+                ? t(
+                    'slicerSettings.presetValuesSidecarUnavailable',
+                    "Showing slicer defaults: the slicer sidecar did not answer, so a preset's values can't be read. Anything you don't change still uses the preset.",
+                  )
+                : t(
+                    'slicerSettings.presetValuesUnavailable',
+                    "Showing slicer defaults: the picked preset's own values could not be read. Anything you don't change still uses the preset.",
+                  )}
         </p>
       )}
 

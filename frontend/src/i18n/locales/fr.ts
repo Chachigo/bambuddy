@@ -4268,6 +4268,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: "Valeurs par défaut du trancheur affichées : votre sidecar est plus ancien que cette fonctionnalité et ne peut pas fournir les valeurs d'un profil. Mettez à jour l'image du sidecar pour les voir. Tout ce que vous ne modifiez pas utilise toujours le profil.",
+    presetValuesNotConfigured: "Valeurs par défaut du trancheur affichées : aucun sidecar n'est configuré, les valeurs d'un profil ne peuvent donc pas être lues. Tout ce que vous ne modifiez pas utilise toujours le profil.",
+    presetValuesSidecarUnavailable: "Valeurs par défaut du trancheur affichées : le sidecar n'a pas répondu, les valeurs d'un profil ne peuvent donc pas être lues. Tout ce que vous ne modifiez pas utilise toujours le profil.",
     presetValuesUnavailable: "Valeurs par défaut du trancheur affichées : celles du profil choisi n'ont pas pu être lues. Tout ce que vous ne modifiez pas utilise toujours le profil.",
     filamentDefault: 'Par défaut',
     fromFile: 'du fichier',

@@ -4313,6 +4313,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: "Showing slicer defaults: your slicer sidecar is older than this feature and can't report a preset's values. Update the sidecar image to see them. Anything you don't change still uses the preset.",
+    presetValuesNotConfigured: "Showing slicer defaults: no slicer sidecar is configured, so a preset's values can't be read. Anything you don't change still uses the preset.",
+    presetValuesSidecarUnavailable: "Showing slicer defaults: the slicer sidecar did not answer, so a preset's values can't be read. Anything you don't change still uses the preset.",
     presetValuesUnavailable: "Showing slicer defaults: the picked preset's own values could not be read. Anything you don't change still uses the preset.",
     filamentDefault: 'Default',
     fromFile: 'from file',

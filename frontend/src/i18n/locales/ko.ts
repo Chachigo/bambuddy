@@ -4070,6 +4070,9 @@ export default {
     },
   },
   slicerSettings: {
+    presetValuesOutdatedSidecar: '슬라이서 기본값을 표시합니다. 슬라이서 사이드카가 이 기능보다 오래되어 프리셋 값을 가져올 수 없습니다. 값을 보려면 사이드카 이미지를 업데이트하세요. 변경하지 않은 항목은 계속 프리셋 값을 사용합니다.',
+    presetValuesNotConfigured: '슬라이서 기본값을 표시합니다. 슬라이서 사이드카가 설정되지 않아 프리셋 값을 읽을 수 없습니다. 변경하지 않은 항목은 계속 프리셋 값을 사용합니다.',
+    presetValuesSidecarUnavailable: '슬라이서 기본값을 표시합니다. 슬라이서 사이드카가 응답하지 않아 프리셋 값을 읽을 수 없습니다. 변경하지 않은 항목은 계속 프리셋 값을 사용합니다.',
     presetValuesUnavailable: '슬라이서 기본값을 표시합니다. 선택한 프리셋의 값을 읽을 수 없었습니다. 변경하지 않은 항목은 계속 프리셋 값을 사용합니다.',
     filamentDefault: '기본값',
     fromFile: '파일에서',

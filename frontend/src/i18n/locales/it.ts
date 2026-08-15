@@ -4267,6 +4267,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: "Sono mostrati i valori predefiniti dello slicer: il tuo sidecar è più vecchio di questa funzione e non può fornire i valori di un profilo. Aggiorna l'immagine del sidecar per vederli. Tutto ciò che non modifichi continua a usare il profilo.",
+    presetValuesNotConfigured: 'Sono mostrati i valori predefiniti dello slicer: nessun sidecar è configurato, quindi i valori di un profilo non sono leggibili. Tutto ciò che non modifichi continua a usare il profilo.',
+    presetValuesSidecarUnavailable: 'Sono mostrati i valori predefiniti dello slicer: il sidecar non ha risposto, quindi i valori di un profilo non sono leggibili. Tutto ciò che non modifichi continua a usare il profilo.',
     presetValuesUnavailable: 'Sono mostrati i valori predefiniti dello slicer: quelli del profilo scelto non sono leggibili. Tutto ciò che non modifichi continua a usare il profilo.',
     filamentDefault: 'Predefinito',
     fromFile: 'dal file',

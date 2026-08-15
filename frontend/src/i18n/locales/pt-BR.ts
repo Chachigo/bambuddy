@@ -4267,6 +4267,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: 'Exibindo os padrões do fatiador: seu sidecar é mais antigo que este recurso e não consegue informar os valores de um perfil. Atualize a imagem do sidecar para vê-los. Tudo o que você não alterar continua usando o perfil.',
+    presetValuesNotConfigured: 'Exibindo os padrões do fatiador: nenhum sidecar está configurado, portanto os valores de um perfil não podem ser lidos. Tudo o que você não alterar continua usando o perfil.',
+    presetValuesSidecarUnavailable: 'Exibindo os padrões do fatiador: o sidecar não respondeu, portanto os valores de um perfil não podem ser lidos. Tudo o que você não alterar continua usando o perfil.',
     presetValuesUnavailable: 'Exibindo os padrões do fatiador: não foi possível ler os valores do perfil escolhido. Tudo o que você não alterar continua usando o perfil.',
     filamentDefault: 'Padrão',
     fromFile: 'do arquivo',

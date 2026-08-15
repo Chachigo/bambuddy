@@ -7,6 +7,7 @@ import { render } from '../utils';
 import SlicerSettingsPanel, { type FilamentChoice } from '../../components/SlicerSettingsPanel';
 import type { SettingValue } from '../../types/slicerSettings';
 import type { DesignOverride } from '../../types/plates';
+import type { SlicerPresetValuesReason } from '../../api/client';
 
 /**
  * The panel is a controlled component: it renders from the `values` prop and
@@ -22,6 +23,7 @@ function Harness({
   filamentChoices,
   presetValues,
   presetValuesResolved,
+  presetValuesReason,
 }: {
   initial: Record<string, SettingValue>;
   onChange: (v: Record<string, SettingValue>, s: Record<string, string | string[]>) => void;
@@ -30,6 +32,7 @@ function Harness({
   filamentChoices?: FilamentChoice[];
   presetValues?: Record<string, SettingValue>;
   presetValuesResolved?: boolean;
+  presetValuesReason?: SlicerPresetValuesReason;
 }) {
   const [values, setValues] = useState(initial);
   const [selected, setSelected] = useState(new Set(initialSelected ?? []));
@@ -43,6 +46,7 @@ function Harness({
       filamentChoices={filamentChoices}
       presetValues={presetValues}
       presetValuesResolved={presetValuesResolved}
+      presetValuesReason={presetValuesReason}
       sourceOverrides={sourceOverrides}
       sourceSelected={selected}
       onToggleSource={(key, on) =>
@@ -66,6 +70,7 @@ async function renderPanel(
     filamentChoices?: FilamentChoice[];
     presetValues?: Record<string, SettingValue>;
     presetValuesResolved?: boolean;
+    presetValuesReason?: SlicerPresetValuesReason;
   } = {},
 ) {
   const onChange = vi.fn();
@@ -445,6 +450,26 @@ describe('SlicerSettingsPanel — the picked preset\'s values', () => {
   it('says so when the preset values could not be read', async () => {
     await renderPanel({}, { presetValuesResolved: false });
     await waitFor(() => expect(screen.getByText(/Showing slicer defaults/)).toBeInTheDocument());
+  });
+
+  it('names the fix when the sidecar predates the endpoint', async () => {
+    // The dominant case: an install pulls SIDECAR_TAG:-latest regardless of
+    // its own release channel, so a current Bambuddy against an old sidecar is
+    // normal. A generic "could not be read" sends that user hunting.
+    await renderPanel({}, { presetValuesResolved: false, presetValuesReason: 'sidecar_outdated' });
+    await waitFor(() => expect(screen.getByText(/Update the sidecar image/)).toBeInTheDocument());
+  });
+
+  it('distinguishes a sidecar that is missing from one that is merely old', async () => {
+    await renderPanel({}, { presetValuesResolved: false, presetValuesReason: 'not_configured' });
+    await waitFor(() => expect(screen.getByText(/no slicer sidecar is configured/)).toBeInTheDocument());
+    expect(screen.queryByText(/Update the sidecar image/)).not.toBeInTheDocument();
+  });
+
+  it('distinguishes a sidecar that did not answer', async () => {
+    await renderPanel({}, { presetValuesResolved: false, presetValuesReason: 'sidecar_unavailable' });
+    await waitFor(() => expect(screen.getByText(/did not answer/)).toBeInTheDocument());
+    expect(screen.queryByText(/Update the sidecar image/)).not.toBeInTheDocument();
   });
 
   it('shows no such notice when they resolved', async () => {

@@ -563,16 +563,21 @@ async def get_preset_values(
     OrcaSlicer's published tree instead, which can disagree with what actually
     slices; showing numbers from it would be confidently wrong.
 
-    Returns ``{"resolved": false, "values": {}}`` rather than an error whenever
-    the values can't be obtained (sidecar offline, too old for the endpoint, or
-    slicing not configured). The panel then falls back to schema defaults and
-    tells the user the values are indicative, which is a far better outcome
-    than a modal that won't open.
+    Returns ``{"resolved": false, "values": {}, "reason": "..."}`` rather than
+    an error whenever the values can't be obtained. ``reason`` is what makes
+    the fallback actionable: a Bambuddy install pulls its sidecar as
+    ``SIDECAR_TAG:-latest`` regardless of its own release channel, so the
+    overwhelmingly common cause is a sidecar older than the endpoint — which
+    the user fixes by pulling a newer image, if we tell them that instead of
+    "could not read the values".
     """
     if slot != "process":
         raise HTTPException(status_code=400, detail="Only the 'process' slot is supported")
 
     ref = PresetRef(source=source, id=id)
+
+    def unresolved(reason: str) -> dict:
+        return {"resolved": False, "values": {}, "reason": reason}
 
     try:
         profile_json = await resolve_preset_ref(db, current_user, ref, slot)
@@ -580,23 +585,23 @@ async def get_preset_values(
         # A preset the caller can't resolve is not a reason to break the panel;
         # the slice itself will report it properly if they go ahead.
         logger.info("Could not resolve %s preset %s for value lookup", slot, id)
-        return {"resolved": False, "values": {}}
+        return unresolved("preset_unresolved")
 
     api_url = await _resolve_slicer_api_url(db)
     if not api_url:
-        return {"resolved": False, "values": {}}
+        return unresolved("not_configured")
 
     service = SlicerApiService(api_url)
     try:
-        values = await service.resolve_profile(profile_json, "process")
+        resolved = await service.resolve_profile(profile_json, "process")
     except SlicerApiUnavailableError:
-        return {"resolved": False, "values": {}}
+        return unresolved("sidecar_unavailable")
     finally:
         await service.close()
 
-    if values is None:
-        return {"resolved": False, "values": {}}
-    return {"resolved": True, "values": values}
+    if resolved.values is None:
+        return unresolved(resolved.reason)
+    return {"resolved": True, "values": resolved.values, "reason": "ok"}
 
 
 @router.get("/presets", response_model=UnifiedPresetsResponse)

@@ -4281,6 +4281,9 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesOutdatedSidecar: 'Se muestran los valores predeterminados del laminador: tu sidecar es más antiguo que esta función y no puede informar los valores de un perfil. Actualiza la imagen del sidecar para verlos. Todo lo que no cambies seguirá usando el perfil.',
+    presetValuesNotConfigured: 'Se muestran los valores predeterminados del laminador: no hay ningún sidecar configurado, así que no se pueden leer los valores de un perfil. Todo lo que no cambies seguirá usando el perfil.',
+    presetValuesSidecarUnavailable: 'Se muestran los valores predeterminados del laminador: el sidecar no respondió, así que no se pueden leer los valores de un perfil. Todo lo que no cambies seguirá usando el perfil.',
     presetValuesUnavailable: 'Se muestran los valores predeterminados del laminador: no se pudieron leer los del perfil seleccionado. Todo lo que no cambies seguirá usando el perfil.',
     filamentDefault: 'Predeterminado',
     fromFile: 'del archivo',
