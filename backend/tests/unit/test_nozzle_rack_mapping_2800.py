@@ -38,10 +38,18 @@ class TestIsNozzleRackModel:
 class TestResolveRackNozzleMapping:
     def test_rack_slot_takes_the_live_rack_position(self):
         mapping = resolve_rack_nozzle_mapping([1], rack_nozzle_id=17)
-        assert mapping is not None
-        assert len(mapping) == _RACK_WIRE_SLOTS
-        assert mapping[0] == 17
-        assert set(mapping[1:]) == {-1}
+        assert mapping == [17]
+
+    def test_the_wire_is_as_long_as_the_plate_has_slots(self):
+        """One entry per filament slot, not a fixed-length padded array.
+
+        BambuStudio's own dispatch of a three-filament H2C plate is
+        [1, 16, 16] -- three entries, captured from the maintainer's machine.
+        The earlier fixed 32-length padding was a generalisation from nothing.
+        """
+        assert resolve_rack_nozzle_mapping([1], rack_nozzle_id=17) == [17]
+        assert resolve_rack_nozzle_mapping([0, 1, 0], rack_nozzle_id=16) == [1, 16, 1]
+        assert len(resolve_rack_nozzle_mapping([1, 0, 0, -1], rack_nozzle_id=16)) == 4
 
     def test_the_fixed_hotend_takes_its_own_physical_id(self):
         """Both carriages are translated; neither extruder index reaches the wire.
@@ -118,8 +126,7 @@ class TestResolveRackNozzleMapping:
         [1, 17, ...] and [17, 1, ...] depending on filament slot order.
         """
         wire = resolve_rack_nozzle_mapping([0, -1, -1, 1], rack_nozzle_id=17)
-        assert wire[:4] == [1, -1, -1, 17]
-        assert set(wire[4:]) == {-1}
+        assert wire == [1, -1, -1, 17]
 
         swapped = resolve_rack_nozzle_mapping([1, 0], rack_nozzle_id=17)
         assert swapped[:2] == [17, 1]
@@ -299,3 +306,145 @@ class TestSlotExtrudersFromFile:
         """
         source = _write_dual_nozzle_3mf(tmp_path / f"s{abs(slot_id)}.3mf", {slot_id: 1})
         assert extract_slot_extruders_from_3mf(source) is None
+
+
+def _write_h2c_3mf(path, plates):
+    """3MF in the shape BambuStudio writes for a nozzle-rack machine.
+
+    ``plates`` is a list of ``(index, {slot: group}, {group: 1-based extruder})``.
+    The per-plate ``<nozzle>`` elements are the group-to-extruder table; the
+    fixture above deliberately omits them, because H2D files carry group ids
+    that already are extruder indices and both shapes have to keep working.
+    """
+    body = ""
+    for index, filaments, nozzles in plates:
+        elems = "".join(f'<filament id="{slot}" group_id="{group}"/>' for slot, group in filaments.items())
+        elems += "".join(f'<nozzle id="{group}" extruder_id="{ext}"/>' for group, ext in nozzles.items())
+        body += f'<plate><metadata key="index" value="{index}"/>{elems}</plate>'
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "Metadata/project_settings.config",
+            json.dumps(
+                {
+                    "physical_extruder_map": [1, 0],
+                    # One nozzle on the fixed carriage, four racked, as the
+                    # reporter's H2C reports itself.
+                    "extruder_nozzle_stats": ["High Flow#1", "High Flow#4"],
+                }
+            ),
+        )
+        zf.writestr("Metadata/slice_info.config", f"<config>{body}</config>")
+    return path
+
+
+class TestGroupsBeyondTheExtruderCount:
+    """A rack carriage hosts six hotends, so groups outnumber extruders.
+
+    The H2C's `extruder_max_nozzle_count` is ['1', '6'], and the slicer emits
+    one filament group per nozzle it wants rather than one per carriage. Group
+    ids therefore run past the end of `physical_extruder_map`, which has an
+    entry per *extruder*. Treating the group id as an index into it silently
+    dropped those filaments, and a dropped filament densifies to -1 -- the same
+    value that means "this plate does not print the slot".
+    """
+
+    def test_the_dropped_filament_from_the_hms_0500_4047_report(self, tmp_path):
+        """The maintainer's own plate, first print on a new H2C.
+
+        Three filaments in groups 2, 0 and 1 against a two-entry
+        physical_extruder_map. Slot 1 fell out of the mapping and dispatched as
+        [-1, 16, 1, ...] while ams_mapping named tray 6 for that same slot; the
+        printer stopped with "the available hotend quantity or model does not
+        match the sliced file". The file's own nozzle table says group 2 prints
+        on extruder 2, the rack side, same as group 1.
+        """
+        source = _write_h2c_3mf(
+            tmp_path / "benchy.3mf",
+            [(1, {1: 2, 2: 0, 3: 1}, {0: 1, 1: 2, 2: 2})],
+        )
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) == [0, 1, 0]
+        wire = resolve_rack_nozzle_mapping([0, 1, 0], rack_nozzle_id=16)
+        assert wire == [1, 16, 1]
+
+    def test_a_group_the_file_never_places_omits_the_whole_mapping(self, tmp_path):
+        """Refusing beats answering for the slots that did resolve.
+
+        A partial mapping is not a smaller answer, it is a wrong one: the gap
+        reaches the printer as -1, contradicting the ams_mapping entry for the
+        same slot. Omitting costs only the firmware's own nozzle pick.
+        """
+        source = _write_h2c_3mf(
+            tmp_path / "orphan.3mf",
+            [(1, {1: 5, 2: 0}, {0: 1, 1: 2})],
+        )
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) is None
+
+    def test_a_slot_the_plate_genuinely_skips_still_reads_minus_one(self, tmp_path):
+        """-1 keeps its meaning where it is earned rather than inferred."""
+        source = _write_h2c_3mf(
+            tmp_path / "gap.3mf",
+            [(1, {1: 0, 3: 1}, {0: 1, 1: 2})],
+        )
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) == [1, -1, 0]
+
+    def test_filaments_grouped_and_ungrouped_in_one_plate_omit_the_mapping(self, tmp_path):
+        """Half an answer has the same failure mode as a dropped group."""
+        path = tmp_path / "mixed.3mf"
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr(
+                "Metadata/project_settings.config",
+                json.dumps(
+                    {
+                        "physical_extruder_map": [1, 0],
+                        "extruder_nozzle_stats": ["High Flow#1", "High Flow#4"],
+                    }
+                ),
+            )
+            zf.writestr(
+                "Metadata/slice_info.config",
+                '<config><plate><metadata key="index" value="1"/>'
+                '<filament id="1" group_id="0"/><filament id="2"/>'
+                '<nozzle id="0" extruder_id="1"/></plate></config>',
+            )
+        assert extract_slot_extruders_from_3mf(path, plate_id=1) is None
+
+    def test_files_without_a_nozzle_table_keep_the_group_as_the_index(self, tmp_path):
+        """Every H2D slice in the wild carries groups 0 and 1 and no table."""
+        source = _write_dual_nozzle_3mf(tmp_path / "h2d.3mf", {1: 0, 2: 1})
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) == [1, 0]
+
+
+class TestPlateScoping:
+    """A 3MF holds every plate in the project, not just the one being printed."""
+
+    def test_each_plate_answers_for_itself(self, tmp_path):
+        source = _write_h2c_3mf(
+            tmp_path / "two.3mf",
+            [
+                (1, {1: 0, 2: 1}, {0: 1, 1: 2}),
+                (2, {1: 1, 2: 0}, {0: 1, 1: 2}),
+            ],
+        )
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) == [1, 0]
+        assert extract_slot_extruders_from_3mf(source, plate_id=2) == [0, 1]
+
+    def test_an_unknown_plate_falls_back_to_the_whole_file(self, tmp_path):
+        """Not every file indexes its plates; this must not become a hard stop."""
+        source = _write_h2c_3mf(tmp_path / "one.3mf", [(1, {1: 0, 2: 1}, {0: 1, 1: 2})])
+        assert extract_slot_extruders_from_3mf(source, plate_id=7) == [1, 0]
+
+    def test_plates_that_disagree_about_a_group_fall_back_to_the_index(self, tmp_path):
+        """Reading every plate at once can only be done on the old terms.
+
+        With no plate asked for, two plates naming different extruders for one
+        group leave no table worth trusting, so the group id is read as the
+        extruder index exactly as it was before the table existed.
+        """
+        source = _write_h2c_3mf(
+            tmp_path / "conflict.3mf",
+            [
+                (1, {1: 0}, {0: 1}),
+                (2, {2: 0}, {0: 2}),
+            ],
+        )
+        assert extract_slot_extruders_from_3mf(source, plate_id=None) == [1, 1]

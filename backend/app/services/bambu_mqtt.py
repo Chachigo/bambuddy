@@ -286,8 +286,11 @@ def apply_tray_exist_bits(
 # doing exactly that is what #2800 was.
 _RACK_NOZZLE_IDS = frozenset(range(16, 22))
 
-# BambuStudio dispatches a fixed-length nozzle_mapping on rack models: one
-# physical nozzle ID per filament slot, -1 for slots the plate does not print.
+# Ceiling on the nozzle_mapping we will build, not the length we send. The wire
+# carries one physical nozzle ID per filament slot the plate declares, and -1
+# for a slot it does not print: BambuStudio's own dispatch of a three-filament
+# H2C plate is [1, 16, 16], and the hardware A/B in #2800 ran four-slot plates
+# as four entries. Padding to a fixed 32 was an over-generalisation of that.
 _RACK_WIRE_SLOTS = 32
 
 # The two carriages, as extruder indices in the form the queue stores (already
@@ -317,7 +320,8 @@ def resolve_rack_nozzle_mapping(
     plate does not print. ``rack_nozzle_id`` is the rack position the printer
     reports as live.
 
-    Returns a ``_RACK_WIRE_SLOTS``-long list of physical nozzle IDs, or None
+    Returns one physical nozzle ID per slot given, matching BambuStudio's own
+    dispatch length, or None
     when the mapping cannot be resolved with confidence -- in which case the
     caller omits the field entirely and the firmware falls back to its own
     nozzle pick, exactly as it did before this translation existed. Omitting
@@ -367,7 +371,7 @@ def resolve_rack_nozzle_mapping(
     if _RACK_EXTRUDER_ID not in normalised:
         return None
 
-    wire = [-1] * _RACK_WIRE_SLOTS
+    wire = [-1] * len(normalised)
     for index, extruder in enumerate(normalised):
         if extruder < 0:
             continue

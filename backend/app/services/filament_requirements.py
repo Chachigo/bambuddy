@@ -91,7 +91,11 @@ def extract_filament_requirements(file_path: Path, plate_id: int | None = None) 
             # Dual-nozzle printers (H2D / X2D) — annotate which extruder each
             # slot is fed into. Empty mapping for single-nozzle printers, in
             # which case we just don't add the key.
-            nozzle_mapping = extract_nozzle_mapping_from_3mf(zf)
+            # Same plate the filaments above were collected from: a multi-plate
+            # file can assign one slot to different extruders per plate, and
+            # annotating slot 2 with plate 3's nozzle is worse than not
+            # annotating it.
+            nozzle_mapping = extract_nozzle_mapping_from_3mf(zf, plate_id=plate_id)
             if nozzle_mapping:
                 for filament in filaments:
                     filament["nozzle_id"] = nozzle_mapping.get(filament["slot_id"])

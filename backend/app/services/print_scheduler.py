@@ -5761,7 +5761,7 @@ class PrintScheduler:
         # thrown away on every dispatch.
         nozzle_slot_extruders = None
         if not item.nozzle_mapping and file_path is not None and is_nozzle_rack_model(printer.model):
-            slot_extruders = extract_slot_extruders_from_3mf(file_path)
+            slot_extruders = extract_slot_extruders_from_3mf(file_path, plate_id=item.plate_id or 1)
             if slot_extruders:
                 nozzle_slot_extruders = json.dumps(slot_extruders)
 
