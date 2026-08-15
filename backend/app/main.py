@@ -8,7 +8,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
 from fastapi import FastAPI
@@ -5033,6 +5033,65 @@ async def on_finish_photo_moment(printer_id: int, data: dict):
         producer_done.set()
 
 
+def _subtask_name_from_filename(filename: str) -> str:
+    """Recover the subtask name a print command would have carried for *filename*.
+
+    The dispatcher derives the printer-facing subtask name from the archive's
+    file name, so stripping the extensions back off gives the value MQTT echoes
+    on completion. Only the two extensions Bambuddy actually stores are removed,
+    and in the order they nest (``.gcode.3mf``), so a model whose own name
+    contains a dot -- ``My.Model.3mf`` -- keeps it.
+    """
+    name = PurePosixPath(filename).name
+    for suffix in (".3mf", ".gcode"):
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
+
+
+async def _completion_belongs_to_queue_item(db, item, data: dict) -> bool:
+    """Whether this completion event is plausibly about *item*'s print.
+
+    The caller finds its queue row by printer and ``status='printing'`` alone,
+    which is all a completion event gives it -- there is no run identifier in
+    the MQTT payload to match on. That makes the lookup indiscriminate: any
+    completion delivered for this printer closes whichever row happens to be
+    printing, however unrelated. Comparing the subtask name against the archive
+    the row was dispatched with costs one primary-key load and rules that out.
+
+    Deliberately permissive: it answers False only on a positive disagreement
+    between two names we actually have. A row with no archive, an archive with
+    no file name, or an event with no subtask name is unverifiable rather than
+    wrong, and refusing those would strand the item in ``printing`` and wedge
+    the printer's queue -- a worse failure than the one being prevented.
+    """
+    observed = (data.get("subtask_name") or "").strip()
+    if not observed or item.archive_id is None:
+        return True
+
+    from backend.app.models.archive import PrintArchive
+
+    archive = await db.get(PrintArchive, item.archive_id)
+    if archive is None or not archive.filename:
+        return True
+
+    expected = _subtask_name_from_filename(archive.filename)
+    if not expected or expected.casefold() == observed.casefold():
+        return True
+
+    logging.getLogger(__name__).warning(
+        "Ignoring print completion for queue item %s: it was dispatched as %r "
+        "(archive %s, %s) but the completion reports subtask %r. Leaving the item "
+        "printing rather than closing a run this event is not about.",
+        item.id,
+        expected,
+        archive.id,
+        archive.filename,
+        observed,
+    )
+    return False
+
+
 async def on_print_complete(printer_id: int, data: dict):
     """Handle print completion - update the archive status."""
     import time
@@ -5347,6 +5406,8 @@ async def on_print_complete(printer_id: int, data: dict):
                     [(i.id, i.archive_id, i.library_file_id) for i in printing_items],
                 )
             item = printing_items[0] if printing_items else None
+            if item is not None and not await _completion_belongs_to_queue_item(db, item, data):
+                return
             if item:
                 queue_status = data.get("status", "completed")
                 # MQTT sends "aborted" for cancelled prints; normalise to
