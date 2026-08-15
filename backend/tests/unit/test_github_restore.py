@@ -7,6 +7,7 @@ K-profile paths that depend on live printers.
 """
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -656,6 +657,18 @@ class TestRestoreArchives:
 
 
 class TestRestoreKprofiles:
+    @staticmethod
+    def _live(slot_id, filament_id="GFA00", name="Bambu PLA", setting_id="PFUS123"):
+        """One profile as the printer currently reports it."""
+        return SimpleNamespace(slot_id=slot_id, filament_id=filament_id, name=name, setting_id=setting_id)
+
+    def _client(self, live=None, sent=True):
+        client = MagicMock()
+        client.state.connected = True
+        client.set_kprofiles_batch = MagicMock(return_value=sent)
+        client.get_kprofiles = AsyncMock(return_value=list(live or []))
+        return client
+
     def _payload(self, serial="00M09A123456789", nozzle="0.4"):
         return {
             f"kprofiles/{serial}/{nozzle}.json": {
@@ -697,19 +710,142 @@ class TestRestoreKprofiles:
         assert manager.get_client.call_args.args == (printer.id,)
 
     @pytest.mark.asyncio
-    async def test_always_warns_that_mqtt_is_unacknowledged(self, db_session, printer_factory):
+    async def test_always_warns_to_verify_on_the_printer(self, db_session, printer_factory):
         await printer_factory(serial_number="00M09A123456789")
-        client = MagicMock()
-        client.state.connected = True
-        client.set_kprofiles_batch = MagicMock(return_value=True)
+        client = self._client()
         tally = _CategoryTally()
 
         with patch("backend.app.services.github_restore.printer_manager") as manager:
             manager.get_client = MagicMock(return_value=client)
             await _service()._restore_kprofiles(db_session, self._payload(), tally)
 
-        assert any("without acknowledgement" in note for note in tally.notes)
+        # The printer does answer extrusion_cali_set, but it reports "fail" on
+        # writes that land, so the note must not promise either way.
+        assert any("verify the profiles on the printer" in note for note in tally.notes)
+        assert not any("without acknowledgement" in note for note in tally.notes)
         assert any("always overwrite" in note for note in tally.notes)
+
+    # --- cali_idx is resolved live, never taken from the backup -------------
+    #
+    # Regression cover for the silent no-op found testing on an X1E: the backup
+    # stored cali_idx 8151, a Bambuddy edit re-keyed the profile to 4606, and
+    # the restore aimed extrusion_cali_set at 8151. The printer dropped it and
+    # the tally still said "1 restored".
+
+    @pytest.mark.asyncio
+    async def test_uses_the_live_cali_idx_not_the_backed_up_slot(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        payload["kprofiles/00M09A123456789/0.4.json"]["profiles"][0]["slot_id"] = 8151
+        client = self._client(live=[self._live(slot_id=4606)])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        client.get_kprofiles.assert_awaited_once_with(nozzle_diameter="0.4")
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == 4606, "must address the slot that exists now"
+        assert profiles[0]["cali_idx"] != 8151, "must not reuse the backup's cali_idx"
+        assert tally.restored == 1
+
+    @pytest.mark.asyncio
+    async def test_matches_on_name_when_setting_id_was_regenerated(self, db_session, printer_factory):
+        # A delete-then-add edit mints a fresh setting_id, so the name carries
+        # the match instead.
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(live=[self._live(slot_id=4606, setting_id="PF9999999999")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == 4606
+        # The live setting_id wins: it is what the printer associates with the slot.
+        assert profiles[0]["setting_id"] == "PF9999999999"
+
+    @pytest.mark.asyncio
+    async def test_unmatched_profile_is_added_rather_than_aimed_at_a_dead_slot(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(live=[])  # printer has nothing for this nozzle
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == -1, "-1 tells the printer to add a new profile"
+        assert profiles[0]["setting_id"] == "PFUS123", "falls back to the backed-up preset"
+        assert any("added as new profiles" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_different_filament_is_not_treated_as_a_match(self, db_session, printer_factory):
+        # Same slot, different filament — matching on slot alone would clobber
+        # an unrelated profile.
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(live=[self._live(slot_id=4606, filament_id="GFB99", name="Bambu PLA")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == -1
+
+    @pytest.mark.asyncio
+    async def test_unreadable_live_index_degrades_to_adding(self, db_session, printer_factory):
+        # A failed read must not abort the restore.
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client()
+        client.get_kprofiles = AsyncMock(side_effect=RuntimeError("mqtt timeout"))
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == -1
+        assert tally.restored == 1
+
+    @pytest.mark.asyncio
+    async def test_sole_profile_for_a_filament_matches_without_setting_id_or_name(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entry = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"][0]
+        entry["setting_id"] = None
+        entry["name"] = ""
+        client = self._client(live=[self._live(slot_id=4606, setting_id="PFOTHER", name="Renamed")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == 4606
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_filament_without_discriminator_is_added_not_guessed(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entry = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"][0]
+        entry["setting_id"] = None
+        entry["name"] = ""
+        client = self._client(live=[self._live(slot_id=1, setting_id="A"), self._live(slot_id=2, setting_id="B")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == -1, "two candidates and nothing to tell them apart"
 
     @pytest.mark.asyncio
     async def test_unknown_serial_is_skipped_with_reason(self, db_session):

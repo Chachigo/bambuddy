@@ -14,6 +14,12 @@ Design notes worth knowing before editing:
   on natural keys instead, inserted without an explicit id, and an
   ``old_id -> new_id`` map is threaded through so foreign keys in dependent
   tables (spool usage history) still line up.
+
+  The printer-side ``cali_idx`` behaves the same way and gets the same
+  treatment. Editing a K-profile in Bambuddy is a delete-then-add on a
+  single-nozzle printer, which re-keys it, and ``extrusion_cali_set`` aimed at a
+  slot that no longer exists is silently dropped — so the live index is read
+  back and matched before writing, never taken from the backup.
 * **Categories are applied archives -> spools -> settings -> kprofiles.**
   Archives first because spool usage history references ``archive_id``;
   K-profiles last because they leave the database and talk to hardware.
@@ -866,7 +872,7 @@ class GitHubRestoreService:
         # the profile occupying a slot, so writing is always an overwrite on the
         # printer side.
         tally.note("K-profiles always overwrite the matching slot on the printer")
-        tally.note("Profiles are published over MQTT without acknowledgement — verify on the printer")
+        tally.note("The printer's acknowledgement is not reliable — verify the profiles on the printer")
 
         for serial, entries in sorted(by_serial.items()):
             profile_total = sum(len(c.get("profiles") or []) for _, c in entries)
@@ -890,21 +896,48 @@ class GitHubRestoreService:
                 if nozzle not in _KNOWN_NOZZLES:
                     tally.note(f"Unexpected nozzle diameter {nozzle} for {serial} — sent as-is")
 
-                profile_dicts = [
-                    {
-                        "filament_id": p.get("filament_id", ""),
-                        "name": p.get("name", ""),
-                        "k_value": p.get("k_value", "0.020000"),
-                        "nozzle_id": p.get("nozzle_id"),
-                        "extruder_id": p.get("extruder_id", 0),
-                        "setting_id": p.get("setting_id"),
-                        "slot_id": p.get("slot_id", 0),
-                    }
-                    for p in profiles
-                    if isinstance(p, dict)
-                ]
+                # The backup's slot_id is a cali_idx, and cali_idx is as
+                # unstable as the autoincrement ids we already refuse to reuse
+                # for spools and archives: editing a profile in Bambuddy is a
+                # delete-then-add on a single-nozzle printer, which re-keys it.
+                # Addressing extrusion_cali_set at a slot that no longer exists
+                # is a silent no-op — the printer drops it and we would still
+                # report the profile restored. So resolve the live index first.
+                current = await self._current_kprofile_index(client, nozzle, serial)
+
+                profile_dicts = []
+                unmatched = 0
+                for p in profiles:
+                    if not isinstance(p, dict):
+                        continue
+                    match = self._match_kprofile(p, current)
+                    if match is None:
+                        unmatched += 1
+                    profile_dicts.append(
+                        {
+                            "filament_id": p.get("filament_id", ""),
+                            "name": p.get("name", ""),
+                            "k_value": p.get("k_value", "0.020000"),
+                            "nozzle_id": p.get("nozzle_id"),
+                            "extruder_id": p.get("extruder_id", 0),
+                            # Prefer the live setting_id when we matched: it is
+                            # what the printer currently associates with the slot.
+                            "setting_id": (match.setting_id if match else None) or p.get("setting_id"),
+                            # cali_idx -1 tells the printer to add a new profile
+                            # rather than address a slot that isn't there.
+                            "cali_idx": match.slot_id if match else -1,
+                            # Only consulted for the generated-setting_id
+                            # fallback; cali_idx above takes precedence.
+                            "slot_id": 0,
+                        }
+                    )
                 if not profile_dicts:
                     continue
+                if unmatched:
+                    tally.note(
+                        f"{unmatched} profile(s) for {nozzle} had no counterpart on {printer.name} "
+                        "— added as new profiles"
+                    )
 
                 try:
                     sent = client.set_kprofiles_batch(profile_dicts, nozzle)
@@ -917,6 +950,53 @@ class GitHubRestoreService:
                 else:
                     tally.failed += len(profile_dicts)
                     tally.note(f"Failed to send {nozzle} profiles to {printer.name} ({serial})")
+
+    @staticmethod
+    async def _current_kprofile_index(client, nozzle: str, serial: str) -> list:
+        """Read the printer's live profiles for one nozzle.
+
+        Best-effort: a read failure degrades to "nothing matched", which makes
+        every profile an add rather than aborting the restore.
+        """
+        try:
+            return list(await client.get_kprofiles(nozzle_diameter=nozzle) or [])
+        except Exception as e:
+            logger.warning("Could not read live K-profiles for %s nozzle %s: %s", serial, nozzle, e)
+            return []
+
+    @staticmethod
+    def _match_kprofile(entry: dict, current: list):
+        """Find the live profile a backed-up entry corresponds to.
+
+        ``setting_id`` is the filament preset the profile was calibrated for and
+        is the strongest signal; a delete-then-add edit regenerates it, so fall
+        back to the display name, which Bambuddy's own editor preserves.
+        Both are scoped by ``filament_id`` — the same preset on a different
+        filament is a different profile.
+        """
+        filament_id = entry.get("filament_id")
+        if not filament_id:
+            return None
+
+        candidates = [c for c in current if c.filament_id == filament_id]
+        if not candidates:
+            return None
+
+        setting_id = entry.get("setting_id")
+        if setting_id:
+            for c in candidates:
+                if c.setting_id == setting_id:
+                    return c
+
+        name = entry.get("name")
+        if name:
+            for c in candidates:
+                if c.name == name:
+                    return c
+
+        # Exactly one profile for this filament and no better discriminator:
+        # treat it as the same profile rather than duplicating it.
+        return candidates[0] if len(candidates) == 1 else None
 
 
 # Singleton instance
