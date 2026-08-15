@@ -95,6 +95,16 @@ const PROVIDER_TOKEN_PLACEHOLDER: Record<GitProviderType, string> = {
   gitlab: 'glpat-xxxxxxxxxxxx',
 };
 
+// Each provider names its scopes differently, so a single hint could only ever
+// be right for one of them (#2775). Naming the scopes up front is also what
+// keeps a token from being minted more permissive than a backup needs.
+const PROVIDER_TOKEN_HINT_I18N_KEY: Record<GitProviderType, string> = {
+  github: 'backup.tokenHintGitHub',
+  gitea: 'backup.tokenHintGitea',
+  forgejo: 'backup.tokenHintForgejo',
+  gitlab: 'backup.tokenHintGitLab',
+};
+
 interface GitHubBackupAutosaveState {
   repository_url: string;
   branch: string;
@@ -714,7 +724,7 @@ export function GitHubBackupSettings() {
                     className="w-full h-10 px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none"
                   />
                   <p className="text-xs text-bambu-gray mt-1">
-                    {t('backup.tokenHint')}
+                    {t(PROVIDER_TOKEN_HINT_I18N_KEY[provider])}
                   </p>
                 </div>
 
