@@ -6731,6 +6731,7 @@ export default {
         title: 'Puerto de transferencia de archivos (FTPS 990)',
         pass: 'Accesible — el envío de archivos de impresión funcionará.',
         warn: 'El puerto 990 no es accesible. La supervisión puede seguir funcionando, pero el envío de impresiones a la impresora fallará. Asegúrese de que el puerto 990 no esté bloqueado.',
+        warn_no_tls: 'El puerto 990 está abierto, pero el servicio de archivos de la impresora no completa el protocolo de enlace TLS. No se pueden obtener los archivos de impresión, las portadas ni los timelapses, por lo que los archivos quedan vacíos. Reinicie la impresora — desbloquear el puerto no servirá.',
       },
       external_storage: {
         title: 'Almacenar archivos enviados en almacenamiento externo (paso 4 de instalación)',

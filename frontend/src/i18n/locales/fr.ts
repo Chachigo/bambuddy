@@ -6713,6 +6713,7 @@ export default {
         title: 'Port de transfert de fichiers (FTPS 990)',
         pass: 'Accessible — l\'envoi de fichiers d\'impression fonctionnera.',
         warn: 'Le port 990 est inaccessible. La surveillance peut toujours fonctionner, mais l\'envoi d\'impressions vers l\'imprimante échouera. Assurez-vous que le port 990 n\'est pas bloqué.',
+        warn_no_tls: 'Le port 990 est ouvert, mais le service de fichiers de l\'imprimante ne termine pas la négociation TLS. Les fichiers d\'impression, les aperçus et les timelapses ne peuvent pas être récupérés, les archives restent donc vides. Redémarrez l\'imprimante — débloquer le port n\'y changera rien.',
       },
       external_storage: {
         title: 'Stocker les fichiers envoyés sur stockage externe (étape 4 de l\'installation)',

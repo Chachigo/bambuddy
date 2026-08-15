@@ -6772,6 +6772,7 @@ export default {
         title: 'File transfer port (FTPS 990)',
         pass: 'Reachable — sending print files will work.',
         warn: 'Port 990 is unreachable. Monitoring may still work, but sending prints to the printer will fail. Make sure port 990 is not blocked.',
+        warn_no_tls: 'Port 990 is open but the printer\'s file service is not completing a TLS handshake. Print files, covers and timelapses cannot be fetched, so archives stay empty. Restart the printer — unblocking the port will not help.',
       },
       external_storage: {
         title: 'Store sent files on external storage (install step 4)',

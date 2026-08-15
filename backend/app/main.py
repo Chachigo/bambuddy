@@ -92,6 +92,7 @@ from backend.app.services.bambu_ftp import (
     cache_3mf_download,
     clear_3mf_cache,
     download_file_async,
+    ftps_handshake_blocked,
     get_cached_3mf,
     get_ftp_retry_settings,
     with_ftp_retry,
@@ -3384,6 +3385,16 @@ async def on_print_start(printer_id: int, data: dict):
             temp_path.parent.mkdir(parents=True, exist_ok=True)
 
             for remote_path in remote_paths:
+                if ftps_handshake_blocked(printer.ip_address):
+                    # The printer's FTPS service is not completing a TLS
+                    # handshake, so it has no path we could reach — walking the
+                    # remaining candidates only re-runs the same failure
+                    # (#2780). Fall through to the no-3MF archive now.
+                    logger.warning(
+                        "Giving up on the 3MF for printer %s: its file service is not answering over TLS",
+                        printer_id,
+                    )
+                    break
                 logger.debug("Trying FTP download: %s", remote_path)
                 try:
                     if ftp_retry_enabled:
@@ -3425,12 +3436,14 @@ async def on_print_start(printer_id: int, data: dict):
                 except Exception as e:
                     logger.debug("FTP download failed for %s: %s", remote_path, e)
 
-            if downloaded_filename:
+            if downloaded_filename or ftps_handshake_blocked(printer.ip_address):
                 break
 
         # If still not found, try listing directories to find matching file
-        # Different printer models use different directory structures
-        if not downloaded_filename and (filename or subtask_name):
+        # Different printer models use different directory structures. Skipped
+        # when the printer's FTPS handshake is failing — the directory walk is
+        # five more connections that cannot get further than the download did.
+        if not downloaded_filename and (filename or subtask_name) and not ftps_handshake_blocked(printer.ip_address):
             search_term = (subtask_name or filename).lower().replace(".gcode", "").replace(".3mf", "")
             logger.info("Direct FTP download failed, searching directories for '%s'", search_term)
             search_dirs = ["/cache", "/model", "/data", "/data/Metadata", "/"]

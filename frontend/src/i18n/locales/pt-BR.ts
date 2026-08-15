@@ -6712,6 +6712,7 @@ export default {
         title: 'Porta de transferência de arquivos (FTPS 990)',
         pass: 'Acessível — o envio de arquivos de impressão funcionará.',
         warn: 'A porta 990 está inacessível. O monitoramento ainda pode funcionar, mas o envio de impressões para a impressora falhará. Verifique se a porta 990 não está bloqueada.',
+        warn_no_tls: 'A porta 990 está aberta, mas o serviço de arquivos da impressora não conclui o handshake TLS. Os arquivos de impressão, as capas e os timelapses não podem ser obtidos, então os arquivos ficam vazios. Reinicie a impressora — desbloquear a porta não resolve.',
       },
       external_storage: {
         title: 'Armazenar arquivos enviados no armazenamento externo (passo 4 da instalação)',

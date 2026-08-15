@@ -6662,6 +6662,7 @@ export default {
         title: 'Dosya aktarım portu (FTPS 990)',
         pass: 'Erişilebilir — baskı dosyaları gönderme çalışacak.',
         warn: 'Port 990 erişilemez. İzleme yine çalışabilir, ancak yazıcıya baskı gönderme başarısız olacak. Port 990\'ın engellenmediğinden emin olun.',
+        warn_no_tls: 'Port 990 açık, ancak yazıcının dosya hizmeti TLS el sıkışmasını tamamlamıyor. Baskı dosyaları, kapak görselleri ve timelapse videoları alınamadığı için arşivler boş kalır. Yazıcıyı yeniden başlatın — portun engelini kaldırmak işe yaramaz.',
       },
       external_storage: {
         title: 'Gönderilen dosyaları harici depolamada sakla (kurulum adımı 4)',

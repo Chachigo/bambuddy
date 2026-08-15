@@ -6712,6 +6712,7 @@ export default {
         title: 'Porta trasferimento file (FTPS 990)',
         pass: 'Raggiungibile — l\'invio dei file di stampa funzionerà.',
         warn: 'La porta 990 non è raggiungibile. Il monitoraggio potrebbe ancora funzionare, ma l\'invio delle stampe alla stampante fallirà. Assicurati che la porta 990 non sia bloccata.',
+        warn_no_tls: 'La porta 990 è aperta, ma il servizio file della stampante non completa l\'handshake TLS. I file di stampa, le anteprime e i timelapse non possono essere scaricati, quindi gli archivi restano vuoti. Riavvia la stampante — sbloccare la porta non serve.',
       },
       external_storage: {
         title: 'Memorizza file inviati su archiviazione esterna (passo 4 dell\'installazione)',

@@ -6723,6 +6723,7 @@ export default {
         title: 'Dateiübertragungsport (FTPS 990)',
         pass: 'Erreichbar — das Senden von Druckdateien funktioniert.',
         warn: 'Port 990 ist nicht erreichbar. Die Überwachung funktioniert möglicherweise weiterhin, aber das Senden von Drucken an den Drucker schlägt fehl. Stellen Sie sicher, dass Port 990 nicht blockiert ist.',
+        warn_no_tls: 'Port 990 ist offen, aber der Dateidienst des Druckers schließt den TLS-Handshake nicht ab. Druckdateien, Vorschaubilder und Zeitraffer können nicht abgerufen werden, daher bleiben Archive leer. Starten Sie den Drucker neu — den Port freizugeben hilft hier nicht.',
       },
       external_storage: {
         title: 'Gesendete Dateien auf externem Speicher speichern (Installationsschritt 4)',

@@ -46,6 +46,7 @@ from backend.app.services.bambu_ftp import (
     delete_file_async,
     download_file_bytes_async,
     download_file_try_paths_async,
+    ftps_handshake_blocked,
     get_cached_3mf,
     get_storage_info_async,
     list_files_async,
@@ -1225,6 +1226,16 @@ async def _produce_cover_image(
         last_error = None
 
         for attempt in range(max_retries + 1):
+            if ftps_handshake_blocked(printer.ip_address):
+                # Nothing to retry: the printer is not completing a TLS
+                # handshake on port 990, so no path and no attempt reaches it
+                # (#2780). Report the real cause instead of the 404 below,
+                # which would read as "this print has no cover".
+                raise HTTPException(
+                    503,
+                    f"Printer {printer.ip_address} is not answering its file service over TLS. "
+                    "Restart the printer and try again.",
+                )
             try:
                 downloaded = await download_file_try_paths_async(
                     printer.ip_address,
