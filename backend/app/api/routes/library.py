@@ -73,8 +73,13 @@ from backend.app.services.filament_requirements import annotate_rack_groups
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
 from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_stl_thumbnail
-from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
-from backend.app.utils.safe_path import PathTraversalError, safe_join_under
+from backend.app.utils.filename import (
+    MAX_FILENAME_BYTES,
+    InvalidFilenameError,
+    safe_path_component,
+    validate_print_filename,
+)
+from backend.app.utils.safe_path import PathTraversalError, assert_under, safe_join_under
 from backend.app.utils.threemf_tools import (
     default_plate_gcode_name,
     expand_to_project_slots,
@@ -4303,8 +4308,14 @@ async def slice_and_persist(
         job_id=job_id,
     )
 
+    # Same reduction as the archive sink: ``model_filename`` may be built from
+    # the source's embedded ``print_name``, which is free text (#2832). Managed
+    # storage names the file after a UUID and never sees this, but an external
+    # folder writes it verbatim, where a "/" would mean a directory nobody
+    # created -- and the library row shows it either way.
     base_name = model_filename.rsplit(".", 1)[0]
-    out_filename = f"{base_name}.gcode.3mf"
+    safe_base = safe_path_component(base_name, fallback="sliced", max_bytes=MAX_FILENAME_BYTES - len(b".gcode.3mf"))
+    out_filename = f"{safe_base}.gcode.3mf"
     # Write next to the source when the source lives on an external mount
     # (#2810). The folder is loaded here rather than passed in because every
     # caller already has only the id.
@@ -4445,19 +4456,33 @@ async def slice_and_persist_as_archive(
         current_user_id=current_user_id,
     )
 
-    base_name = model_filename.rsplit(".", 1)[0]
-    out_filename = f"{base_name}.gcode.3mf"
-
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     printer_folder = str(source_archive.printer_id) if source_archive.printer_id is not None else "unassigned"
-    archive_subdir = f"{timestamp}_{base_name}_sliced"
+
+    # ``model_filename`` is built from the archive's display name, which comes
+    # from the 3MF's own metadata and is whatever the model's author typed. A
+    # "/" in it is a path separator, not a character: the joins below silently
+    # gain a level and the write lands on a parent that was never created
+    # (#2832). Reduce it to a single component first, leaving room for the
+    # prefix and the extension wrapped around it.
+    base_name = model_filename.rsplit(".", 1)[0]
+    reserve = max(len(f"{timestamp}__sliced".encode()), len(b".gcode.3mf"))
+    safe_base = safe_path_component(
+        base_name, fallback=f"archive_{source_archive.id}", max_bytes=MAX_FILENAME_BYTES - reserve
+    )
+    out_filename = f"{safe_base}.gcode.3mf"
+    archive_subdir = f"{timestamp}_{safe_base}_sliced"
+
     archive_dir = (
         app_settings.archive_dir / printer_folder / archive_subdir
-    )  # SEC-PATH-OK: printer_folder = str(int|None), archive_subdir = f"{timestamp}_{base_name}_sliced" where base_name went through _safe_filename
+    )  # SEC-PATH-OK: printer_folder = str(int|None); archive_subdir wraps safe_path_component output, asserted below
+    out_path = archive_dir / out_filename  # SEC-PATH-OK: out_filename wraps safe_path_component output, asserted below
+    # The sanitiser is what makes the two joins single-component; this is the
+    # backstop that says so out loud, and would catch a future edit that reaches
+    # around it. Checked before mkdir so a rejected path creates nothing.
+    assert_under(app_settings.archive_dir, archive_dir, http=False)
+    assert_under(app_settings.archive_dir, out_path, http=False)
     archive_dir.mkdir(parents=True, exist_ok=True)
-    out_path = (
-        archive_dir / out_filename
-    )  # SEC-PATH-OK: out_filename = f"{base_name}.gcode.3mf" where base_name went through _safe_filename
     # See library-slice path: BS/Orca sidecar CLIs don't embed plate_N.png
     # in headless --export-3mf, so the produced 3MF often has no thumbnail
     # at all. Server-side render fills the gap; no-op when the slicer did
