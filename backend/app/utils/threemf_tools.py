@@ -161,11 +161,20 @@ def mm_to_grams(
     return volume_cm3 * density_g_cm3
 
 
-def extract_layer_filament_usage_from_3mf(file_path: Path) -> dict[int, dict[int, float]] | None:
+def extract_layer_filament_usage_from_3mf(
+    file_path: Path, plate_id: int | None = None
+) -> dict[int, dict[int, float]] | None:
     """Extract per-layer filament usage from a 3MF file's embedded G-code.
 
     Args:
         file_path: Path to the 3MF file
+        plate_id: Plate to read. Required for multi-plate files — zip member
+            order is whatever the slicer wrote, and Bambu Studio stores
+            ``plate_2.gcode`` ahead of ``plate_1.gcode``, so the old
+            "first member" behaviour read a different plate's layers than
+            the one that printed. Returns None rather than silently falling
+            back to another plate when the requested plate isn't in the
+            file; callers degrade to linear scaling, which is bounded.
 
     Returns:
         Dictionary mapping layers to filament usage, or None if parsing fails.
@@ -173,13 +182,18 @@ def extract_layer_filament_usage_from_3mf(file_path: Path) -> dict[int, dict[int
     """
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
-            # Find G-code file(s) - usually plate_1.gcode or Metadata/plate_1.gcode
-            gcode_files = [f for f in zf.namelist() if f.endswith(".gcode")]
-            if not gcode_files:
+            names = zf.namelist()
+            gcode_path = select_plate_gcode_name(names, plate_id)
+            if gcode_path is None:
+                # No plate asked for, or a file whose single G-code member
+                # doesn't follow the plate_N naming convention (non-Bambu
+                # slicers) — the lone member is unambiguous either way.
+                gcode_files = [f for f in names if f.endswith(".gcode")]
+                if plate_id is None or len(gcode_files) == 1:
+                    gcode_path = default_plate_gcode_name(names)
+            if gcode_path is None:
                 return None
 
-            # Use the first G-code file (typically only one per 3MF export)
-            gcode_path = gcode_files[0]
             gcode_content = zf.read(gcode_path).decode("utf-8", errors="ignore")
 
             return parse_gcode_layer_filament_usage(gcode_content)
