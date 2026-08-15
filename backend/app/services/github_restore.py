@@ -740,13 +740,20 @@ class GitHubRestoreService:
                 await db.refresh(log)
                 log_id = log.id
 
+                # Owned here rather than by _apply so the failure path can see
+                # the categories that were already committed when the raise
+                # happened. _apply records a tally only after its category's
+                # commit, so every entry present is on disk.
+                results: dict[str, _CategoryTally] = {}
                 try:
                     payload, error = await self._read_categories(config, resolved, categories)
                     if error:
                         raise RuntimeError(error)
 
                     settings_keys_written: set[str] = set()
-                    results = await self._apply(db, payload, categories, overwrite_existing, settings_keys_written)
+                    await self._apply(
+                        db, payload, categories, overwrite_existing, settings_keys_written, results=results
+                    )
                     await db.commit()
 
                     # After the commit: this reconnects the relay, which is not
@@ -775,17 +782,26 @@ class GitHubRestoreService:
                     }
 
                 except Exception as e:
-                    # Rolls back whatever is still uncommitted. That is every
-                    # database category unless K-profiles were also selected, in
-                    # which case _apply has already committed them before talking
-                    # to the printers — see the comment there.
+                    # Rolls back the category that was mid-flight. Every category
+                    # already in ``results`` committed as it finished (see
+                    # _apply), so those rows survive this — and reporting an
+                    # empty result over them would tell the user nothing was
+                    # restored while their archives and spools are on disk.
                     logger.exception("Restore failed for config %s ref %s", config_id, resolved)
                     await db.rollback()
+                    committed = sum(tally.restored for tally in results.values())
                     log.status = "failed"
                     log.completed_at = datetime.now(timezone.utc)
+                    log.files_changed = committed
                     log.error_message = str(e)[:1000]
                     await db.commit()
-                    return {"success": False, "message": str(e), "log_id": log_id, "ref": resolved, "results": {}}
+                    return {
+                        "success": False,
+                        "message": str(e),
+                        "log_id": log_id,
+                        "ref": resolved,
+                        "results": {name: tally.as_dict() for name, tally in results.items()},
+                    }
 
         finally:
             self._running_restore = False
@@ -836,21 +852,49 @@ class GitHubRestoreService:
         categories: list[RestoreCategory],
         overwrite: bool,
         settings_keys_written: set[str] | None = None,
+        results: dict[str, _CategoryTally] | None = None,
     ) -> dict[str, _CategoryTally]:
         """Apply categories in dependency order and return per-category tallies.
 
         ``settings_keys_written``, if given, collects the setting keys actually
         written, for the caller's post-commit side effects (see
         ``_reconfigure_mqtt_relay``).
+
+        ``results``, if given, is the caller's own dict rather than a fresh one.
+        Each category is committed before it is recorded there, so on a raise
+        the caller can report exactly what is already on disk — see the
+        per-category commit below.
         """
-        results: dict[str, _CategoryTally] = {}
+        results = {} if results is None else results
         archive_id_map: dict[int, int] = {}
+
+        # Every database category commits before the next one starts, and only
+        # then is its tally recorded. Two reasons:
+        #
+        #  * SQLite has one writer. Each category is a long run of one SELECT per
+        #    row or per key — _find_archive, _find_spool, the usage dedupe,
+        #    _restore_settings — interleaved with autoflushed INSERTs, all inside
+        #    the open write transaction. A few thousand archives plus a full
+        #    usage history plausibly passes the 15 s busy_timeout
+        #    (core/database.py), at which point every concurrent writer in the
+        #    app fails with "database is locked". This is the same hold the
+        #    K-profile phase had, arriving by volume rather than by awaiting a
+        #    sulking printer.
+        #  * The ordering tolerates it: the only cross-category state is
+        #    archive_id_map and spool_id_map, both plain dicts in memory, and
+        #    the session is expire_on_commit=False so nothing reloads.
+        #
+        # The cost is that a later failure no longer rolls back an earlier
+        # category — which is why the tally is recorded after the commit, so
+        # run_restore's failure path reports the rows that really landed instead
+        # of claiming nothing was restored.
 
         # Archives first: spool usage history references archive_id.
         if RestoreCategory.ARCHIVES in categories:
             self._progress = "Restoring print archives..."
             tally = _CategoryTally()
             await self._restore_archives(db, payload.get(ARCHIVES_PATH), overwrite, tally, archive_id_map)
+            await db.commit()
             results[RestoreCategory.ARCHIVES.value] = tally
 
         if RestoreCategory.SPOOLS in categories:
@@ -864,6 +908,7 @@ class GitHubRestoreService:
                 tally,
                 archive_id_map,
             )
+            await db.commit()
             results[RestoreCategory.SPOOLS.value] = tally
 
         if RestoreCategory.SETTINGS in categories:
@@ -872,26 +917,24 @@ class GitHubRestoreService:
             await self._restore_settings(
                 db, payload.get(SETTINGS_PATH), overwrite, tally, keys_written=settings_keys_written
             )
+            await db.commit()
             results[RestoreCategory.SETTINGS.value] = tally
 
         # Last, because it leaves the database and publishes over MQTT.
         if RestoreCategory.KPROFILES in categories:
-            # Commit the database categories FIRST, and not just for tidiness.
-            # Everything above has already autoflushed its INSERTs, so SQLite is
-            # holding the single write transaction — and _restore_kprofiles then
-            # awaits get_kprofiles per printer per nozzle, which is
-            # timeout=5.0 * max_retries=3, i.e. up to ~15 s each against an
-            # unresponsive printer. busy_timeout is 15 s (core/database.py), so a
-            # farm with a couple of sulking printers would hold the writer past
-            # it and every concurrent writer in the app would fail with
-            # "database is locked".
+            # The database categories are already committed by the loop above,
+            # and that is load-bearing here rather than tidiness:
+            # _restore_kprofiles awaits get_kprofiles per printer per nozzle,
+            # which is timeout=5.0 * max_retries=3, i.e. up to ~15 s each against
+            # an unresponsive printer. Holding SQLite's writer across that would
+            # pass the 15 s busy_timeout on a farm with a couple of sulking
+            # printers.
             #
             # The cost is that a K-profile failure no longer rolls back the
             # categories that already succeeded. That is the correct trade
             # anyway: extrusion_cali_set has left for the printer by then and
             # cannot be rolled back either, so a rollback would only have made
             # the database disagree with the hardware.
-            await db.commit()
 
             self._progress = "Sending K-profiles to printers..."
             tally = _CategoryTally()

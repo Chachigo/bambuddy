@@ -2802,7 +2802,14 @@ class TestMqttRelayReconfigure:
 
 
 class TestApplyOrdering:
-    """_apply must not hold SQLite's write transaction across the MQTT phase."""
+    """_apply must not hold SQLite's single writer any longer than one category.
+
+    Two ways to overrun the 15 s busy_timeout, and the same fix closes both: the
+    K-profile phase awaits an unresponsive printer (3 x 5 s per printer/nozzle),
+    and a database category is one SELECT per row or per key against a few
+    thousand archives plus a full usage history. Every concurrent writer in the
+    app fails with "database is locked" while either runs.
+    """
 
     def _recording_service(self, calls: list[str]):
         service = _service()
@@ -2816,8 +2823,24 @@ class TestApplyOrdering:
         return service
 
     @pytest.mark.asyncio
-    async def test_commits_database_categories_before_talking_to_printers(self):
-        """get_kprofiles is 3 x 5 s per printer/nozzle; busy_timeout is 15 s."""
+    async def test_every_database_category_commits_before_the_next_one_starts(self):
+        calls: list[str] = []
+        service = self._recording_service(calls)
+        db = MagicMock()
+        db.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
+
+        await service._apply(
+            db,
+            {},
+            [RestoreCategory.ARCHIVES, RestoreCategory.SPOOLS, RestoreCategory.SETTINGS],
+            False,
+        )
+
+        assert calls == ["archives", "commit", "spools", "commit", "settings", "commit"]
+
+    @pytest.mark.asyncio
+    async def test_the_printer_phase_runs_with_no_write_transaction_open(self):
+        """The K-profile phase is last, and everything before it is already committed."""
         calls: list[str] = []
         service = self._recording_service(calls)
         db = MagicMock()
@@ -2830,20 +2853,39 @@ class TestApplyOrdering:
             False,
         )
 
-        assert calls == ["archives", "spools", "commit", "kprofiles"]
+        assert calls == ["archives", "commit", "spools", "commit", "kprofiles"]
 
     @pytest.mark.asyncio
-    async def test_does_not_split_the_transaction_without_kprofiles(self):
-        """A database-only restore stays one transaction, committed by run_restore."""
-        calls: list[str] = []
-        service = self._recording_service(calls)
+    async def test_a_tally_is_recorded_only_after_its_category_commits(self):
+        """What run_restore's failure path relies on to report honestly.
+
+        A tally present in ``results`` has to mean "these rows are on disk". If
+        the commit raises, the category must not appear — otherwise a failed
+        restore reports rows that rolled back.
+        """
+        service = self._recording_service([])
         db = MagicMock()
-        db.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
+        db.commit = AsyncMock(side_effect=RuntimeError("database is locked"))
+        results: dict = {}
 
-        await service._apply(db, {}, [RestoreCategory.ARCHIVES, RestoreCategory.SETTINGS], False)
+        with pytest.raises(RuntimeError):
+            await service._apply(db, {}, [RestoreCategory.ARCHIVES], False, results=results)
 
-        assert calls == ["archives", "settings"]
-        assert db.commit.await_count == 0
+        assert results == {}
+
+    @pytest.mark.asyncio
+    async def test_the_callers_results_dict_is_populated_in_place(self):
+        """So a raise mid-run still leaves the committed categories visible."""
+        service = self._recording_service([])
+        db = MagicMock()
+        db.commit = AsyncMock()
+        service._restore_spools = AsyncMock(side_effect=RuntimeError("boom"))
+        results: dict = {}
+
+        with pytest.raises(RuntimeError):
+            await service._apply(db, {}, [RestoreCategory.ARCHIVES, RestoreCategory.SPOOLS], False, results=results)
+
+        assert set(results) == {"archives"}, "archives committed before spools ran; the caller must see it"
 
 
 class TestKprofilePhaseFailure:
@@ -2955,6 +2997,43 @@ class TestKprofilePhaseFailure:
         assert result["results"] == {}
         assert (await db_session.execute(select(Settings))).scalars().first() is None
         relay.configure.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_later_category_failing_still_reports_the_earlier_one(self, db_session):
+        """The database phase commits per category, so this is now reachable there too.
+
+        Archives land and are committed; settings then raises. Reporting an empty
+        result would be the same false "nothing was restored" the K-profile split
+        already had to fix, over rows that are durable on disk.
+        """
+        service, config_id = await self._configured_service(
+            db_session,
+            {
+                ARCHIVES_PATH: {
+                    "version": "1.0",
+                    "archives": [
+                        {
+                            "id": 1,
+                            "filename": "benchy.3mf",
+                            "content_hash": "hash-later",
+                            "started_at": "2026-03-01 10:00:00",
+                        }
+                    ],
+                },
+                SETTINGS_PATH: dict(self._SETTINGS),
+            },
+        )
+        service._restore_settings = AsyncMock(side_effect=RuntimeError("read failed"))
+
+        with self._session_patch(db_session):
+            result = await service.run_restore(
+                config_id, "a" * 40, [RestoreCategory.ARCHIVES, RestoreCategory.SETTINGS]
+            )
+
+        assert result["success"] is False
+        assert result["results"][RestoreCategory.ARCHIVES.value]["restored"] == 1
+        assert RestoreCategory.SETTINGS.value not in result["results"], "settings rolled back; do not claim it"
+        assert (await db_session.execute(select(PrintArchive))).scalars().first() is not None
 
     @pytest.mark.asyncio
     async def test_a_malformed_profiles_value_is_a_skipped_category_not_a_raise(self, db_session, printer_factory):
