@@ -2917,23 +2917,34 @@ class BambuMQTTClient:
         that moment. Logging them at INFO puts them in every support bundle by
         default, which is what a report like #2770 needs before its cause can be
         argued about at all.
+
+        The unit's ``temp`` and ``humidity_raw`` at the moment of the end are
+        logged for every cycle, early or not, because they are what decides
+        whether auto-drying re-arms. Reconstructing them for #2770 meant
+        cross-referencing hourly alarm lines against 30-second scheduler debug
+        that was switched off at the time; one line here says it outright — a
+        cycle ending at 63 degC with the reading still above the threshold is
+        the whole shape of the re-arm loop.
         """
+        box = f"temp={ams_unit.get('temp')} humidity={ams_unit.get('humidity_raw', ams_unit.get('humidity'))}"
         if ams_id in self._drying_stops_sent:
             self._drying_stops_sent.discard(ams_id)
             logger.info(
-                "[%s] AMS %d drying stopped by Bambuddy (dry_time %d → 0)",
+                "[%s] AMS %d drying stopped by Bambuddy (dry_time %d → 0, %s)",
                 self.serial_number,
                 ams_id,
                 remaining,
+                box,
             )
             return
 
         if remaining <= _EARLY_DRY_END_MINUTES:
             logger.info(
-                "[%s] AMS %d drying complete (dry_time %d → 0)",
+                "[%s] AMS %d drying complete (dry_time %d → 0, %s)",
                 self.serial_number,
                 ams_id,
                 remaining,
+                box,
             )
             return
 
@@ -2947,7 +2958,7 @@ class BambuMQTTClient:
         logger.info(
             "[%s] AMS %d drying ended early — %d of %s minutes still on the clock. "
             "Bambuddy sent no stop command, so the firmware ended this cycle: "
-            "dry_status=%s dry_sub_status=%s dry_sf_reason=%s hms=%s",
+            "dry_status=%s dry_sub_status=%s dry_sf_reason=%s hms=%s %s",
             self.serial_number,
             ams_id,
             remaining,
@@ -2956,6 +2967,7 @@ class BambuMQTTClient:
             ams_unit.get("dry_sub_status"),
             ams_unit.get("dry_sf_reason") or [],
             [e.full_code for e in self.state.hms_errors] or "none",
+            box,
         )
 
     def register_assignment_verification(

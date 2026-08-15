@@ -122,6 +122,16 @@ DEFAULT_TEMPLATES = [
         "body_template": "{printer} {ams_label}: Temperature {temperature}°C exceeds {threshold}°C threshold",
     },
     {
+        "event_type": "ams_drying_suspended",
+        "name": "Auto-Drying Suspended",
+        "title_template": "Auto-Drying Suspended",
+        "body_template": (
+            "{printer} {ams_label}: stopped automatic drying after {cycles} cycles left humidity at "
+            "{humidity}%, still above the {threshold}% threshold. An AMS reads higher while it is warm, "
+            "so raise the threshold or dry the spools off the printer."
+        ),
+    },
+    {
         "event_type": "bed_cooled",
         "name": "Bed Cooled",
         "title_template": "Bed Cooled",

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Printer, Archive, ListOrdered, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Wallet, type LucideIcon } from 'lucide-react';
+import { Printer, Archive, ListOrdered, BarChart3, Cloud, Settings, Sun, Moon, Monitor, ChevronLeft, ChevronRight, Keyboard, Github, ArrowUpCircle, Wrench, FolderKanban, FolderOpen, X, Menu, Info, Plug, Bug, LogOut, Key, Loader2, Disc3, ShieldAlert, Globe, Bell, Receipt, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '../contexts/ThemeContext';
 import { KeyboardShortcutsModal } from './KeyboardShortcutsModal';
@@ -43,12 +43,14 @@ export const defaultNavItems: NavItem[] = [
   { id: 'archives', to: '/archives', icon: Archive, labelKey: 'nav.archives' },
   { id: 'queue', to: '/queue', icon: ListOrdered, labelKey: 'nav.queue' },
   { id: 'projects', to: '/projects', icon: FolderKanban, labelKey: 'nav.projects' },
-  { id: 'finance', to: '/finance', icon: Wallet, labelKey: 'nav.finance' },
   { id: 'files', to: '/files', icon: FolderOpen, labelKey: 'nav.files' },
   { id: 'makerworld', to: '/makerworld', icon: Globe, labelKey: 'nav.makerworld' },
   { id: 'profiles', to: '/profiles', icon: Cloud, labelKey: 'nav.profiles' },
   { id: 'maintenance', to: '/maintenance', icon: Wrench, labelKey: 'nav.maintenance' },
   { id: 'stats', to: '/stats', icon: BarChart3, labelKey: 'nav.stats' },
+  // Opt-in feature: gated in isHidden() on the billing_enabled setting, so the
+  // entry stays out of the sidebar entirely until an admin turns billing on.
+  { id: 'finance', to: '/finance', icon: Receipt, labelKey: 'nav.finance' },
   // User-account feature: gated in isHidden() on advanced auth + user_notifications
   // + the notifications:user_email permission. Kept adjacent to Settings
   // intentionally. Do not drop this entry — without it the /notifications page
@@ -336,6 +338,11 @@ export function Layout() {
       }
       // notifications nav item also requires advanced auth to be enabled and user_notifications_enabled setting
       if (id === 'notifications' && (!authEnabled || !advancedAuthStatus?.advanced_auth_enabled || (settings?.user_notifications_enabled === false))) return true;
+      // Finance is off by default and the page is meaningless without it, so it
+      // stays hidden until billing is explicitly on. Tested for `true` rather
+      // than `!== false` on purpose: settings are undefined on the first render,
+      // and a nav entry that appears and then vanishes reads as a glitch.
+      if (id === 'finance' && settings?.billing_enabled !== true) return true;
       return false;
     };
 

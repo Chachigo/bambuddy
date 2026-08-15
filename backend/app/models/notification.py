@@ -78,6 +78,9 @@ class NotificationProvider(Base):
     # Event triggers - AMS environmental alarms (regular AMS with 4 slots)
     on_ams_humidity_high = Column(Boolean, default=False)  # AMS humidity above threshold
     on_ams_temperature_high = Column(Boolean, default=False)  # AMS temperature above threshold
+    # Auto-drying gave up on a unit (#2770). Defaults True: it reports that
+    # Bambuddy has stopped acting, which nothing else in the UI would say.
+    on_ams_drying_suspended = Column(Boolean, default=True)
 
     # Event triggers - AMS-HT environmental alarms (single slot heated AMS)
     on_ams_ht_humidity_high = Column(Boolean, default=False)  # AMS-HT humidity above threshold

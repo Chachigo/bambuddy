@@ -6293,8 +6293,26 @@ class TestDryingCompleteCallback:
             mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
 
         message = "\n".join(r.getMessage() for r in caplog.records)
-        assert "drying complete (dry_time 1 → 0)" in message
+        assert "drying complete (dry_time 1 → 0" in message
         assert "ended early" not in message
+
+    def test_every_cycle_end_records_the_box_conditions(self, mqtt_client, caplog):
+        """Whether auto-drying re-arms is decided by the unit's temperature and
+        humidity at the moment the cycle ends, so both belong on the line that
+        reports the end — normal or early. Reconstructing them for #2770 meant
+        cross-referencing hourly alarm lines against scheduler debug that was
+        switched off at the time."""
+        mqtt_client._handle_ams_data(
+            {"ams": [{"id": "0", "dry_time": 1, "temp": "63.0", "humidity_raw": "16", "tray": []}]}
+        )
+        with caplog.at_level(logging.INFO, logger="backend.app.services.bambu_mqtt"):
+            mqtt_client._handle_ams_data(
+                {"ams": [{"id": "0", "dry_time": 0, "temp": "63.0", "humidity_raw": "16", "tray": []}]}
+            )
+
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert "temp=63.0" in message
+        assert "humidity=16" in message
 
 
 class TestPrintRunningObservedCallback:

@@ -123,10 +123,20 @@ class NotificationService:
         self._last_digest_check: str = ""  # "HH:MM" to avoid duplicate checks
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client."""
+        """Get or create HTTP client.
+
+        The connect timeout is deliberately far shorter than the rest. A flat
+        30 s meant that when a site's internet went down, every alarm spent a
+        full 30 s inside ``connect`` — longer than SQLite's 15 s
+        ``busy_timeout`` — and any other task that wanted to write during that
+        window failed with "database is locked" (#2770). Reaching a host either
+        works in a couple of seconds or is not going to; sending the body is the
+        part that legitimately takes time, so read/write keep the old 30 s and
+        an image upload on a slow uplink is unaffected.
+        """
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(
-                timeout=30.0,
+                timeout=httpx.Timeout(30.0, connect=5.0),
                 headers={"User-Agent": _USER_AGENT},
             )
         return self._http_client
@@ -166,12 +176,18 @@ class NotificationService:
             return False
 
     async def _get_template(self, db: AsyncSession, event_type: str) -> NotificationTemplate | None:
-        """Get a notification template by event type."""
+        """Get a notification template by event type.
+
+        ``no_autoflush`` for the same reason as ``_get_providers_for_event``:
+        this read runs before the provider is contacted, and must not be the
+        thing that opens a write transaction on the caller's session (#2770).
+        """
         # Check cache first
         if event_type in self._template_cache:
             return self._template_cache[event_type]
 
-        result = await db.execute(select(NotificationTemplate).where(NotificationTemplate.event_type == event_type))
+        with db.no_autoflush:
+            result = await db.execute(select(NotificationTemplate).where(NotificationTemplate.event_type == event_type))
         template = result.scalar_one_or_none()
 
         if template:
@@ -971,7 +987,19 @@ class NotificationService:
         event_field: str,
         printer_id: int | None = None,
     ) -> list[NotificationProvider]:
-        """Get all enabled providers that want a specific event type."""
+        """Get all enabled providers that want a specific event type.
+
+        Runs under ``no_autoflush`` (#2770). Callers routinely hold pending
+        writes when they raise an event — the AMS sensor loop does
+        ``db.add(history)`` and only commits after the alarms have gone out — and
+        without this, autoflush satisfies this SELECT by writing those rows,
+        which opens a write transaction on SQLite. The provider is then contacted
+        over the network with that transaction still open, so a site whose
+        internet is down holds the single SQLite writer for the whole connect
+        timeout and unrelated background tasks fail with "database is locked".
+        Deferring the flush costs nothing here: providers are committed rows, so
+        a pending change in the caller's session cannot be one this query wants.
+        """
         # Build the query dynamically based on event field
         query = select(NotificationProvider).where(
             NotificationProvider.enabled.is_(True),
@@ -983,7 +1011,8 @@ class NotificationService:
                 (NotificationProvider.printer_id.is_(None)) | (NotificationProvider.printer_id == printer_id)
             )
 
-        result = await db.execute(query)
+        with db.no_autoflush:
+            result = await db.execute(query)
         return list(result.scalars().all())
 
     async def _log_notification(
@@ -1658,6 +1687,47 @@ class NotificationService:
             message,
             db,
             "ams_temperature_high",
+            printer_id,
+            printer_name,
+            force_immediate=True,
+            variables=variables,
+        )
+
+    async def on_ams_drying_suspended(
+        self,
+        printer_id: int,
+        printer_name: str,
+        ams_label: str,
+        humidity: float,
+        threshold: float,
+        cycles: int,
+        db: AsyncSession,
+    ):
+        """Handle automatic drying giving up on one AMS unit (#2770).
+
+        Sent immediately rather than folded into a digest: it reports that
+        Bambuddy has STOPPED doing something, and a report of inaction that
+        arrives with tomorrow's summary has already cost the user a day.
+        """
+        providers = await self._get_providers_for_event(db, "on_ams_drying_suspended", printer_id)
+        if not providers:
+            return
+
+        variables = {
+            "printer": printer_name,
+            "ams_label": ams_label,
+            "humidity": f"{humidity:.0f}",
+            "threshold": f"{threshold:.0f}",
+            "cycles": str(cycles),
+        }
+
+        title, message = await self._build_message_from_template(db, "ams_drying_suspended", variables)
+        await self._send_to_providers(
+            providers,
+            title,
+            message,
+            db,
+            "ams_drying_suspended",
             printer_id,
             printer_name,
             force_immediate=True,

@@ -23,6 +23,7 @@ class EventType(StrEnum):
     MAINTENANCE_DUE = "maintenance_due"
     AMS_HUMIDITY_HIGH = "ams_humidity_high"
     AMS_TEMPERATURE_HIGH = "ams_temperature_high"
+    AMS_DRYING_SUSPENDED = "ams_drying_suspended"
     BED_COOLED = "bed_cooled"
     HA_SENSOR_ALERT = "ha_sensor_alert"
     TEST = "test"
@@ -79,6 +80,15 @@ EVENT_VARIABLES: dict[str, list[str]] = {
     "maintenance_due": ["printer", "items", "timestamp", "app_name"],
     "ams_humidity_high": ["printer", "ams_label", "humidity", "threshold", "timestamp", "app_name"],
     "ams_temperature_high": ["printer", "ams_label", "temperature", "threshold", "timestamp", "app_name"],
+    "ams_drying_suspended": [
+        "printer",
+        "ams_label",
+        "humidity",
+        "threshold",
+        "cycles",
+        "timestamp",
+        "app_name",
+    ],
     "bed_cooled": ["printer", "bed_temp", "threshold", "filename", "timestamp", "app_name"],
     "ha_sensor_alert": ["printer", "sensor", "state", "timestamp", "app_name"],
     "test": ["app_name", "timestamp"],
@@ -206,6 +216,15 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
         "ams_label": "AMS-A",
         "temperature": "42",
         "threshold": "35",
+        "timestamp": "2024-01-15 14:30",
+        "app_name": "Bambuddy",
+    },
+    "ams_drying_suspended": {
+        "printer": "Bambu X1C",
+        "ams_label": "AMS-A",
+        "humidity": "16",
+        "threshold": "14",
+        "cycles": "2",
         "timestamp": "2024-01-15 14:30",
         "app_name": "Bambuddy",
     },

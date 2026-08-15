@@ -286,7 +286,14 @@ async def test_unauthorized_print_state_is_cleared_when_print_ends(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("printer_state", ["RUNNING", "PAUSE"])
 async def test_persisted_print_is_authorized_after_restart(monkeypatch, printer_state):
-    archive = SimpleNamespace(id=123, filename="owned_job.gcode.3mf")
+    # billing_run_id is the marker the scheduler stamps on its own dispatches;
+    # an archive without one proves only that Bambuddy watched the print.
+    archive = SimpleNamespace(
+        id=123,
+        filename="owned_job.gcode.3mf",
+        billing_run_id="d7c1f0b2-0000-4000-8000-000000000001",
+        created_by_id=None,
+    )
     query_result = SimpleNamespace(scalar_one_or_none=lambda: archive)
     db = SimpleNamespace(execute=AsyncMock(return_value=query_result))
 
@@ -368,3 +375,94 @@ async def test_kill_switch_defers_when_restart_identity_is_not_available(monkeyp
 
     assert authorization is None
     db.execute.assert_not_awaited()
+
+
+def _authorization_db(archive, dispatched_queue_item_id=None):
+    """Fake session answering the two lookups `_is_bambuddy_authorized_print` makes."""
+
+    query_result = SimpleNamespace(scalar_one_or_none=lambda: archive)
+    return SimpleNamespace(
+        execute=AsyncMock(return_value=query_result),
+        scalar=AsyncMock(return_value=dispatched_queue_item_id),
+    )
+
+
+def _running_state(subtask_id="external-task-9"):
+    return SimpleNamespace(
+        current_print=None,
+        subtask_name="some_job",
+        subtask_id=subtask_id,
+        gcode_file="some_job.gcode.3mf",
+    )
+
+
+@pytest.mark.asyncio
+async def test_archive_without_a_dispatch_marker_is_not_authorization(monkeypatch):
+    """on_print_start archives prints started from Studio or Handy too.
+
+    Those rows carry the same status and subtask_id as Bambuddy's own, so treating
+    the row's existence as proof would switch the feature off a few seconds into
+    every foreign print — as soon as the 3MF finished downloading.
+    """
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    observed_only = SimpleNamespace(
+        id=55,
+        filename="some_job.gcode.3mf",
+        billing_run_id=None,
+        created_by_id=None,
+    )
+    db = _authorization_db(observed_only, dispatched_queue_item_id=None)
+
+    assert await main_module._is_bambuddy_authorized_print(9, _running_state(), db) is False
+    assert (9, "some_job.gcode.3mf") not in main_module._active_prints
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"billing_run_id": "9f0c2b6e-0000-4000-8000-00000000abcd", "created_by_id": None},
+        {"billing_run_id": None, "created_by_id": 4},
+    ],
+    ids=["billing_run_id", "created_by_id"],
+)
+async def test_either_dispatch_marker_authorizes_after_a_restart(monkeypatch, marker):
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    archive = SimpleNamespace(id=77, filename="some_job.gcode.3mf", **marker)
+    db = _authorization_db(archive, dispatched_queue_item_id=None)
+
+    assert await main_module._is_bambuddy_authorized_print(9, _running_state(), db) is True
+    assert main_module._active_prints[(9, "some_job.gcode.3mf")] == 77
+    # The fast path is rehydrated, so the queue is never consulted.
+    db.scalar.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_defers_while_bambuddy_has_a_job_running_on_that_printer(monkeypatch):
+    """A library-file dispatch has no archive at send time, and the row created for
+    it moments later by on_print_start carries neither marker. The queue row is the
+    only durable trace, and it cannot be tied to a subtask_id — so it defers."""
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    unmarked = SimpleNamespace(id=56, filename="some_job.gcode.3mf", billing_run_id=None, created_by_id=None)
+    db = _authorization_db(unmarked, dispatched_queue_item_id=310)
+
+    assert await main_module._is_bambuddy_authorized_print(9, _running_state(), db) is None
+    # Deferring must not authorize the print for every later frame.
+    assert (9, "some_job.gcode.3mf") not in main_module._active_prints
+
+
+@pytest.mark.asyncio
+async def test_defers_when_the_dispatch_has_not_been_archived_yet(monkeypatch):
+    """Restart during the window between the MQTT send and the 3MF download."""
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    db = _authorization_db(None, dispatched_queue_item_id=311)
+
+    assert await main_module._is_bambuddy_authorized_print(9, _running_state(), db) is None
+
+
+@pytest.mark.asyncio
+async def test_foreign_print_with_no_archive_and_no_dispatch_is_unauthorized(monkeypatch):
+    monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
+    db = _authorization_db(None, dispatched_queue_item_id=None)
+
+    assert await main_module._is_bambuddy_authorized_print(9, _running_state(), db) is False

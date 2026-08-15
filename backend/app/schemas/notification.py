@@ -55,6 +55,9 @@ class NotificationProviderBase(BaseModel):
     # Event triggers - AMS environmental alarms (regular AMS)
     on_ams_humidity_high: bool = Field(default=False, description="Notify when AMS humidity exceeds threshold")
     on_ams_temperature_high: bool = Field(default=False, description="Notify when AMS temperature exceeds threshold")
+    on_ams_drying_suspended: bool = Field(
+        default=True, description="Notify when automatic drying gives up on an AMS unit"
+    )
 
     # Event triggers - AMS-HT environmental alarms
     on_ams_ht_humidity_high: bool = Field(default=False, description="Notify when AMS-HT humidity exceeds threshold")
@@ -150,6 +153,7 @@ class NotificationProviderUpdate(BaseModel):
     # Event triggers - AMS environmental alarms (regular AMS)
     on_ams_humidity_high: bool | None = None
     on_ams_temperature_high: bool | None = None
+    on_ams_drying_suspended: bool | None = None
 
     # Event triggers - AMS-HT environmental alarms
     on_ams_ht_humidity_high: bool | None = None

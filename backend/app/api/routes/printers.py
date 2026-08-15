@@ -2038,6 +2038,15 @@ async def stop_drying(
     success = printer_manager.send_drying_command(printer_id, ams_id, temp=0, duration=0, mode=0)
     if not success:
         raise HTTPException(400, "Printer not connected")
+
+    # A cycle the user stopped by hand tells us nothing about whether drying can
+    # move the humidity reading, so it must not count towards the auto-drying
+    # suspension (#2770). Imported here rather than at module scope to keep the
+    # existing routes/scheduler import direction.
+    from backend.app.services.print_scheduler import scheduler as print_scheduler
+
+    print_scheduler.forget_auto_dry_cycle(printer_id, ams_id)
+
     return {"status": "drying_stopped", "ams_id": ams_id}
 
 

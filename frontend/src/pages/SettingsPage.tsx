@@ -129,6 +129,12 @@ registerSettingsSearch({ labelKey: 'backup.history', labelFallback: 'Backup Hist
 registerSettingsSearch({ labelKey: 'backup.localBackup', labelFallback: 'Local Backup', tab: 'backup', keywords: 'local backup download zip manual export', anchor: 'card-backup-local' });
 registerSettingsSearch({ labelKey: 'backup.scheduledBackup', labelFallback: 'Scheduled Backups', tab: 'backup', keywords: 'scheduled backup automatic hourly daily weekly retention local path', anchor: 'card-backup-scheduled' });
 
+// Lowest humidity an AMS reports while its own dryer is running, measured on an
+// H2D/AMS 2 Pro that read 10-13% cold and 15-20% throughout every cycle (#2770).
+// A drying threshold below this can never be reached while the box is warm, so
+// auto-drying would end one cycle and immediately arm another.
+const HUMIDITY_DRYING_FLOOR = 20;
+
 const STORAGE_CATEGORY_COLORS: Record<string, string> = {
   database: 'bg-blue-600',
   library_files: 'bg-green-500',
@@ -5683,6 +5689,17 @@ export function SettingsPage() {
                   <p className="text-xs text-amber-700/80 dark:text-amber-400/70">
                     {t('settings.fairAlsoDryingThreshold')}
                   </p>
+                  {/* An AMS reads 15-20% while its heater is running, well above
+                      what the same unit reports once cold, so a drying threshold
+                      inside that band can never be satisfied while drying (#2770).
+                      Warn rather than clamp — the number is also the colour
+                      threshold on the AMS card, where a low value is a legitimate
+                      choice. */}
+                  {(localSettings.ams_humidity_fair ?? 60) < HUMIDITY_DRYING_FLOOR && (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      {t('settings.fairBelowDryingFloor', { floor: HUMIDITY_DRYING_FLOOR })}
+                    </p>
+                  )}
                 </div>
 
                 {/* Temperature Thresholds */}

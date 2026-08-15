@@ -744,9 +744,9 @@ async def _is_bambuddy_authorized_print(printer_id: int, state: PrinterState, db
 
     possible_keys = _build_status_print_keys(printer_id, state)
 
-    # In-memory ownership is lost on every Bambuddy restart. The archive row is
-    # the durable source of truth; subtask_id is minted per print and avoids
-    # authorizing an unrelated job that happens to reuse the same filename.
+    # In-memory ownership is lost on every Bambuddy restart, so fall back to what
+    # is on disk. subtask_id is minted per print and pins the answer to the job
+    # actually running, rather than to an unrelated one that reuses a filename.
     raw_subtask_id = getattr(state, "subtask_id", None)
     subtask_id = str(raw_subtask_id).strip() if raw_subtask_id is not None else ""
     if subtask_id in ("", "0"):
@@ -765,15 +765,44 @@ async def _is_bambuddy_authorized_print(printer_id: int, state: PrinterState, db
         .limit(1)
     )
     archive = result.scalar_one_or_none()
-    if archive is None:
-        return False
 
-    # Rehydrate the fast in-memory path for subsequent status frames. Include
-    # both the archive filename and every normalized key reported by MQTT.
-    _active_prints[(printer_id, archive.filename)] = archive.id
-    for key in possible_keys:
-        _active_prints[key] = archive.id
-    return True
+    # An archive row on its own proves nothing: `on_print_start` archives every
+    # print it observes, including ones started from Bambu Studio or Handy, and
+    # stamps them with the same status and subtask_id. Authorizing on its mere
+    # existence would disable the kill switch the moment the 3MF finishes
+    # downloading. Only a dispatch marker Bambuddy writes itself counts —
+    # `billing_run_id` (minted per dispatch in the scheduler) or `created_by_id`
+    # (carried over from the queue item that started it).
+    if archive is not None and (archive.billing_run_id is not None or archive.created_by_id is not None):
+        # Rehydrate the fast in-memory path for subsequent status frames. Include
+        # both the archive filename and every normalized key reported by MQTT.
+        _active_prints[(printer_id, archive.filename)] = archive.id
+        for key in possible_keys:
+            _active_prints[key] = archive.id
+        return True
+
+    # No dispatch marker. Before calling this someone else's print, check whether
+    # Bambuddy has a job of its own running on this printer: a library-file
+    # dispatch has no archive at send time, and an archive created seconds later
+    # by `on_print_start` carries neither marker. The queue row, which the
+    # scheduler commits to status="printing" before the MQTT send, is the one
+    # durable record every Bambuddy print has. It cannot be tied to this
+    # subtask_id, so it is grounds to defer, never to authorize — stopping a
+    # print is irreversible, and refusing to act costs nothing but a log line.
+    from backend.app.models.print_queue import PrintQueueItem
+
+    dispatched_here = await db.scalar(
+        select(PrintQueueItem.id)
+        .where(
+            PrintQueueItem.printer_id == printer_id,
+            PrintQueueItem.status == "printing",
+        )
+        .limit(1)
+    )
+    if dispatched_here is not None:
+        return None
+
+    return False
 
 
 async def _send_kill_switch_provider_notification(
