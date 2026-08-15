@@ -7022,6 +7022,12 @@ export default {
     },
   },
   gcodeViewer: {
+    blockedTitle: 'No se pudo incrustar la vista previa 3D',
+    blockedBody: 'Bambuddy permite que esta página muestre el visor de G-code incrustado, pero algo entre su navegador y Bambuddy lo está rechazando — normalmente un proxy inverso o un complemento de seguridad que envía su propia cabecera de marco. Abrir el visor en su propia pestaña no se ve afectado.',
+    unavailableTitle: 'La vista previa 3D no está disponible',
+    unavailableBody: 'Bambuddy no pudo servir los archivos del visor de G-code. Esto suele significar que falta el directorio gcode_viewer en la instalación; el registro de inicio también lo indica.',
+    problemDetail: 'Informado por el servidor: {{detail}}',
+    openInNewTab: 'Abrir el visor en una pestaña nueva',
     back: 'Atrás',
     backToArchives: 'Volver a los archivos de impresión',
     backToFiles: 'Volver al gestor de archivos',

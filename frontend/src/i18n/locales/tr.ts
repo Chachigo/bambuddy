@@ -6953,6 +6953,12 @@ export default {
     },
   },
   gcodeViewer: {
+    blockedTitle: '3D önizleme gömülemedi',
+    blockedBody: 'Bambuddy bu sayfanın G-code görüntüleyiciyi gömülü göstermesine izin veriyor, ancak tarayıcınızla Bambuddy arasındaki bir şey bunu reddediyor — genellikle kendi çerçeve başlığını gönderen bir ters proxy veya güvenlik eklentisi. Görüntüleyiciyi kendi sekmesinde açmak bundan etkilenmez.',
+    unavailableTitle: '3D önizleme kullanılamıyor',
+    unavailableBody: 'Bambuddy, G-code görüntüleyicinin dosyalarını sunamadı. Bu genellikle kurulumda gcode_viewer dizininin eksik olduğu anlamına gelir; başlangıç günlüğü de bunu belirtir.',
+    problemDetail: 'Sunucunun bildirdiği: {{detail}}',
+    openInNewTab: 'Görüntüleyiciyi yeni sekmede aç',
     back: 'Geri',
     backToArchives: 'Baskı Arşivlerine Dön',
     backToFiles: 'Dosya Yöneticisine Dön',

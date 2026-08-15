@@ -7001,6 +7001,12 @@ export default {
     },
   },
   gcodeViewer: {
+    blockedTitle: '無法嵌入 3D 預覽',
+    blockedBody: 'Bambuddy 允許此頁面內嵌顯示 G-code 檢視器，但瀏覽器與 Bambuddy 之間的某個環節拒絕了它 — 通常是傳送自有框架標頭的反向代理或安全外掛。在獨立分頁中開啟檢視器不受影響。',
+    unavailableTitle: '3D 預覽無法使用',
+    unavailableBody: 'Bambuddy 無法提供 G-code 檢視器的檔案。這通常表示安裝中缺少 gcode_viewer 目錄；啟動記錄中也會有相應紀錄。',
+    problemDetail: '伺服器回報：{{detail}}',
+    openInNewTab: '在新分頁中開啟檢視器',
     back: '返回',
     backToArchives: '返回列印歸檔',
     backToFiles: '返回檔案管理器',

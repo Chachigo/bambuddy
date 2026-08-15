@@ -7002,6 +7002,12 @@ export default {
     },
   },
   gcodeViewer: {
+    blockedTitle: 'Impossibile incorporare l\'anteprima 3D',
+    blockedBody: 'Bambuddy consente a questa pagina di mostrare il visualizzatore G-code incorporato, ma qualcosa tra il browser e Bambuddy lo rifiuta — di solito un reverse proxy o un\'estensione di sicurezza che invia una propria intestazione di frame. L\'apertura del visualizzatore in una scheda dedicata non è interessata.',
+    unavailableTitle: 'Anteprima 3D non disponibile',
+    unavailableBody: 'Bambuddy non è riuscito a servire i file del visualizzatore G-code. Di solito significa che la cartella gcode_viewer manca nell\'installazione; anche il log di avvio lo segnala.',
+    problemDetail: 'Segnalato dal server: {{detail}}',
+    openInNewTab: 'Apri il visualizzatore in una nuova scheda',
     back: 'Indietro',
     backToArchives: 'Torna agli archivi di stampa',
     backToFiles: 'Torna al gestore file',

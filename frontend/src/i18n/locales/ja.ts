@@ -7014,6 +7014,12 @@ export default {
     },
   },
   gcodeViewer: {
+    blockedTitle: '3Dプレビューを埋め込めませんでした',
+    blockedBody: 'BambuddyはこのページにG-codeビューアーを埋め込んで表示することを許可していますが、ブラウザーとBambuddyの間にある何かがそれを拒否しています。多くの場合、独自のフレームヘッダーを送信するリバースプロキシやセキュリティ拡張が原因です。ビューアーを別のタブで開く場合は影響ありません。',
+    unavailableTitle: '3Dプレビューを利用できません',
+    unavailableBody: 'BambuddyがG-codeビューアーのファイルを配信できませんでした。通常はインストールに gcode_viewer ディレクトリが存在しないことを意味します。起動ログにも記録されています。',
+    problemDetail: 'サーバーからの報告: {{detail}}',
+    openInNewTab: 'ビューアーを新しいタブで開く',
     back: '戻る',
     backToArchives: '印刷アーカイブに戻る',
     backToFiles: 'ファイル管理に戻る',

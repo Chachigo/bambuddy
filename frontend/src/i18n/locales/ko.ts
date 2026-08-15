@@ -6470,6 +6470,12 @@ export default {
     }
   },
   gcodeViewer: {
+    blockedTitle: '3D 미리보기를 삽입할 수 없습니다',
+    blockedBody: 'Bambuddy는 이 페이지에 G-code 뷰어를 삽입해 표시하도록 허용하지만, 브라우저와 Bambuddy 사이의 무언가가 이를 거부하고 있습니다. 대개 자체 프레임 헤더를 보내는 리버스 프록시나 보안 추가 기능이 원인입니다. 뷰어를 별도 탭에서 여는 것은 영향을 받지 않습니다.',
+    unavailableTitle: '3D 미리보기를 사용할 수 없습니다',
+    unavailableBody: 'Bambuddy가 G-code 뷰어 파일을 제공하지 못했습니다. 보통 설치본에 gcode_viewer 디렉터리가 없다는 뜻이며, 시작 로그에도 기록됩니다.',
+    problemDetail: '서버 보고: {{detail}}',
+    openInNewTab: '새 탭에서 뷰어 열기',
     back: '뒤로',
     backToArchives: '인쇄 아카이브로 돌아가기',
     backToFiles: '파일 관리자로 돌아가기'

@@ -7002,6 +7002,12 @@ export default {
     },
   },
   gcodeViewer: {
+    blockedTitle: 'Não foi possível incorporar a pré-visualização 3D',
+    blockedBody: 'O Bambuddy permite que esta página mostre o visualizador de G-code incorporado, mas algo entre o seu navegador e o Bambuddy está recusando — normalmente um proxy reverso ou um complemento de segurança que envia o próprio cabeçalho de quadro. Abrir o visualizador em uma aba própria não é afetado.',
+    unavailableTitle: 'A pré-visualização 3D está indisponível',
+    unavailableBody: 'O Bambuddy não conseguiu servir os arquivos do visualizador de G-code. Isso normalmente significa que o diretório gcode_viewer está ausente na instalação; o log de inicialização também informa isso.',
+    problemDetail: 'Informado pelo servidor: {{detail}}',
+    openInNewTab: 'Abrir o visualizador em uma nova aba',
     back: 'Voltar',
     backToArchives: 'Voltar para os arquivos de impressão',
     backToFiles: 'Voltar para o gerenciador de arquivos',
