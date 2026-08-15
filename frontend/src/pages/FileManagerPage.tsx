@@ -9,6 +9,7 @@ import {
   Upload,
   Trash2,
   Download,
+  ExternalLink,
   MoreVertical,
   ChevronRight,
   FolderPlus,
@@ -20,6 +21,7 @@ import {
   MoveRight,
   CheckSquare,
   Square,
+  Layers,
   LayoutGrid,
   List,
   Search,
@@ -72,6 +74,7 @@ import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
+import { isApiSliceableFilename, isSliceableFilename, openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 
 type SortField = 'name' | 'date' | 'size' | 'type' | 'prints';
 type SortDirection = 'asc' | 'desc';
@@ -740,14 +743,6 @@ function isSlicedFilename(filename: string): boolean {
   return lower.endsWith('.gcode') || lower.endsWith('.gcode.3mf');
 }
 
-// Files that can be fed to the slicer sidecar (model geometry inputs).
-// Excludes .gcode.* (already sliced) and any other non-model formats.
-function isSliceableFilename(filename: string): boolean {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.gcode') || lower.endsWith('.gcode.3mf')) return false;
-  return lower.endsWith('.stl') || lower.endsWith('.3mf') || lower.endsWith('.step') || lower.endsWith('.stp');
-}
-
 // File Card
 interface FileCardProps {
   file: LibraryFileListItem;
@@ -758,8 +753,10 @@ interface FileCardProps {
   onDownload: (id: number) => void;
   onPrint?: (file: LibraryFileListItem) => void;
   onSlice?: (file: LibraryFileListItem) => void;
+  onOpenInSlicer?: (file: LibraryFileListItem) => void;
   onRunPipeline?: (file: LibraryFileListItem) => void;
   useSlicerApi?: boolean;
+  canSlice?: boolean;
   onPreview3d?: (file: LibraryFileListItem) => void;
   onRename?: (file: LibraryFileListItem) => void;
   onGenerateThumbnail?: (file: LibraryFileListItem) => void;
@@ -772,7 +769,7 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, onPrint, onSlice, onRunPipeline, useSlicerApi, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, canSlice, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   const [showActions, setShowActions] = useState(false);
 
   return (
@@ -826,6 +823,14 @@ function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, 
           <div className="mt-1 text-xs text-bambu-gray flex items-center gap-1">
             <Printer className="w-3 h-3" />
             {file.sliced_for_model}
+          </div>
+        )}
+        {/* Counts the whole group, including members in other folders (#671 /
+            #2570) — printing this file will offer all of them. */}
+        {(file.variant_count ?? 0) > 1 && (
+          <div className="mt-1 text-xs text-bambu-green flex items-center gap-1">
+            <Layers className="w-3 h-3" />
+            {t('fileManager.variants.badge', { count: file.variant_count })}
           </div>
         )}
         {file.print_count > 0 && (
@@ -890,20 +895,26 @@ function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, 
                   {t('common.print')}
                 </button>
               )}
-              {onSlice && useSlicerApi && isSliceableFilename(file.filename) && (
+              {(useSlicerApi ? isApiSliceableFilename(file.filename) : isSliceableFilename(file.filename)) &&
+                (useSlicerApi ? onSlice : onOpenInSlicer) && (
                 <button
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    hasPermission('library:upload') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
+                    canSlice ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
-                  onClick={() => { if (hasPermission('library:upload')) { onSlice(file); setShowActions(false); } }}
-                  disabled={!hasPermission('library:upload')}
-                  title={!hasPermission('library:upload') ? t('fileManager.noPermissionSlice') : undefined}
+                  onClick={() => {
+                    if (!canSlice) return;
+                    if (useSlicerApi) onSlice?.(file);
+                    else onOpenInSlicer?.(file);
+                    setShowActions(false);
+                  }}
+                  disabled={!canSlice}
+                  title={!canSlice ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined}
                 >
-                  <Cog className="w-3.5 h-3.5" />
+                  {useSlicerApi ? <Cog className="w-3.5 h-3.5" /> : <ExternalLink className="w-3.5 h-3.5" />}
                   {t('slice.action')}
                 </button>
               )}
-              {onRunPipeline && useSlicerApi && isSliceableFilename(file.filename) && (
+              {onRunPipeline && useSlicerApi && isApiSliceableFilename(file.filename) && (
                 <button
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
                     hasPermission('pipelines:run') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
@@ -1136,6 +1147,45 @@ export function FileManagerPage() {
     queryKey: ['settings'],
     queryFn: () => api.getSettings() as Promise<AppSettings>,
   });
+
+  const preferredSlicer: SlicerType = resolveDesktopSlicer(settings?.open_in_slicer, settings?.preferred_slicer);
+
+  const handleOpenInSlicer = useCallback(async (file: LibraryFileListItem) => {
+    try {
+      const { token } = await api.createLibrarySlicerToken(file.id);
+      const path = api.getLibrarySlicerDownloadUrl(file.id, token, file.filename);
+      openInSlicer(`${window.location.origin}${path}`, preferredSlicer);
+    } catch {
+      // Fallback to direct URL (works when auth is disabled). With auth on the
+      // slicer may then hit a 401, so surface the failure instead of making a
+      // permission denial look identical to "no slicer installed".
+      showToast(t('fileManager.toast.openInSlicerFailed'), 'error');
+      const path = api.getLibraryFileDownloadUrl(file.id);
+      openInSlicer(`${window.location.origin}${path}`, preferredSlicer);
+    }
+  }, [preferredSlicer, showToast, t]);
+
+  // Slice permission: API mode needs upload rights, the desktop handoff is a
+  // download. Each mirrors what the backend enforces on the endpoint that
+  // branch actually calls, so the UI never offers an action the server refuses.
+  //
+  // Deliberately NOT accepting the legacy `library:read` on the handoff branch.
+  // It looks like the safe back-compat term to include, but the slicer-token
+  // endpoint gates on require_ownership_permission(LIBRARY_READ_ALL,
+  // LIBRARY_READ_OWN), and neither that dependency nor User.has_permission
+  // expands the legacy name — so a group holding only `library:read` gets a 403
+  // there. It cannot reach this page to find out either: GET /library/folders
+  // gates on the same pair. Accepting it here would only enable a menu item
+  // that fails, and the `library:read` -> `library:read_own` migration in
+  // core/database.py runs only over the groups named in DEFAULT_GROUPS, so a
+  // custom role that still carries it is genuinely stuck rather than silently
+  // upgraded.
+  const canSlice = useCallback(() => {
+    if (settings?.use_slicer_api) {
+      return hasPermission('library:upload');
+    }
+    return hasAnyPermission('library:read_all', 'library:read_own');
+  }, [settings?.use_slicer_api, hasPermission, hasAnyPermission]);
   const { data: folders, isLoading: foldersLoading } = useQuery({
     queryKey: ['library-folders'],
     queryFn: () => api.getLibraryFolders(),
@@ -1256,10 +1306,10 @@ export function FileManagerPage() {
     queryFn: () => api.getLibraryStats(),
   });
 
-  // Get users for the username filter autocomplete
+  // Get users for the username filter autocomplete -- names only (#1894)
   const { data: users } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => api.getUsers(),
+    queryKey: ['users', 'slim'],
+    queryFn: () => api.getUsersSlim(),
   });
 
   // Get unique file types for filter dropdown
@@ -1410,6 +1460,20 @@ export function FileManagerPage() {
     },
   });
 
+  // "These files are the same job for different printers" (#671 / #2570).
+  // Durable, unlike the ad-hoc selection the Print button uses: once grouped,
+  // printing any member offers the others without re-selecting them.
+  const groupAsVersionsMutation = useMutation({
+    mutationFn: (fileIds: number[]) =>
+      api.createVariantGroup(fileIds.map((id) => ({ library_file_id: id }))),
+    onSuccess: (group) => {
+      queryClient.invalidateQueries({ queryKey: ['library-files'] });
+      showToast(t('fileManager.variants.grouped', { count: group.members.length }), 'success');
+      setSelectedFiles([]);
+    },
+    onError: (error: Error) => showToast(error.message, 'error'),
+  });
+
   const bulkDeleteMutation = useMutation({
     mutationFn: (fileIds: number[]) => api.bulkDeleteLibrary(fileIds, []),
     onSuccess: (_, fileIds) => {
@@ -1542,6 +1606,36 @@ export function FileManagerPage() {
     if (!files) return [];
     return files.filter(f => selectedFiles.includes(f.id) && isSlicedFile(f.filename));
   }, [files, selectedFiles, isSlicedFile]);
+
+  // The clicked file's variant group, so printing one member offers the rest
+  // without the user re-selecting them (#2570).
+  const { data: printFileGroup } = useQuery({
+    queryKey: ['variant-group', printFile?.variant_group_id],
+    queryFn: () => api.getVariantGroup(printFile!.variant_group_id!),
+    enabled: !!printFile?.variant_group_id,
+  });
+
+  // Candidates for a cross-model print (#671), or undefined for an ordinary one.
+  // An explicit multi-selection wins over the group: the user just said, in this
+  // action, which files they meant.
+  const printVariantFiles = useMemo(() => {
+    if (!printFile) return undefined;
+    if (selectedSlicedFiles.length > 1) {
+      return selectedSlicedFiles.map(f => ({
+        id: f.id,
+        filename: f.filename,
+        sliced_for_model: f.sliced_for_model,
+      }));
+    }
+    if (printFileGroup && printFileGroup.members.length > 1) {
+      return printFileGroup.members.map(m => ({
+        id: m.library_file_id,
+        filename: m.filename,
+        sliced_for_model: m.target_model,
+      }));
+    }
+    return undefined;
+  }, [printFile, selectedSlicedFiles, printFileGroup]);
 
   // Handlers
   const handleFileSelect = useCallback((id: number) => {
@@ -2218,7 +2312,11 @@ export function FileManagerPage() {
                   </span>
                   <div className="hidden sm:block flex-1" />
                   <div className="w-full sm:w-auto flex flex-wrap items-center gap-2 mt-2 sm:mt-0">
-                    {selectedSlicedFiles.length === 1 && (
+                    {/* Print used to disappear the moment a second sliced file was
+                        selected. Selecting several is now how you say "same job,
+                        different printers" (#671) — one queue item, whichever
+                        machine frees up first. */}
+                    {selectedSlicedFiles.length >= 1 && (
                       <Button
                         variant="primary"
                         size="sm"
@@ -2227,7 +2325,26 @@ export function FileManagerPage() {
                         title={!hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined}
                       >
                         <Printer className="w-4 h-4 sm:mr-1" />
-                        <span className="hidden sm:inline">{t('common.print')}</span>
+                        <span className="hidden sm:inline">
+                          {selectedSlicedFiles.length > 1
+                            ? t('fileManager.variants.printAlternatives', { count: selectedSlicedFiles.length })
+                            : t('common.print')}
+                        </span>
+                      </Button>
+                    )}
+                    {selectedSlicedFiles.length >= 2 && !selectedSlicedFiles.some(f => f.variant_group_id) && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => groupAsVersionsMutation.mutate(selectedSlicedFiles.map(f => f.id))}
+                        disabled={
+                          groupAsVersionsMutation.isPending
+                          || !hasAnyPermission('library:update_own', 'library:update_all')
+                        }
+                        title={t('fileManager.variants.groupTooltip')}
+                      >
+                        <Layers className="w-4 h-4 sm:mr-1" />
+                        <span className="hidden sm:inline">{t('fileManager.variants.groupAction')}</span>
                       </Button>
                     )}
                     <Button
@@ -2344,8 +2461,10 @@ export function FileManagerPage() {
                     onDownload={handleDownload}
                     onPrint={setPrintFile}
                     onSlice={setSliceFile}
+                    onOpenInSlicer={handleOpenInSlicer}
                     onRunPipeline={setRunPipelineFile}
                     useSlicerApi={settings?.use_slicer_api ?? false}
+                    canSlice={canSlice()}
                     onPreview3d={(f) => {
                       // Sliced files (.gcode / .gcode.3mf) open the same
                       // full-page gcode viewer the archive card uses, so
@@ -2521,21 +2640,24 @@ export function FileManagerPage() {
                           </button>
                         </>
                       )}
-                      {(settings?.use_slicer_api ?? false) && isSliceableFilename(file.filename) && (
+                      {(settings?.use_slicer_api ? isApiSliceableFilename(file.filename) : isSliceableFilename(file.filename)) && (
                         <button
-                          onClick={() => hasPermission('library:upload') && setSliceFile(file)}
+                          onClick={() => {
+                            if (!canSlice()) return;
+                            (settings?.use_slicer_api ? setSliceFile : handleOpenInSlicer)(file);
+                          }}
                           className={`p-1.5 rounded transition-colors ${
-                            hasPermission('library:upload')
+                            canSlice()
                               ? 'hover:bg-bambu-dark text-bambu-gray hover:text-bambu-green'
                               : 'text-bambu-gray/50 cursor-not-allowed'
                           }`}
-                          title={hasPermission('library:upload') ? t('slice.action') : t('fileManager.noPermissionSlice')}
-                          disabled={!hasPermission('library:upload')}
+                          title={canSlice() ? t('slice.action') : (settings?.use_slicer_api ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload'))}
+                          disabled={!canSlice()}
                         >
-                          <Cog className="w-4 h-4" />
+                          {settings?.use_slicer_api ? <Cog className="w-4 h-4" /> : <ExternalLink className="w-4 h-4" />}
                         </button>
                       )}
-                      {(settings?.use_slicer_api ?? false) && isSliceableFilename(file.filename) && (
+                      {(settings?.use_slicer_api ?? false) && isApiSliceableFilename(file.filename) && (
                         <button
                           onClick={() => hasPermission('pipelines:run') && setRunPipelineFile(file)}
                           className={`p-1.5 rounded transition-colors ${
@@ -2732,11 +2854,21 @@ export function FileManagerPage() {
         />
       )}
 
-      {printFile && (
+      {/* Held back until the variant group has loaded. The modal reads its
+          candidate list once, on mount, so opening before the group arrives
+          would show a single-file print for a file that has alternatives. */}
+      {printFile && (!printFile.variant_group_id || printFileGroup !== undefined) && (
         <PrintModal
           mode="create"
-          libraryFileId={printFile.id}
-          archiveName={printFile.print_name || printFile.filename}
+          libraryFileId={printVariantFiles?.[0]?.id ?? printFile.id}
+          variantFiles={printVariantFiles}
+          // Naming a cross-model job after one of its files reads as though the
+          // others aren't part of it.
+          archiveName={
+            printVariantFiles && printVariantFiles.length > 1
+              ? `${printVariantFiles[0].filename} ${t('common.plusNMore', { count: printVariantFiles.length - 1 })}`
+              : printFile.print_name || printFile.filename
+          }
           onClose={() => setPrintFile(null)}
           onSuccess={() => {
             setPrintFile(null);
@@ -2771,7 +2903,7 @@ export function FileManagerPage() {
           onSliceWithBambuddy={
             // Only offer in-app slicing on files the SliceModal can actually
             // handle (matches the file-row Cog visibility check at :2127).
-            isSliceableFilename(viewerFile.filename) && hasPermission('library:upload')
+            isApiSliceableFilename(viewerFile.filename) && hasPermission('library:upload')
               ? () => {
                   const f = viewerFile;
                   setViewerFile(null);

@@ -40,6 +40,7 @@ class NotificationProviderBase(BaseModel):
         default=False,
         description="Notify when a print starts with required trays missing spool assignments",
     )
+    on_billing_charge_failed: bool = Field(default=True, description="Notify when a print charge cannot be recorded")
 
     # Event triggers - printer status
     on_printer_offline: bool = Field(default=False, description="Notify when printer goes offline")
@@ -54,11 +55,19 @@ class NotificationProviderBase(BaseModel):
     # Event triggers - AMS environmental alarms (regular AMS)
     on_ams_humidity_high: bool = Field(default=False, description="Notify when AMS humidity exceeds threshold")
     on_ams_temperature_high: bool = Field(default=False, description="Notify when AMS temperature exceeds threshold")
+    on_ams_drying_suspended: bool = Field(
+        default=True, description="Notify when automatic drying gives up on an AMS unit"
+    )
 
     # Event triggers - AMS-HT environmental alarms
     on_ams_ht_humidity_high: bool = Field(default=False, description="Notify when AMS-HT humidity exceeds threshold")
     on_ams_ht_temperature_high: bool = Field(
         default=False, description="Notify when AMS-HT temperature exceeds threshold"
+    )
+
+    # Event triggers - Home Assistant sensors (#1148)
+    on_ha_sensor_alert: bool = Field(
+        default=False, description="Notify when a bound Home Assistant sensor enters its alert state"
     )
 
     # Event triggers - Build plate detection
@@ -132,6 +141,7 @@ class NotificationProviderUpdate(BaseModel):
     on_print_stopped: bool | None = None
     on_print_progress: bool | None = None
     on_print_missing_spool_assignment: bool | None = None
+    on_billing_charge_failed: bool | None = None
 
     # Event triggers - printer status
     on_printer_offline: bool | None = None
@@ -143,10 +153,14 @@ class NotificationProviderUpdate(BaseModel):
     # Event triggers - AMS environmental alarms (regular AMS)
     on_ams_humidity_high: bool | None = None
     on_ams_temperature_high: bool | None = None
+    on_ams_drying_suspended: bool | None = None
 
     # Event triggers - AMS-HT environmental alarms
     on_ams_ht_humidity_high: bool | None = None
     on_ams_ht_temperature_high: bool | None = None
+
+    # Event triggers - Home Assistant sensors (#1148)
+    on_ha_sensor_alert: bool | None = None
 
     # Event triggers - Build plate detection
     on_plate_not_empty: bool | None = None

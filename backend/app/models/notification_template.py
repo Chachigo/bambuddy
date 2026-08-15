@@ -62,6 +62,12 @@ DEFAULT_TEMPLATES = [
         "body_template": "{printer}: print started with missing spool assignments\nSlots: {missing_slots}\nExpected profile:\n{missing_slot_details}",
     },
     {
+        "event_type": "billing_charge_failed",
+        "name": "Billing Charge Failed",
+        "title_template": "Billing Charge Failed",
+        "body_template": "{printer}: {filename}\nThe print charge could not be recorded. The budget reservation was retained.\nArchive: {archive_id}",
+    },
+    {
         "event_type": "printer_offline",
         "name": "Printer Offline",
         "title_template": "Printer Offline",
@@ -116,10 +122,26 @@ DEFAULT_TEMPLATES = [
         "body_template": "{printer} {ams_label}: Temperature {temperature}°C exceeds {threshold}°C threshold",
     },
     {
+        "event_type": "ams_drying_suspended",
+        "name": "Auto-Drying Suspended",
+        "title_template": "Auto-Drying Suspended",
+        "body_template": (
+            "{printer} {ams_label}: stopped automatic drying after {cycles} cycles left humidity at "
+            "{humidity}%, still above the {threshold}% threshold. An AMS reads higher while it is warm, "
+            "so raise the threshold or dry the spools off the printer."
+        ),
+    },
+    {
         "event_type": "bed_cooled",
         "name": "Bed Cooled",
         "title_template": "Bed Cooled",
         "body_template": "{printer}: Bed cooled to {bed_temp}°C (threshold: {threshold}°C)",
+    },
+    {
+        "event_type": "ha_sensor_alert",
+        "name": "Home Assistant Sensor Alert",
+        "title_template": "Sensor Alert",
+        "body_template": "{printer}: {sensor} is {state}",
     },
     {
         "event_type": "first_layer_complete",

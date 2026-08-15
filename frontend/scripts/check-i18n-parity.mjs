@@ -220,6 +220,8 @@ const FR_COGNATES = [
   'Compact',  // cam-wall status overlay mode — same word in French
   'ntfy, Pushover, Discord, etc.',
   '{{filament}} @ {{temp}}°C',  // drying badge: filament code + universal °C
+  'Simple', 'Expert',  // slicer settings visibility tiers — identical words in French
+  'Support',  // same word in French
 ];
 
 // Italian cognates.
@@ -254,6 +256,7 @@ const IT_COGNATES = [
   'Proxy', 'Designer',
   'Off',  // cam-wall status overlay mode — common loanword in Italian UI
   '{{filament}} @ {{temp}}°C',  // drying badge: filament code + universal °C
+  'Skirt / brim',  // Italian slicer UIs keep the English terms
 ];
 
 // Japanese: very few cognates because of script difference. Almost
@@ -365,6 +368,7 @@ const ES_COGNATES = [
   'Avery L7160 — A4 sheet (38.1 × 63.5 mm × 21)',
   'Avery 5160 — US Letter sheet (25.4 × 66.7 mm × 30)',
   '{{filament}} @ {{temp}}°C',  // drying badge: filament code + universal °C
+  'Simple',  // slicer settings visibility tier — identical word in Spanish
 ];
 
 // Turkish cognates — technical UI labels that Turkish speakers use verbatim

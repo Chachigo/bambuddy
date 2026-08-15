@@ -44,6 +44,7 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
         "on_print_stopped": provider.on_print_stopped,
         "on_print_progress": provider.on_print_progress,
         "on_print_missing_spool_assignment": provider.on_print_missing_spool_assignment,
+        "on_billing_charge_failed": provider.on_billing_charge_failed,
         # Printer status events
         "on_printer_offline": provider.on_printer_offline,
         "on_printer_error": provider.on_printer_error,
@@ -53,6 +54,7 @@ def _provider_to_dict(provider: NotificationProvider) -> dict:
         # AMS environmental alarms (regular AMS)
         "on_ams_humidity_high": provider.on_ams_humidity_high,
         "on_ams_temperature_high": provider.on_ams_temperature_high,
+        "on_ams_drying_suspended": provider.on_ams_drying_suspended,
         # AMS-HT environmental alarms
         "on_ams_ht_humidity_high": provider.on_ams_ht_humidity_high,
         "on_ams_ht_temperature_high": provider.on_ams_ht_temperature_high,
@@ -126,6 +128,7 @@ async def create_notification_provider(
         on_print_stopped=provider_data.on_print_stopped,
         on_print_progress=provider_data.on_print_progress,
         on_print_missing_spool_assignment=provider_data.on_print_missing_spool_assignment,
+        on_billing_charge_failed=provider_data.on_billing_charge_failed,
         # Printer status events
         on_printer_offline=provider_data.on_printer_offline,
         on_printer_error=provider_data.on_printer_error,
@@ -135,6 +138,7 @@ async def create_notification_provider(
         # AMS environmental alarms (regular AMS)
         on_ams_humidity_high=provider_data.on_ams_humidity_high,
         on_ams_temperature_high=provider_data.on_ams_temperature_high,
+        on_ams_drying_suspended=provider_data.on_ams_drying_suspended,
         # AMS-HT environmental alarms
         on_ams_ht_humidity_high=provider_data.on_ams_ht_humidity_high,
         on_ams_ht_temperature_high=provider_data.on_ams_ht_temperature_high,

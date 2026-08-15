@@ -8,7 +8,7 @@
  * the tracker — not here.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
@@ -33,6 +33,8 @@ vi.mock('../../api/client', () => ({
     // Slicer Pipelines (#1425)
     listSlicerPipelines: vi.fn(),
     createSlicerPipeline: vi.fn(),
+    getSlicerPrinterModels: vi.fn(),
+    getSlicerPresetValues: vi.fn(),
   },
 }));
 
@@ -47,6 +49,8 @@ const mockApi = api as unknown as {
   getArchiveFilamentRequirements: ReturnType<typeof vi.fn>;
   listSlicerPipelines: ReturnType<typeof vi.fn>;
   createSlicerPipeline: ReturnType<typeof vi.fn>;
+  getSlicerPrinterModels: ReturnType<typeof vi.fn>;
+  getSlicerPresetValues: ReturnType<typeof vi.fn>;
 };
 
 function makeUnified(overrides: Partial<UnifiedPresetsResponse> = {}): UnifiedPresetsResponse {
@@ -101,6 +105,7 @@ describe('SliceModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
     mockApi.getSliceJob.mockResolvedValue({
       job_id: 42,
       status: 'running',
@@ -350,10 +355,25 @@ describe('SliceModal', () => {
     ],
   };
 
+  // The designer's settings are shown inside the process-settings panel now,
+  // against the options they belong to, rather than in a list of their own.
+  // The payload contract below is unchanged: their *values* still travel as
+  // design_overrides keys, read from the file by the backend.
   async function openDesignSection() {
     const user = userEvent.setup();
-    await user.click(await screen.findByText(/Keep the designer's settings/));
+    await user.click(await screen.findByRole('button', { name: /Process settings/ }));
+    await screen.findByPlaceholderText('Search settings');
+    // Every designer key must be reachable, including expert-tier ones.
+    await user.click(screen.getByRole('button', { name: 'Expert' }));
     return user;
+  }
+
+  /** The panel's per-option "use the file's value" checkbox, by option key. */
+  function sourceCheckbox(key: string): HTMLInputElement {
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    const found = boxes.find((b) => (b.getAttribute('aria-label') ?? '').includes(key));
+    if (!found) throw new Error(`no source checkbox for ${key}`);
+    return found;
   }
 
   it("carries the design's printer-independent settings by default (#2622)", async () => {
@@ -369,8 +389,9 @@ describe('SliceModal', () => {
       onClose: vi.fn(),
     });
 
-    // Two of three pre-selected: the speed key is machine-coupled.
-    expect(await screen.findByText('2 of 3 selected')).toBeInTheDocument();
+    // Two of three pre-selected: the speed key is machine-coupled and is
+    // offered but never pre-ticked.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Slice$/ })).toBeEnabled());
 
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /^Slice$/ }));
@@ -388,15 +409,18 @@ describe('SliceModal', () => {
       onClose: vi.fn(),
     });
 
-    await openDesignSection();
+    const user = await openDesignSection();
 
-    expect(screen.getByText('wall_loops')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('sparse_infill_density')).toBeInTheDocument();
-    expect(screen.getByText('100%')).toBeInTheDocument();
-    // The risky one is listed too — visible, explained, just not pre-ticked.
-    expect(screen.getByText('outer_wall_speed')).toBeInTheDocument();
-    expect(screen.getByText('printer-specific')).toBeInTheDocument();
+    // Carried keys show the designer's value in the option's own control.
+    await user.type(screen.getByPlaceholderText('Search settings'), 'wall loops');
+    await waitFor(() => expect(screen.getByLabelText(/^Wall loops/)).toHaveValue(5));
+    expect(sourceCheckbox('Wall loops').checked).toBe(true);
+
+    await user.clear(screen.getByPlaceholderText('Search settings'));
+    await user.type(screen.getByPlaceholderText('Search settings'), 'outer wall speed');
+    // The machine-coupled one is present and flagged, just not pre-ticked.
+    await waitFor(() => expect(screen.getAllByText("designer's printer").length).toBeGreaterThan(0));
+    expect(sourceCheckbox('Outer wall').checked).toBe(false);
   });
 
   it('lets the user opt a machine-coupled setting in and a safe one out (#2622)', async () => {
@@ -413,12 +437,15 @@ describe('SliceModal', () => {
     });
 
     const user = await openDesignSection();
-    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
-    const byKey = (key: string) =>
-      boxes.find((b) => b.closest('label')?.textContent?.includes(key)) as HTMLInputElement;
 
-    await user.click(byKey('outer_wall_speed'));
-    await user.click(byKey('wall_loops'));
+    await user.type(screen.getByPlaceholderText('Search settings'), 'outer wall speed');
+    await waitFor(() => expect(sourceCheckbox('Outer wall')).toBeInTheDocument());
+    await user.click(sourceCheckbox('Outer wall'));
+
+    await user.clear(screen.getByPlaceholderText('Search settings'));
+    await user.type(screen.getByPlaceholderText('Search settings'), 'wall loops');
+    await waitFor(() => expect(sourceCheckbox('Wall loops')).toBeInTheDocument());
+    await user.click(sourceCheckbox('Wall loops'));
 
     await user.click(screen.getByRole('button', { name: /^Slice$/ }));
 
@@ -441,9 +468,11 @@ describe('SliceModal', () => {
     });
 
     const user = await openDesignSection();
-    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
-    for (const box of boxes) {
-      if (box.checked) await user.click(box);
+    for (const key of ['Wall loops', 'Sparse infill density']) {
+      await user.clear(screen.getByPlaceholderText('Search settings'));
+      await user.type(screen.getByPlaceholderText('Search settings'), key.toLowerCase());
+      await waitFor(() => expect(sourceCheckbox(key)).toBeInTheDocument());
+      if (sourceCheckbox(key).checked) await user.click(sourceCheckbox(key));
     }
 
     await user.click(screen.getByRole('button', { name: /^Slice$/ }));
@@ -461,7 +490,10 @@ describe('SliceModal', () => {
     });
 
     await waitFor(() => expect(screen.getByRole('button', { name: /^Slice$/ })).toBeEnabled());
-    expect(screen.queryByText(/Keep the designer's settings/)).toBeNull();
+    // The panel still exists — it is the editor — but nothing is marked as
+    // coming from the file.
+    expect(screen.queryByText('from file')).toBeNull();
+    expect(screen.queryByText("designer's printer")).toBeNull();
   });
 
   it('includes bed_type in the request when the user picks a non-auto plate (#1337)', async () => {
@@ -520,6 +552,57 @@ describe('SliceModal', () => {
     await waitFor(() => {
       const [, body] = vi.mocked(mockApi.sliceLibraryFile).mock.calls[0];
       expect(body).not.toHaveProperty('bed_type');
+    });
+  });
+
+  it('sends the layout flags only for the boxes the user ticked (#2548)', async () => {
+    mockApi.sliceLibraryFile.mockResolvedValue({
+      job_id: 42,
+      status: 'pending',
+      status_url: '/api/v1/slice-jobs/42',
+    });
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('checkbox', { name: /Auto-orient objects/ }));
+    await user.click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => {
+      const [, body] = vi.mocked(mockApi.sliceLibraryFile).mock.calls[0];
+      expect(body).toHaveProperty('auto_orient', true);
+      // The untouched box is omitted, not sent as false. The sidecar reads
+      // any present value as truthy, so a literal false would arrange every
+      // slice — the flag has to travel by absence.
+      expect(body).not.toHaveProperty('auto_arrange');
+    });
+  });
+
+  it('omits both layout flags when neither box is ticked (#2548)', async () => {
+    mockApi.sliceLibraryFile.mockResolvedValue({
+      job_id: 42,
+      status: 'pending',
+      status_url: '/api/v1/slice-jobs/42',
+    });
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+
+    await userEvent.setup().click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => {
+      const [, body] = vi.mocked(mockApi.sliceLibraryFile).mock.calls[0];
+      expect(body).not.toHaveProperty('auto_orient');
+      expect(body).not.toHaveProperty('auto_arrange');
     });
   });
 
@@ -1466,6 +1549,246 @@ describe('SliceModal', () => {
 
 // Pure-function tests for the filament slot picker. Pinned as a separate
 // describe so the contract is visible without needing the modal mount.
+/**
+ * The slice dialog switches to a two-column layout once there is room for it,
+ * and the process-settings panel then owns the right-hand column. The global
+ * test setup pins matchMedia to `matches: false`, so every other test in this
+ * file exercises the narrow single-stack path; these override it.
+ */
+describe('SliceModal — process settings in "slice as designed" mode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
+    mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getSlicerPrinterModels.mockResolvedValue({});
+    mockApi.getLibraryFilePlates.mockResolvedValue({
+      file_id: 100,
+      filename: 'Designed.3mf',
+      plates: [],
+      is_multi_plate: false,
+      embedded_printer: 'Bambu Lab X1 Carbon 0.4 nozzle',
+      embedded_process: '0.20mm Standard',
+    });
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue({
+      file_id: 100, filename: 'Designed.3mf', plate_id: 1, filaments: [],
+    });
+  });
+
+  it('disables the panel rather than removing it', async () => {
+    const user = userEvent.setup();
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Designed.3mf' },
+      onClose: vi.fn(),
+    });
+
+    const toggle = (await screen.findByLabelText(/Use the file's built-in settings/)) as HTMLInputElement;
+    const header = await screen.findByRole('button', { name: /Process settings/ });
+    await user.click(header);
+    const search = await screen.findByPlaceholderText('Search settings');
+    expect(search).toBeEnabled();
+
+    await user.click(toggle);
+
+    // Still on screen — hiding it made the dialog look like it had lost a
+    // feature — but nothing in it can be operated, because nothing in it is
+    // sent on this path.
+    expect(screen.getByPlaceholderText('Search settings')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Expert' })).toBeDisabled();
+    expect(screen.getByText(/Not used while/)).toBeInTheDocument();
+    expect(screen.getByText('Inactive')).toBeInTheDocument();
+  });
+
+  it('sends no process overrides once the file drives the slice', async () => {
+    mockApi.sliceLibraryFile.mockResolvedValue({ job_id: 42, status: 'pending', status_url: '/x' });
+    const user = userEvent.setup();
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Designed.3mf' },
+      onClose: vi.fn(),
+    });
+
+    // Edit something, then hand the slice over to the file's own settings.
+    await user.click(await screen.findByRole('button', { name: /Process settings/ }));
+    const input = await screen.findByLabelText(/^Layer height/);
+    await user.clear(input);
+    await user.type(input, '0.16');
+
+    await user.click(screen.getByLabelText(/Use the file's built-in settings/));
+    await user.click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => expect(mockApi.sliceLibraryFile).toHaveBeenCalled());
+    const payload = mockApi.sliceLibraryFile.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.use_embedded_settings).toBe(true);
+    expect(payload).not.toHaveProperty('process_overrides');
+  });
+});
+
+describe('SliceModal — process settings layout', () => {
+  const setViewport = (wide: boolean) => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: (query: string) => ({
+        matches: wide,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => true,
+      }),
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
+    mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getLibraryFilePlates.mockResolvedValue({
+      file_id: 100,
+      filename: 'Cube.stl',
+      plates: [],
+      is_multi_plate: false,
+    });
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue({
+      file_id: 100,
+      filename: 'Cube.stl',
+      plate_id: 1,
+      filaments: [],
+    });
+  });
+
+  afterEach(() => setViewport(false));
+
+  it('keeps the panel collapsed behind a disclosure in the narrow layout', async () => {
+    setViewport(false);
+    renderWithTracker({ source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' }, onClose: vi.fn() });
+
+    const header = await screen.findByRole('button', { name: /Process settings/ });
+    expect(header).toBeEnabled();
+    expect(screen.queryByPlaceholderText('Search settings')).not.toBeInTheDocument();
+
+    await userEvent.setup().click(header);
+    await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
+  });
+
+  it('opens the panel without a click once it has a column of its own', async () => {
+    setViewport(true);
+    renderWithTracker({ source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' }, onClose: vi.fn() });
+
+    // No disclosure to operate: the panel is the column, so its header is
+    // inert rather than offering to collapse something that has room.
+    await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Process settings/ })).toBeDisabled();
+  });
+});
+
+/**
+ * Process and filament lists hold back presets that resolve to a *different*
+ * printer, behind a per-slot "Show all". Two things must never be hidden: a
+ * preset whose compatibility is merely unknown, and whatever is currently
+ * selected.
+ */
+describe('SliceModal — presets filtered by the selected printer', () => {
+  const presets: UnifiedPresetsResponse = {
+    cloud: { printer: [], process: [], filament: [] },
+    orca_cloud: { printer: [], process: [], filament: [] },
+    local: { printer: [], process: [], filament: [] },
+    standard: {
+      printer: [
+        { id: 'Bambu Lab X1 Carbon 0.4 nozzle', name: 'Bambu Lab X1 Carbon 0.4 nozzle', source: 'standard' },
+      ],
+      process: [
+        { id: 'p-x1c', name: '0.20mm Standard @BBL X1C', source: 'standard' },
+        { id: 'p-h2d', name: '0.20mm Standard @BBL H2D', source: 'standard' },
+        { id: 'p-a1m', name: '0.20mm Standard @BBL A1M', source: 'standard' },
+        // No printer tag at all — compatibility is unknown, never hidden.
+        { id: 'p-custom', name: 'My own profile', source: 'standard' },
+      ],
+      filament: [{ id: 'f-x1c', name: 'Bambu PLA Basic @BBL X1C', source: 'standard' }],
+    },
+    cloud_status: 'ok',
+    orca_cloud_status: 'ok',
+  } as UnifiedPresetsResponse;
+
+  const processOptionNames = () =>
+    Array.from(presetSelects()[1].options).map((o) => o.textContent);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSlicerPresets.mockResolvedValue(presets);
+    mockApi.getSlicerPrinterModels.mockResolvedValue({ 'Bambu Lab X1 Carbon': 'X1C' });
+    mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getLibraryFilePlates.mockResolvedValue({
+      file_id: 100, filename: 'Cube.stl', plates: [], is_multi_plate: false,
+    });
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue({
+      file_id: 100, filename: 'Cube.stl', plate_id: 1, filaments: [],
+    });
+  });
+
+  const open = async () => {
+    renderWithTracker({ source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' }, onClose: vi.fn() });
+    await waitFor(() => expect(presetSelects().length).toBeGreaterThan(1));
+  };
+
+  it('leaves out presets belonging to another printer', async () => {
+    await open();
+    await waitFor(() => expect(processOptionNames()).toContain('0.20mm Standard @BBL X1C'));
+    expect(processOptionNames()).not.toContain('0.20mm Standard @BBL H2D');
+    expect(processOptionNames()).not.toContain('0.20mm Standard @BBL A1M');
+  });
+
+  it('keeps a preset whose compatibility cannot be determined', async () => {
+    await open();
+    // An untagged preset carries no evidence either way; hiding it would make
+    // a user's own imported profiles vanish.
+    await waitFor(() => expect(processOptionNames()).toContain('My own profile'));
+  });
+
+  it('says how many it held back and reveals them on request', async () => {
+    const user = userEvent.setup();
+    await open();
+
+    const hidden = await screen.findByText('2 hidden');
+    expect(hidden).toBeInTheDocument();
+
+    await user.click(within(hidden.parentElement as HTMLElement).getByRole('button', { name: 'Show all' }));
+    await waitFor(() => expect(processOptionNames()).toContain('0.20mm Standard @BBL H2D'));
+    expect(processOptionNames()).toContain('0.20mm Standard @BBL A1M');
+  });
+
+  it('collapses the list again on Show fewer', async () => {
+    const user = userEvent.setup();
+    await open();
+
+    await user.click((await screen.findAllByRole('button', { name: 'Show all' }))[0]);
+    await waitFor(() => expect(processOptionNames()).toContain('0.20mm Standard @BBL H2D'));
+
+    await user.click(screen.getAllByRole('button', { name: 'Show fewer' })[0]);
+    await waitFor(() => expect(processOptionNames()).not.toContain('0.20mm Standard @BBL H2D'));
+  });
+
+  it('never hides the preset that is currently selected', async () => {
+    const user = userEvent.setup();
+    await open();
+
+    // Reach a cross-printer preset, pick it, then collapse the list again.
+    await user.click((await screen.findAllByRole('button', { name: 'Show all' }))[0]);
+    await waitFor(() => expect(processOptionNames()).toContain('0.20mm Standard @BBL H2D'));
+    await user.selectOptions(presetSelects()[1], 'standard:p-h2d');
+    await user.click(screen.getAllByRole('button', { name: 'Show fewer' })[0]);
+
+    // Dropping it from the options would blank the select and silently discard
+    // a deliberate cross-printer choice.
+    await waitFor(() => expect(processOptionNames()).toContain('0.20mm Standard @BBL H2D'));
+    expect(presetSelects()[1].value).toBe('standard:p-h2d');
+    // The one still-hidden preset is counted; the selected one is not.
+    expect(screen.getByText('1 hidden')).toBeInTheDocument();
+  });
+});
+
 describe('pickFilamentForSlot — printer-compat contract (#1851)', () => {
   // Index that recognises @BBL H2C / @BBL A1 tokens via the canonical
   // PRINTER_MODEL_MAP. Real production data comes through

@@ -238,6 +238,86 @@ def drying_screen_only(model: str | None) -> bool:
     return model.strip().upper() in _DRYING_SCREEN_ONLY_MODELS
 
 
+# Temperature keys the UI actually draws. `state.temperatures` is also working
+# memory: it carries private bookkeeping (`_nozzle_target_set_time`) and derived
+# flags (`nozzle_heating`) that no consumer outside this module should see. The
+# full-status path hands out the whole dict to logged-in callers; the streaming
+# overlay gets only this list, because an overlay token is a narrower grant than
+# a login and should not pick up fields by accident as the dict grows.
+DISPLAY_TEMPERATURE_KEYS = (
+    "nozzle",
+    "nozzle_target",
+    "nozzle_2",
+    "nozzle_2_target",
+    "bed",
+    "bed_target",
+    "chamber",
+    "chamber_target",
+)
+
+
+def display_temperatures(temperatures: dict | None, model: str | None) -> dict[str, float]:
+    """Filter `state.temperatures` down to the readings a viewer is shown.
+
+    Drops chamber readings on models without a real chamber sensor — P1P, P1S,
+    A1 and A1 mini all report a meaningless `chamber_temper` — matching what
+    ``printer_state_to_dict`` already does for the full status payload.
+    """
+    if not temperatures:
+        return {}
+    allow_chamber = supports_chamber_temp(model)
+    out: dict[str, float] = {}
+    for key in DISPLAY_TEMPERATURE_KEYS:
+        if key.startswith("chamber") and not allow_chamber:
+            continue
+        value = temperatures.get(key)
+        if value is None:
+            continue
+        try:
+            out[key] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def uniform_tray_filament_hint(loaded_types: list[str]) -> str | None:
+    """Guess an active cycle's filament from the loaded trays.
+
+    Bambu never echoes back which filament or temperature a drying cycle is
+    running, so the badge normally reads the target we cached when we sent the
+    command. This is the fallback for when we have no record — drying started in
+    a previous backend lifetime, or from the printer's own screen.
+
+    It answers only when every loaded tray holds the same filament type. On a
+    mixed unit the first tray is evidence of nothing: an AMS holding two PETG
+    and two PLA spools, drying PLA at the 45°C the user picked, was labelled
+    "PETG @ 65°C" purely because slot 1 happened to be PETG (#2759).
+
+    Deliberately no temperature. The RFID-recommended ``drying_temp`` used to be
+    returned alongside a uniform filament, which narrowed #2759 to units whose
+    spools disagree but left the uniform case stating a temperature just as
+    invented: a unit loaded entirely with PLA, drying at the 45°C the user
+    picked, read "PLA @ 55°C" the moment the cached target went missing. The
+    filament type is real evidence — every spool in the unit agrees on it, and
+    the dryer heats all of them — but the temperature is a free choice in the
+    popover, so a recommendation is never evidence of what is running. The badge
+    shows the filament and the countdown, and names a temperature only when we
+    actually sent it.
+
+    Args:
+        loaded_types: ``tray_type`` for each tray, in slot order. Empty slots
+            (falsy) are ignored.
+
+    Returns:
+        The shared filament type, or None if the loaded trays disagree or the
+        unit is empty.
+    """
+    types = {str(tray_type) for tray_type in loaded_types if tray_type}
+    if len(types) != 1:
+        return None
+    return next(iter(types))
+
+
 def supports_drying(model: str | None, firmware: str | None) -> bool:
     """Check if a printer model accepts remote AMS drying commands.
 
@@ -329,6 +409,7 @@ class PrinterManager:
         self._on_bed_temp_update: Callable[[int, float], None] | None = None
         self._on_drying_complete: Callable[[int, int], None] | None = None
         self._on_assignment_verified: Callable[[int, int, int, bool, dict], None] | None = None
+        self._on_tray_change: Callable[[int, int, int], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # Track who started the current print (Issue #206)
         self._current_print_user: dict[int, dict] = {}  # {printer_id: {"user_id": int, "username": str}}
@@ -579,6 +660,15 @@ class PrinterManager:
         """
         self._on_assignment_verified = callback
 
+    def set_tray_change_callback(self, callback: Callable[[int, int, int], None]):
+        """Set callback for mid-print tray changes.
+
+        Receives ``(printer_id, global_tray_id, layer_num)`` for every entry
+        appended to the printer's tray-change log, so it can be persisted for
+        the completion-time weight split.
+        """
+        self._on_tray_change = callback
+
     def _schedule_async(self, coro):
         """Schedule an async coroutine from a sync context.
 
@@ -650,6 +740,10 @@ class PrinterManager:
             if self._on_assignment_verified:
                 self._schedule_async(self._on_assignment_verified(printer_id, ams_id, tray_id, verified, detail))
 
+        def on_tray_change(tray_global: int, layer_num: int):
+            if self._on_tray_change:
+                self._schedule_async(self._on_tray_change(printer_id, tray_global, layer_num))
+
         client = BambuMQTTClient(
             ip_address=printer.ip_address,
             serial_number=printer.serial_number,
@@ -666,6 +760,7 @@ class PrinterManager:
             on_print_running_observed=on_print_running_observed,
             on_finish_photo_moment=on_finish_photo_moment,
             on_assignment_verified=on_assignment_verified,
+            on_tray_change=on_tray_change,
         )
 
         client.connect()
@@ -791,6 +886,7 @@ class PrinterManager:
         use_ams: bool = True,
         nozzle_offset_cali: str = "auto",
         nozzle_mapping: str | None = None,
+        nozzle_slot_extruders: str | None = None,
     ) -> bool:
         """Start a print on a connected printer.
 
@@ -798,6 +894,10 @@ class PrinterManager:
         project_file MQTT command (H2C rack-swap slicer pick preservation,
         #1780). It rides through to the MQTT client untouched; the dispatch
         builder there parses + injects it only on dual-nozzle models.
+
+        ``nozzle_slot_extruders`` is the fallback for a job that never passed
+        through BambuStudio (#2800): per-slot extruder indices the MQTT layer
+        resolves into physical rack positions, and only on rack models.
         """
         caller = traceback.extract_stack(limit=3)[0]
         logger.info(
@@ -821,6 +921,7 @@ class PrinterManager:
                 use_ams=use_ams,
                 nozzle_offset_cali=nozzle_offset_cali,
                 nozzle_mapping=nozzle_mapping,
+                nozzle_slot_extruders=nozzle_slot_extruders,
             )
         return False
 
@@ -1254,9 +1355,9 @@ def printer_state_to_dict(
             # per-tick AMS push, so prefer the cached target from the last
             # ``send_drying_command``. When we have no record (drying
             # started in a previous backend lifetime, or the cache was
-            # never seeded), fall back to the first loaded tray's
-            # tray_type + RFID-recommended drying_temp — the same heuristic
-            # the popover already uses to seed defaults.
+            # never seeded), the loaded trays can still name the filament
+            # if they agree — but never the temperature, which only the
+            # cache knows. See uniform_tray_filament_hint.
             ams_id_int = int(ams_data.get("id", 0))
             target = (drying_targets or {}).get(ams_id_int)
             dry_target_temp: int | None = None
@@ -1271,17 +1372,8 @@ def printer_state_to_dict(
                         dry_target_temp = None
                 if fil_val:
                     dry_filament = str(fil_val)
-            if dry_target_temp is None or not dry_filament:
-                for tray in trays:
-                    if tray.get("tray_type"):
-                        if not dry_filament:
-                            dry_filament = str(tray["tray_type"])
-                        if dry_target_temp is None and tray.get("drying_temp"):
-                            try:
-                                dry_target_temp = int(tray["drying_temp"])
-                            except (TypeError, ValueError):
-                                pass
-                        break
+            if not dry_filament:
+                dry_filament = uniform_tray_filament_hint([tray.get("tray_type") or "" for tray in trays])
 
             ams_units.append(
                 {

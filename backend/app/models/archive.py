@@ -18,6 +18,9 @@ class PrintArchive(Base):
     library_file_id: Mapped[int | None] = mapped_column(
         ForeignKey("library_files.id", ondelete="SET NULL"), nullable=True
     )
+    cost_center_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cost_centers.id", ondelete="SET NULL"), nullable=True
+    )
 
     # File info
     filename: Mapped[str] = mapped_column(String(255))
@@ -71,6 +74,9 @@ class PrintArchive(Base):
     # if the same subtask_id reappears after restart, we know it's the same
     # print and keep the original row instead of cancel-then-create.
     subtask_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Durable Bambuddy UUID for billing idempotency. Unlike subtask_id, this is
+    # not constrained by printer firmware and is replaced for every reprint.
+    billing_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # Which plate of a multi-plate 3MF this print was for (1-based), copied from
     # the queue item at dispatch (#2603). A whole multi-plate 3MF is uploaded
@@ -92,6 +98,7 @@ class PrintArchive(Base):
 
     # User additions
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    wallet_charge_skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     tags: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str | None] = mapped_column(Text)
     cost: Mapped[float | None] = mapped_column(Float)
@@ -122,9 +129,11 @@ class PrintArchive(Base):
     # Relationships
     printer: Mapped["Printer | None"] = relationship(back_populates="archives")
     project: Mapped["Project | None"] = relationship(back_populates="archives")
+    cost_center: Mapped["CostCenter | None"] = relationship()
     created_by: Mapped["User | None"] = relationship()
 
 
+from backend.app.models.finance import CostCenter  # noqa: E402, F811
 from backend.app.models.printer import Printer  # noqa: E402, F811
 from backend.app.models.project import Project  # noqa: E402, F811
 from backend.app.models.user import User  # noqa: E402, F811

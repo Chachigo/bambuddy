@@ -18,6 +18,7 @@ from backend.app.core.tasks import spawn_background_task
 from backend.app.models.archive import PrintArchive
 from backend.app.models.filament import Filament
 from backend.app.models.printer import Printer
+from backend.app.utils.filename import clean_display_name
 from backend.app.utils.safe_path import PathTraversalError, safe_join_under
 
 logger = logging.getLogger(__name__)
@@ -1140,6 +1141,7 @@ class ArchiveService:
         created_by_id: int | None = None,
         original_filename: str | None = None,
         project_id: int | None = None,
+        cost_center_id: int | None = None,
         subtask_id: str | None = None,
         prefer_filename_for_name: bool = False,
         plate_id: int | None = None,
@@ -1331,7 +1333,17 @@ class ArchiveService:
             file_size=dest_file.stat().st_size,
             content_hash=content_hash,
             thumbnail_path=thumbnail_path,
-            print_name=display_stem if prefer_filename_for_name else (metadata.get("print_name") or display_stem),
+            # clean_display_name because the 3MF's own metadata reaches this
+            # verbatim, and a control character in it renders nowhere and
+            # truncates somewhere (#2832). The schema does the same for names
+            # arriving over the API. Cleaned before the fallback rather than
+            # after it, so an embedded name that is only whitespace still falls
+            # through to the filename instead of leaving the archive nameless.
+            print_name=(
+                clean_display_name(display_stem)
+                if prefer_filename_for_name
+                else (clean_display_name(metadata.get("print_name")) or clean_display_name(display_stem))
+            ),
             print_time_seconds=metadata.get("print_time_seconds"),
             filament_used_grams=metadata.get("filament_used_grams"),
             filament_type=metadata.get("filament_type"),
@@ -1354,6 +1366,7 @@ class ArchiveService:
             created_by_id=created_by_id,
             project_id=project_id,
             library_file_id=library_file_id,
+            cost_center_id=cost_center_id,
             subtask_id=subtask_id,
             plate_id=plate_id,
         )

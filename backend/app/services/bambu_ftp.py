@@ -88,6 +88,37 @@ class DeleteResult(Enum):
     FAILED = "failed"
 
 
+# How long to stop opening FTPS connections to a printer after its TLS
+# handshake failed (#2780).
+#
+# ``WRONG_VERSION_NUMBER`` on port 990 means the printer answered with
+# something that is not a TLS record at all, so no path, retry or SSL option
+# gets further. Two support bundles show that state lasting for days: one X2D
+# served clean FTPS for five days, flipped on 2026-07-19, and then failed every
+# single handshake for the next eight (zero successes, 3511 failures).
+#
+# What it is NOT is a wedged file service, which is what this comment used to
+# claim. #2780's reporter power-cycled both affected printers and the state
+# survived it, and ``openssl s_client`` against the same port completes a clean
+# handshake and returns a valid certificate while Bambuddy is failing. The
+# leading theory is now a connection-count refusal — vsFTPd answers one in
+# cleartext, which is exactly this error to an implicit-TLS client, and answers
+# the global limit by accepting and never speaking, which is the handshake
+# timeout we also see. Unproven: confirming it needs a capture taken while a
+# printer is in the failing state.
+#
+# Without a gate every candidate path re-runs the same doomed handshake: the
+# 3MF lookup alone walks 6 filename variants x 5 directories x 4 retries, and
+# the cover and timelapse scans run their own sweeps on top. That is where
+# those thousands of failures come from — one wedged printer, hammered.
+#
+# Five minutes is short enough that a power-cycled printer is picked up on the
+# next print (and any successful connect clears the gate immediately), long
+# enough that a wedged one is contacted twice an hour instead of hundreds of
+# times a minute.
+_HANDSHAKE_COOLOFF_SECONDS = 300.0
+
+
 class FileNotOnPrinterError(Exception):
     """Raised when a remote FTP path returns 550 (file not found).
 
@@ -190,6 +221,10 @@ class BambuFTPClient:
     # Maps IP -> "prot_p" or "prot_c"
     _mode_cache: dict[str, str] = {}
 
+    # Printers whose FTPS handshake just failed, mapped to the monotonic time
+    # their cool-off expires. See ``_HANDSHAKE_COOLOFF_SECONDS``.
+    _handshake_blocked_until: dict[str, float] = {}
+
     def __init__(
         self,
         ip_address: str,
@@ -233,8 +268,36 @@ class BambuFTPClient:
         # Default: try prot_p first (will fall back if needed)
         return False
 
+    @classmethod
+    def handshake_blocked(cls, ip_address: str) -> bool:
+        """True while *ip_address* is inside its post-handshake-failure cool-off.
+
+        Public so a caller sweeping many candidate paths can stop after the
+        first one rather than walking the rest against a printer that cannot
+        complete a TLS handshake (#2780).
+        """
+        deadline = cls._handshake_blocked_until.get(ip_address)
+        if deadline is None:
+            return False
+        if time.monotonic() >= deadline:
+            # Drop it on the way past rather than leaving an entry per printer
+            # this process has ever failed against.
+            del cls._handshake_blocked_until[ip_address]
+            return False
+        return True
+
     def connect(self) -> bool:
-        """Connect to the printer FTP server (implicit FTPS on port 990)."""
+        """Connect to the printer FTP server (implicit FTPS on port 990).
+
+        Returns False without touching the network while the printer is inside
+        the cool-off a previous TLS handshake failure opened (#2780).
+        """
+        if self.handshake_blocked(self.ip_address):
+            logger.debug(
+                "FTP connect to %s skipped: FTPS handshake failed recently, cooling off",
+                self.ip_address,
+            )
+            return False
         try:
             use_prot_c = self._should_use_prot_c()
             from backend.app.services.ftp_profiles import get_ftp_profile
@@ -270,20 +333,66 @@ class BambuFTPClient:
             return True
         except ftplib.error_perm as e:
             logger.warning("FTP connection permission error to %s: %s", self.ip_address, e)
-            self._ftp = None
+            self._abandon_connection()
             return False
         except TimeoutError as e:
             logger.warning("FTP connection timed out to %s: %s", self.ip_address, e)
-            self._ftp = None
+            self._abandon_connection()
             return False
         except ssl.SSLError as e:
-            logger.warning("FTP SSL error connecting to %s: %s", self.ip_address, e)
-            self._ftp = None
+            # Not a transient failure and not something another path or another
+            # retry can route around: the printer's file service answered port
+            # 990 with something that isn't TLS. Say so once and stop knocking
+            # for a while (#2780).
+            #
+            # Deliberately no advice about what to do. This message used to
+            # tell the operator to restart the printer; #2780's reporter did
+            # that twice, to no effect, and a single manual connect to the
+            # same printer completes a clean handshake. We do not yet know the
+            # trigger, so stating the observation and stopping there beats
+            # sending people to do the one thing already known not to work.
+            logger.warning(
+                "FTP SSL error connecting to %s: %s — the printer answered port %s with something "
+                "that is not TLS, so print files, covers and timelapses cannot be fetched from it. "
+                "Pausing FTP to this printer for %.0fs.",
+                self.ip_address,
+                e,
+                self.FTP_PORT,
+                _HANDSHAKE_COOLOFF_SECONDS,
+            )
+            self._handshake_blocked_until[self.ip_address] = time.monotonic() + _HANDSHAKE_COOLOFF_SECONDS
+            self._abandon_connection()
             return False
         except (OSError, ftplib.Error) as e:
             logger.warning("FTP connection failed to %s: %s (type: %s)", self.ip_address, e, type(e).__name__)
-            self._ftp = None
+            self._abandon_connection()
             return False
+
+    def _abandon_connection(self) -> None:
+        """Drop a connection that never became usable, closing its socket.
+
+        Every failure path in :meth:`connect` used to clear ``self._ftp`` and
+        nothing else, leaving a connected socket for the garbage collector.
+        That is survivable once; it is not survivable at this volume. A single
+        print used to walk ~110 candidate paths, so a printer refusing FTPS
+        got ~110 sockets opened and abandoned in a couple of minutes, and one
+        support bundle recorded 1813 of them in a day (#2780). If the refusal
+        is the printer running out of connection slots -- which fits the
+        evidence better than a wedged service, since a single manual connect
+        to the same printer succeeds -- then abandoning sockets is not just
+        untidy, it is what keeps the printer refusing.
+
+        Uses ``close()`` rather than ``quit()``: QUIT is a command, and there
+        is no working control channel to send it on.
+        """
+        ftp = self._ftp
+        self._ftp = None
+        if ftp is None:
+            return
+        try:
+            ftp.close()
+        except (OSError, ftplib.Error, EOFError):
+            pass  # Best-effort; the socket may already be gone
 
     def disconnect(self):
         """Disconnect from the FTP server."""
@@ -291,7 +400,10 @@ class BambuFTPClient:
             try:
                 self._ftp.quit()
             except (OSError, ftplib.Error, EOFError):
-                pass  # Best-effort FTP cleanup; connection may already be closed
+                # ``quit()`` sends QUIT and only then closes; when the send
+                # raises, ftplib never reaches its own close and the socket
+                # stays open. Close it here rather than leaving it to the GC.
+                self._abandon_connection()
             self._ftp = None
 
     def list_files(self, path: str = "/") -> list[dict]:
@@ -814,6 +926,16 @@ class BambuFTPClient:
             pass  # Storage scan failed; return whatever info was collected above
 
         return result if result else None
+
+
+def ftps_handshake_blocked(ip_address: str) -> bool:
+    """True while this printer's FTPS handshake cool-off is still running.
+
+    Callers that walk a list of candidate paths use this to give up on the
+    remaining candidates: the failure is at the transport, below any path, so
+    every one of them would fail identically (#2780).
+    """
+    return BambuFTPClient.handshake_blocked(ip_address)
 
 
 # Shared 3MF download cache (#972).

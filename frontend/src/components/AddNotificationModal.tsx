@@ -36,6 +36,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   const [onPrintFailed, setOnPrintFailed] = useState(provider?.on_print_failed ?? true);
   const [onPrintStopped, setOnPrintStopped] = useState(provider?.on_print_stopped ?? true);
   const [onPrintProgress, setOnPrintProgress] = useState(provider?.on_print_progress ?? false);
+  const [onBillingChargeFailed, setOnBillingChargeFailed] = useState(provider?.on_billing_charge_failed ?? true);
   const [onPrinterOffline, setOnPrinterOffline] = useState(provider?.on_printer_offline ?? false);
   const [onPrinterError, setOnPrinterError] = useState(provider?.on_printer_error ?? false);
   const [onAiFailureDetection, setOnAiFailureDetection] = useState(provider?.on_ai_failure_detection ?? false);
@@ -45,6 +46,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
   const [onStockBreakAlert, setOnStockBreakAlert] = useState(provider?.on_stock_break_alert ?? false);
   const [onPlateClearRequired, setOnPlateClearRequired] = useState(provider?.on_plate_clear_required ?? false);
   const [onBedCooled, setOnBedCooled] = useState(provider?.on_bed_cooled ?? false);
+  const [onHaSensorAlert, setOnHaSensorAlert] = useState(provider?.on_ha_sensor_alert ?? false);
   const [onFirstLayerComplete, setOnFirstLayerComplete] = useState(provider?.on_first_layer_complete ?? false);
 
   // Provider-specific config (scalar fields only — event_priorities is split out
@@ -191,6 +193,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
       on_print_failed: onPrintFailed,
       on_print_stopped: onPrintStopped,
       on_print_progress: onPrintProgress,
+      on_billing_charge_failed: onBillingChargeFailed,
       on_printer_offline: onPrinterOffline,
       on_printer_error: onPrinterError,
       on_ai_failure_detection: onAiFailureDetection,
@@ -200,6 +203,7 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
       on_stock_break_alert: onStockBreakAlert,
       on_plate_clear_required: onPlateClearRequired,
       on_bed_cooled: onBedCooled,
+      on_ha_sensor_alert: onHaSensorAlert,
       on_first_layer_complete: onFirstLayerComplete,
     };
 
@@ -605,6 +609,13 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
                 </div>
                 <div className="flex items-center justify-between col-span-2">
                   <div>
+                    <span className="text-sm text-white">{t('notifications.billingChargeFailedLabel')}</span>
+                    <span className="text-xs text-bambu-gray ml-1">{t('notifications.billingChargeFailedDescription')}</span>
+                  </div>
+                  <Toggle checked={onBillingChargeFailed} onChange={setOnBillingChargeFailed} />
+                </div>
+                <div className="flex items-center justify-between col-span-2">
+                  <div>
                     <span className="text-sm text-white">{t('notifications.plateClearRequired')}</span>
                     <span className="text-xs text-bambu-gray ml-1">{t('notifications.plateClearRequiredDescription')}</span>
                   </div>
@@ -634,6 +645,13 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-white">{t('notifications.offline')}</span>
                   <Toggle checked={onPrinterOffline} onChange={setOnPrinterOffline} />
+                </div>
+                <div className="flex items-center justify-between col-span-2">
+                  <div>
+                    <span className="text-sm text-white">{t('notifications.haSensorAlert')}</span>
+                    <span className="text-xs text-bambu-gray ml-1">{t('notifications.haSensorAlertDescription')}</span>
+                  </div>
+                  <Toggle checked={onHaSensorAlert} onChange={setOnHaSensorAlert} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-white">{t('notifications.error')}</span>
@@ -683,11 +701,13 @@ export function AddNotificationModal({ provider, onClose }: AddNotificationModal
               if (onPrintFailed) enabledEvents.push({ key: 'on_print_failed', label: t('notifications.failed') });
               if (onPrintStopped) enabledEvents.push({ key: 'on_print_stopped', label: t('notifications.stopped') });
               if (onPrintProgress) enabledEvents.push({ key: 'on_print_progress', label: t('notifications.progress') });
+              if (onBillingChargeFailed) enabledEvents.push({ key: 'on_billing_charge_failed', label: t('notifications.billingChargeFailedLabel') });
               if (onPlateClearRequired) enabledEvents.push({ key: 'on_plate_clear_required', label: t('notifications.plateClearRequired') });
               if (onBedCooled) enabledEvents.push({ key: 'on_bed_cooled', label: t('notifications.bedCooled') });
               if (onFirstLayerComplete) enabledEvents.push({ key: 'on_first_layer_complete', label: t('notifications.firstLayerCompleteLabel') });
               if (onPrinterOffline) enabledEvents.push({ key: 'on_printer_offline', label: t('notifications.offline') });
               if (onPrinterError) enabledEvents.push({ key: 'on_printer_error', label: t('notifications.error') });
+              if (onHaSensorAlert) enabledEvents.push({ key: 'on_ha_sensor_alert', label: t('notifications.haSensorAlert') });
               if (onAiFailureDetection) enabledEvents.push({ key: 'on_ai_failure_detection', label: t('notifications.aiFailureDetection') });
               if (onFilamentLow) enabledEvents.push({ key: 'on_filament_low', label: t('notifications.lowFilament') });
               if (onMaintenanceDue) enabledEvents.push({ key: 'on_maintenance_due', label: t('notifications.maintenance') });

@@ -368,7 +368,7 @@ describe('SettingsPage', () => {
 
       expect(localStorage.setItem).toHaveBeenCalledWith(
         SIDEBAR_ORDER_KEY,
-        JSON.stringify(['ext-7', 'printers', 'inventory', 'archives', 'queue', 'projects', 'files', 'makerworld', 'profiles', 'maintenance', 'stats', 'notifications', 'settings']),
+        JSON.stringify(['ext-7', 'printers', 'inventory', 'archives', 'queue', 'projects', 'files', 'makerworld', 'profiles', 'maintenance', 'stats', 'finance', 'notifications', 'settings']),
       );
     });
 
@@ -410,7 +410,7 @@ describe('SettingsPage', () => {
       expect(localStorage.setItem).toHaveBeenCalledWith(SIDEBAR_HIDDEN_SYSTEM_ITEMS_KEY, JSON.stringify([]));
       expect(localStorage.setItem).toHaveBeenCalledWith(
         SIDEBAR_ORDER_KEY,
-        JSON.stringify(['printers', 'inventory', 'archives', 'queue', 'projects', 'files', 'makerworld', 'profiles', 'maintenance', 'stats', 'notifications', 'settings', 'ext-7']),
+        JSON.stringify(['printers', 'inventory', 'archives', 'queue', 'projects', 'files', 'makerworld', 'profiles', 'maintenance', 'stats', 'finance', 'notifications', 'settings', 'ext-7']),
       );
 
       const settingsRow = screen.getAllByText('Settings')
@@ -481,6 +481,7 @@ describe('SettingsPage', () => {
           'profiles',
           'maintenance',
           'stats',
+          'finance',
           'notifications',
           'settings',
         ],
@@ -497,10 +498,11 @@ describe('SettingsPage', () => {
     // users never see the in-app Install button (which would no-op).
     const renderWithUpdateCheck = async (
       checkBody: Record<string, unknown>,
+      settingsOverrides: Record<string, unknown> = {},
     ) => {
       server.use(
         http.get('/api/v1/settings/', () =>
-          HttpResponse.json({ ...mockSettings, check_updates: true }),
+          HttpResponse.json({ ...mockSettings, check_updates: true, ...settingsOverrides }),
         ),
         http.get('/api/v1/updates/check', () => HttpResponse.json(checkBody)),
       );
@@ -553,6 +555,80 @@ describe('SettingsPage', () => {
       });
       expect(screen.queryByText(/Home Assistant Supervisor/i)).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /install update/i })).not.toBeInTheDocument();
+    });
+
+    // #2664: the bare command only works if the user is already standing in
+    // the directory holding their compose file, which is exactly the thing
+    // they came to the page not knowing.
+    const DOCKER_CHECK = {
+      update_available: true,
+      current_version: '0.2.4',
+      latest_version: '0.2.5',
+      release_name: '0.2.5',
+      release_notes: '',
+      release_url: 'https://example.invalid/r',
+      published_at: '2099-01-01T00:00:00Z',
+      is_docker: true,
+      is_ha_addon: false,
+      update_method: 'docker',
+    };
+
+    it('prefixes the command with cd when the backend detected a compose directory', async () => {
+      await renderWithUpdateCheck({ ...DOCKER_CHECK, compose_dir_detected: '/opt/bambuddy' });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('cd /opt/bambuddy && docker compose pull && docker compose up -d'),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('prefers the saved directory over the detected one', async () => {
+      await renderWithUpdateCheck(
+        { ...DOCKER_CHECK, compose_dir_detected: '/opt/guessed' },
+        { docker_compose_dir: '/srv/stacks/bambuddy' },
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('cd /srv/stacks/bambuddy && docker compose pull && docker compose up -d'),
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/\/opt\/guessed/)).not.toBeInTheDocument();
+    });
+
+    it('quotes a directory containing a space so the cd does not split', async () => {
+      await renderWithUpdateCheck(DOCKER_CHECK, { docker_compose_dir: '/srv/bambu buddy' });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('cd "/srv/bambu buddy" && docker compose pull && docker compose up -d'),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('copies the full command including the cd', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+
+      await renderWithUpdateCheck({ ...DOCKER_CHECK, compose_dir_detected: '/opt/bambuddy' });
+
+      const copy = await screen.findByRole('button', { name: /copy update command/i });
+      await userEvent.click(copy);
+
+      expect(writeText).toHaveBeenCalledWith(
+        'cd /opt/bambuddy && docker compose pull && docker compose up -d',
+      );
+    });
+
+    it('offers an editable compose directory field seeded with the detected path', async () => {
+      await renderWithUpdateCheck({ ...DOCKER_CHECK, compose_dir_detected: '/opt/bambuddy' });
+
+      const field = await screen.findByPlaceholderText('/opt/bambuddy');
+      // Placeholder, not value — the detected path is a guess the user has
+      // not accepted, so saving must not silently adopt it.
+      expect(field).toHaveValue('');
     });
 
     it('shows the installer-download link for Windows installer installs', async () => {
@@ -649,6 +725,38 @@ describe('SettingsPage', () => {
       await waitFor(() => {
         expect(screen.getByText('AMS Display Thresholds')).toBeInTheDocument();
       });
+    });
+
+    // #2770: an AMS reads 15-20% while its own heater runs, so a drying
+    // threshold set below that can never be met and auto-drying ends one
+    // cycle only to arm the next. The default of 60 must stay quiet.
+    const openFilamentTab = async (humidityFair: number) => {
+      server.use(
+        http.get('/api/v1/settings/', () =>
+          HttpResponse.json({ ...mockSettings, ams_humidity_fair: humidityFair })
+        )
+      );
+      const user = userEvent.setup();
+      render(<SettingsPage />);
+      await waitFor(() => {
+        expect(screen.getAllByText('Filament').length).toBeGreaterThan(0);
+      });
+      await user.click(screen.getAllByText('Filament')[0]);
+      await waitFor(() => {
+        expect(screen.getByText('AMS Display Thresholds')).toBeInTheDocument();
+      });
+    };
+
+    it('warns when the humidity threshold is below what a drying AMS reports', async () => {
+      await openFilamentTab(14);
+
+      expect(await screen.findByText(/Auto-drying cannot reach this value/)).toBeInTheDocument();
+    });
+
+    it('stays quiet for a humidity threshold auto-drying can actually reach', async () => {
+      await openFilamentTab(60);
+
+      expect(screen.queryByText(/Auto-drying cannot reach this value/)).not.toBeInTheDocument();
     });
   });
 

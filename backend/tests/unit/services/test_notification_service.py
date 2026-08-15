@@ -97,6 +97,40 @@ class TestNotificationService:
 
             mock_send.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_billing_charge_failure_uses_provider_event(self, service, mock_provider, mock_db):
+        """A failed charge is routed to providers that enabled the billing event."""
+        with (
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_providers", new_callable=AsyncMock) as mock_send,
+            patch.object(service, "_build_message_from_template", new_callable=AsyncMock) as mock_build,
+        ):
+            mock_get.return_value = [mock_provider]
+            mock_build.return_value = ("Billing Charge Failed", "The reservation was retained")
+
+            await service.on_billing_charge_failed(
+                printer_id=7,
+                printer_name="Printer B",
+                filename="paid-job.3mf",
+                archive_id=42,
+                error="unique constraint",
+                db=mock_db,
+            )
+
+            mock_get.assert_awaited_once_with(mock_db, "on_billing_charge_failed", 7)
+            mock_build.assert_awaited_once_with(
+                mock_db,
+                "billing_charge_failed",
+                {
+                    "printer": "Printer B",
+                    "filename": "paid-job",
+                    "archive_id": "42",
+                    "error": "unique constraint",
+                },
+            )
+            assert mock_send.await_args.args[4:7] == ("billing_charge_failed", 7, "Printer B")
+            assert mock_send.await_args.kwargs["force_immediate"] is True
+
     # ========================================================================
     # Tests for on_print_complete (status routing)
     # ========================================================================
@@ -918,6 +952,64 @@ class TestHomeAssistantProvider:
             # ttl must survive as a number, not a string — that's why the
             # field is JSON rather than key=value lines.
             assert payload["data"]["ttl"] == 0
+
+    @pytest.mark.asyncio
+    async def test_send_homeassistant_custom_data_keeps_nested_structures(self, service):
+        """Nested objects and lists reach the notify service unaltered (#1441).
+
+        The three tests around this one all use flat scalars, which is also all
+        the placeholder and the wiki showed — so a user asking whether action
+        buttons work had nothing telling them the field is a verbatim
+        pass-through rather than a key/value list. ``actions`` is the case they
+        asked about: a list of objects, the shape an HA automation writes under
+        ``data.actions``. Nothing between the textarea and the POST inspects the
+        parsed value beyond "is it an object", so this asserts the whole
+        structure rather than a key at a time.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        mock_db = AsyncMock()
+
+        with (
+            patch.object(service, "_get_client", new_callable=AsyncMock) as mock_get_client,
+            patch(
+                "backend.app.api.routes.settings.get_homeassistant_settings",
+                new_callable=AsyncMock,
+            ) as mock_ha_settings,
+        ):
+            mock_get_client.return_value = mock_client
+            mock_ha_settings.return_value = {
+                "ha_url": "http://ha.local:8123",
+                "ha_token": "test-token-123",
+                "ha_enabled": True,
+            }
+
+            actions = [
+                {"action": "SNOOZE_PRINT_FINISHED", "title": "Snooze 20 min"},
+                {"action": "BED_COOL_NOTIFY_ON", "title": "Notify on Bed Cool"},
+            ]
+            config = {
+                "service": "notify.mobile_app_myphone",
+                "data": json.dumps({"ttl": 0, "priority": "high", "group": "3D Printer", "actions": actions}),
+            }
+            success, _ = await service._send_homeassistant(config, "Print Finished", "Print is finished", db=mock_db)
+
+            assert success is True
+            payload = mock_client.post.call_args.kwargs.get("json") or mock_client.post.call_args[1].get("json")
+            assert payload["data"] == {
+                "ttl": 0,
+                "priority": "high",
+                "group": "3D Printer",
+                "actions": actions,
+            }
+            # Spelled out separately: a flattening or scalar-only filter would
+            # still leave the three sibling keys correct, so the equality above
+            # is not on its own evidence that the list survived.
+            assert payload["data"]["actions"] == actions
 
     @pytest.mark.asyncio
     async def test_send_homeassistant_without_data_omits_key(self, service):

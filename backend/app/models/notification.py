@@ -66,6 +66,7 @@ class NotificationProvider(Base):
     on_print_stopped = Column(Boolean, default=True)  # User cancelled/stopped print
     on_print_progress = Column(Boolean, default=False)  # 25%, 50%, 75% milestones
     on_print_missing_spool_assignment = Column(Boolean, default=False)  # Print started with unassigned required tray(s)
+    on_billing_charge_failed = Column(Boolean, default=True)  # A completed/stopped print could not be charged
 
     # Event triggers - printer status
     on_printer_offline = Column(Boolean, default=False)
@@ -77,10 +78,16 @@ class NotificationProvider(Base):
     # Event triggers - AMS environmental alarms (regular AMS with 4 slots)
     on_ams_humidity_high = Column(Boolean, default=False)  # AMS humidity above threshold
     on_ams_temperature_high = Column(Boolean, default=False)  # AMS temperature above threshold
+    # Auto-drying gave up on a unit (#2770). Defaults True: it reports that
+    # Bambuddy has stopped acting, which nothing else in the UI would say.
+    on_ams_drying_suspended = Column(Boolean, default=True)
 
     # Event triggers - AMS-HT environmental alarms (single slot heated AMS)
     on_ams_ht_humidity_high = Column(Boolean, default=False)  # AMS-HT humidity above threshold
     on_ams_ht_temperature_high = Column(Boolean, default=False)  # AMS-HT temperature above threshold
+
+    # Event triggers - Home Assistant sensors bound to a printer (#1148)
+    on_ha_sensor_alert = Column(Boolean, default=False)  # Bound HA sensor entered its alert state
 
     # Event triggers - Build plate detection
     on_plate_not_empty = Column(Boolean, default=True)  # Objects detected on plate before print

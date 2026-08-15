@@ -1,8 +1,10 @@
 import json
+import re
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from backend.app.schemas.print_queue import TriState
+from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
 
 # Outbound service URLs validated on save, so a bad value is rejected at
 # configuration time with a clear message rather than failing opaquely at
@@ -17,6 +19,18 @@ from backend.app.schemas.print_queue import TriState
 # cannot drift from it. Any new outbound-URL setting belongs here (or, if it
 # must be reachable on the public internet, on the stricter OIDC guard).
 LAN_SERVICE_URL_SETTINGS = ("ha_url", "obico_ml_url", "orcaslicer_api_url", "bambu_studio_api_url")
+
+# ``docker_compose_dir`` is unusual among the string settings: it is not
+# consumed by Bambuddy at all, it is interpolated into a shell command that
+# the Settings page invites the user to copy and paste into a root-capable
+# terminal (#2664). A value like ``/opt/bambuddy; rm -rf /`` would render as a
+# perfectly plausible-looking update command, so anyone with settings:update
+# could hand every admin a destructive one-liner to run. Restricting the field
+# to characters that occur in real paths removes that entirely; the frontend
+# double-quotes the value when it contains a space, which is safe precisely
+# because quotes, ``$`` and backticks cannot survive this pattern.
+_COMPOSE_DIR_ALLOWED = re.compile(r"^[\w \-./\\:~]+$", re.UNICODE)
+_COMPOSE_DIR_MAX_LEN = 512
 
 
 class AppSettings(BaseModel):
@@ -219,6 +233,14 @@ class AppSettings(BaseModel):
         default="", description="External URL where Bambuddy is accessible (for notification images)"
     )
 
+    # Directory holding the user's docker-compose.yml, shown in the update
+    # instructions so the printed command can be pasted from anywhere (#2664).
+    # Empty means "omit the cd" — which is also the correct rendering when
+    # nothing could be detected, rather than guessing a path that fails.
+    docker_compose_dir: str = Field(
+        default="", description="Host directory containing docker-compose.yml, used in the update instructions"
+    )
+
     # Home Assistant integration for smart plug control
     ha_enabled: bool = Field(default=False, description="Enable Home Assistant integration for smart plug control")
     ha_url: str = Field(default="", description="Home Assistant URL (e.g., http://192.168.1.100:8123)")
@@ -262,6 +284,19 @@ class AppSettings(BaseModel):
             "Desktop slicer for the 'Open in Slicer' button: 'bambu_studio' or "
             "'orcaslicer'. None inherits from preferred_slicer."
         ),
+    )
+
+    # Where slicing runs. Orthogonal to ``preferred_slicer``, which only says
+    # *which slicer binary* the sidecar drives: a browser engine is a different
+    # execution site, not a different binary choice. Kept as its own key so the
+    # two never have to encode impossible combinations.
+    #
+    # Only "sidecar" is implemented today; the slice modal offers a per-job
+    # choice when more than one engine is available, and hides the control
+    # entirely while there is only one.
+    slice_engine: str = Field(
+        default="sidecar",
+        description="Default execution site for slicing: 'sidecar' (server-side API) or 'browser'",
     )
 
     # Slicer dispatch mode: when True, "Slice" actions open the in-app
@@ -359,6 +394,26 @@ class AppSettings(BaseModel):
         default=5, ge=1, le=60, description="Minutes between staggered printer groups"
     )
 
+    # Finance budget window settings
+    billing_enabled: bool = Field(
+        default=False,
+        description="Enable cost-center billing enforcement for print and queue operations",
+    )
+    printer_kill_switch_enabled: bool = Field(
+        default=False,
+        description="Immediately stop printer jobs that start without Bambuddy authorization",
+    )
+    finance_budget_reset_day: int = Field(
+        default=1,
+        ge=1,
+        le=31,
+        description="Day of month when monthly finance budget window resets (1-31, clamped for short months)",
+    )
+    finance_budget_reset_timezone: str = Field(
+        default="UTC",
+        description="IANA timezone for finance monthly budget reset calculation (e.g., Europe/Berlin)",
+    )
+
     # Plate-clear confirmation for queue scheduling
     require_plate_clear: bool = Field(
         default=False,
@@ -415,6 +470,42 @@ class AppSettings(BaseModel):
         le=1800,
         description="Additional hold time at temperature after the chamber reaches the target (or after max_wait_seconds elapses). 0 = no soak.",
     )
+    queue_keep_bed_warm: bool = Field(
+        default=False,
+        description=(
+            "While a printer is in FINISH state awaiting plate-clear and the next queued item requires "
+            "chamber heating, hold the bed hot so the chamber stays warm during the bed-clearing "
+            "window. The bed is the chamber's heating element here: the hold target is "
+            "queue_keep_warm_bed_temp, or the item's own bed_temperature when the slicer metadata "
+            "reports a higher one. Only fires for filaments with a non-zero chamber target "
+            "(ASA, ABS, PA, PC etc.); PLA/PETG prints are skipped automatically."
+        ),
+    )
+    queue_keep_warm_bed_temp: int = Field(
+        default=90,
+        ge=40,
+        le=110,
+        description=(
+            "Bed temperature (°C) used when the bed's job is to heat the chamber. 90 sustains "
+            "chamber warmth on enclosed printers and satisfies bed-threshold-linked aftermarket "
+            "chamber heaters (which typically activate at bed ≥ 80). Applies in two places: the "
+            "keep-warm hold between chamber-heated prints, and preheat when a chamber-heated "
+            "item's slicer metadata carries no bed temperature at all. A parsed bed temperature "
+            "higher than this always wins, so the bed is never driven cooler than the print needs."
+        ),
+    )
+    queue_keep_warm_max_minutes: int = Field(
+        default=120,
+        ge=5,
+        le=480,
+        description=(
+            "How long keep-warm may hold the bed on a printer waiting for its plate to be cleared. "
+            "When this elapses the bed is switched off, and the hold does not re-arm until the "
+            "printer next becomes a keep-warm candidate — so a plate nobody clears cannot leave the "
+            "bed hot indefinitely. Set it to how long you realistically take to reach the printer; "
+            "the only cost of it being too short is that the next print re-soaks from cold."
+        ),
+    )
 
     # User-configurable presets for the printer-card temperature / fan-speed
     # popovers. Each is a JSON array of exactly 3 ints (the "Off" button is
@@ -430,7 +521,7 @@ class AppSettings(BaseModel):
     )
     chamber_temp_presets: str = Field(
         default="",
-        description="JSON array of 3 chamber-temperature preset values in C (0-60). Empty = use defaults [35, 45, 60]",
+        description="JSON array of 3 chamber-temperature preset values in C (0-65). Empty = use defaults [35, 45, 60]",
     )
     fan_speed_presets: str = Field(
         default="",
@@ -587,6 +678,7 @@ class AppSettingsUpdate(BaseModel):
     mqtt_topic_prefix: str | None = None
     mqtt_use_tls: bool | None = None
     external_url: str | None = None
+    docker_compose_dir: str | None = None
     ha_enabled: bool | None = None
     ha_url: str | None = None
     ha_token: str | None = None
@@ -595,6 +687,7 @@ class AppSettingsUpdate(BaseModel):
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None
+    slice_engine: str | None = None
     use_slicer_api: bool | None = None
     orcaslicer_api_url: str | None = None
     bambu_studio_api_url: str | None = None
@@ -612,6 +705,10 @@ class AppSettingsUpdate(BaseModel):
     default_nozzle_offset_cali: TriState | None = None
     stagger_group_size: int | None = Field(default=None, ge=1, le=50)
     stagger_interval_minutes: int | None = Field(default=None, ge=1, le=60)
+    billing_enabled: bool | None = None
+    printer_kill_switch_enabled: bool | None = None
+    finance_budget_reset_day: int | None = Field(default=None, ge=1, le=31)
+    finance_budget_reset_timezone: str | None = None
     require_plate_clear: bool | None = None
     queue_shortest_first: bool | None = None
     queue_max_concurrent_uploads: int | None = Field(default=None, ge=1, le=16)
@@ -619,6 +716,9 @@ class AppSettingsUpdate(BaseModel):
     preheat_filament_targets: str | None = None
     preheat_max_wait_seconds: int | None = Field(default=None, ge=60, le=3600)
     preheat_soak_seconds: int | None = Field(default=None, ge=0, le=1800)
+    queue_keep_bed_warm: bool | None = None
+    queue_keep_warm_bed_temp: int | None = Field(default=None, ge=40, le=110)
+    queue_keep_warm_max_minutes: int | None = Field(default=None, ge=5, le=480)
     nozzle_temp_presets: str | None = None
     bed_temp_presets: str | None = None
     chamber_temp_presets: str | None = None
@@ -690,6 +790,36 @@ class AppSettingsUpdate(BaseModel):
             raise ValueError(str(exc)) from exc
         return v
 
+    @field_validator("docker_compose_dir")
+    @classmethod
+    def validate_docker_compose_dir(cls, v: str | None) -> str | None:
+        """Keep the copy-and-paste update command free of shell injection (#2664).
+
+        Validated on the write path only. Doing it on ``AppSettings`` as well
+        would mean a single bad row — however it got there — 500s the entire
+        settings GET and takes the app down with it, which is a worse outcome
+        than rendering a string that has to be pasted into a shell by hand to
+        do anything at all.
+        """
+        if v is None or not v.strip():
+            return v
+        candidate = v.strip()
+        if len(candidate) > _COMPOSE_DIR_MAX_LEN:
+            raise ValueError(f"Compose directory must be at most {_COMPOSE_DIR_MAX_LEN} characters")
+        if not _COMPOSE_DIR_ALLOWED.match(candidate):
+            raise ValueError(
+                "Compose directory may only contain path characters (letters, digits, space, and - _ . / \\ : ~)"
+            )
+        # A trailing backslash is the one survivor that would still break the
+        # frontend's double-quoting: `cd "/opt/bam buddy\"` escapes the closing
+        # quote and swallows the rest of the line. Harmless (the shell just
+        # waits for a terminator rather than running anything) but the user
+        # would be left staring at a continuation prompt, so refuse it here
+        # instead of shipping a command that cannot work.
+        if candidate.endswith("\\"):
+            raise ValueError("Compose directory must not end with a backslash")
+        return candidate
+
     @field_validator("gcode_snippets")
     @classmethod
     def validate_gcode_snippets(cls, v: str | None) -> str | None:
@@ -759,7 +889,7 @@ class AppSettingsUpdate(BaseModel):
     @field_validator("chamber_temp_presets")
     @classmethod
     def validate_chamber_temp_presets(cls, v: str | None) -> str | None:
-        return cls._validate_preset_triple(v, "chamber_temp_presets", 0, 60)
+        return cls._validate_preset_triple(v, "chamber_temp_presets", 0, MAX_CHAMBER_TEMP_C)
 
     @field_validator("fan_speed_presets")
     @classmethod
