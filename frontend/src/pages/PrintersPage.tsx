@@ -555,7 +555,12 @@ function NozzleRackCard({ slots, filamentInfo }: { slots: import('../api/client'
   );
 
   return (
-    <div className="text-center px-2.5 py-1.5 bg-bambu-dark rounded-lg flex-[2_1_190px] flex flex-col justify-center">
+    // Sized to its contents rather than growing: the six chips are a fixed
+    // 28px each, so any extra width is dead space taken from the temperature
+    // cards beside it — which are flex-1 with a 0 basis and wrap their values
+    // ("220° / 220°") as soon as they lose it. Shrink stays enabled so the
+    // card still gives way on a narrow printer card instead of overflowing.
+    <div className="text-center px-2.5 py-1.5 bg-bambu-dark rounded-lg flex-[0_1_auto] flex flex-col justify-center">
       <p className="text-[length:var(--pc-t9,9px)] text-bambu-gray mb-1">{t('printers.nozzleRack')}</p>
       <div className="flex gap-[3px] justify-center">
         {rackSlots.map((slot, i) => {
@@ -565,18 +570,29 @@ function NozzleRackCard({ slots, filamentInfo }: { slots: import('../api/client'
 
           return (
             <NozzleSlotHoverCard key={slot.id >= 0 ? slot.id : `empty-${i}`} slot={slot} index={i} filamentName={slot.filament_id ? filamentInfo?.[slot.filament_id]?.name : undefined}>
-              <div
-                className={`w-7 h-7 rounded flex items-center justify-center cursor-default transition-colors border-b-2 ${
-                  isEmpty
-                    ? 'bg-bambu-dark-tertiary/20 border-bambu-dark-tertiary/20'
-                    : 'bg-bambu-dark-tertiary/40 border-bambu-dark-tertiary/40'
-                }`}
-                style={filamentBg ? { backgroundColor: filamentBg } : undefined}
-              >
-                <span className={`text-[length:var(--pc-t10,10px)] font-semibold ${isEmpty ? 'text-bambu-gray/30' : lightBg ? 'text-black/80' : 'text-white'}`}
-                      style={filamentBg && !lightBg ? { textShadow: '0 1px 3px rgba(0,0,0,0.9)' } : undefined}
+              <div className="flex flex-col items-center gap-0.5">
+                <div
+                  className={`w-7 h-7 rounded flex items-center justify-center cursor-default transition-colors border-b-2 ${
+                    isEmpty
+                      ? 'bg-bambu-dark-tertiary/20 border-bambu-dark-tertiary/20'
+                      : 'bg-bambu-dark-tertiary/40 border-bambu-dark-tertiary/40'
+                  }`}
+                  style={filamentBg ? { backgroundColor: filamentBg } : undefined}
                 >
-                  {isEmpty ? '—' : (slot.nozzle_diameter || '?')}
+                  <span
+                    data-rack-diameter
+                    className={`text-[length:var(--pc-t10,10px)] font-semibold ${isEmpty ? 'text-bambu-gray/30' : lightBg ? 'text-black/80' : 'text-white'}`}
+                    style={filamentBg && !lightBg ? { textShadow: '0 1px 3px rgba(0,0,0,0.9)' } : undefined}
+                  >
+                    {isEmpty ? '—' : (slot.nozzle_diameter || '?')}
+                  </span>
+                </div>
+                {/* Physical rack position, so "swap the nozzle in slot 4" can be
+                    acted on without counting chips. Sits below the chip rather
+                    than inside it: the chip is 28px and already carries the
+                    diameter over a filament-coloured background. */}
+                <span className="text-[length:var(--pc-t8,8px)] leading-none tabular-nums text-bambu-gray/70">
+                  {i + 1}
                 </span>
               </div>
             </NozzleSlotHoverCard>

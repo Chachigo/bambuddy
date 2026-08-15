@@ -812,8 +812,32 @@ describe('PrintersPage', () => {
       const rackLabel = screen.getAllByText('Nozzle Rack')[0];
       const rackCard = rackLabel.parentElement!;
       const slotRow = rackCard.querySelectorAll('div.flex')[0];
-      const slotTexts = Array.from(slotRow.querySelectorAll('span')).map(s => s.textContent);
+      // Match the diameter spans specifically — each chip also carries a slot
+      // number span, and a bare `span` sweep would interleave the two.
+      const slotTexts = Array.from(slotRow.querySelectorAll('span[data-rack-diameter]')).map(s => s.textContent);
       expect(slotTexts).toEqual(['—', '0.2', '0.6', '0.8', '1.0', '1.2']);
+    });
+
+    it('labels every rack position 1..6 regardless of which nozzles are present', async () => {
+      // The numbering is positional, not a count of what is loaded: the empty
+      // position keeps its number so "the nozzle in slot 4" means the same
+      // thing whether or not slots 1..3 are occupied.
+      server.use(
+        http.get('/api/v1/printers/:id/status', () => {
+          return HttpResponse.json(h2cStatus);
+        })
+      );
+
+      render(<PrintersPage />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Nozzle Rack').length).toBeGreaterThan(0);
+      });
+
+      const rackLabel = screen.getAllByText('Nozzle Rack')[0];
+      const slotRow = rackLabel.parentElement!.querySelectorAll('div.flex')[0];
+      const numbers = Array.from(slotRow.querySelectorAll('span:not([data-rack-diameter])')).map(s => s.textContent);
+      expect(numbers).toEqual(['1', '2', '3', '4', '5', '6']);
     });
 
     it('hides nozzle rack when only L/R nozzles present (H2D)', async () => {
