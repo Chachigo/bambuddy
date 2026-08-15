@@ -4044,13 +4044,13 @@ class TestSendDryingCommand:
     def test_start_caches_target_for_badge(self, mqtt_client):
         """mode=1 send populates _drying_targets so the badge can render it."""
         mqtt_client.send_drying_command(ams_id=2, temp=65, duration=12, mode=1, filament="PETG")
-        assert mqtt_client._drying_targets[2] == {"filament": "PETG", "temp": 65}
+        assert mqtt_client._drying_targets[2] == {"filament": "PETG", "temp": 65, "duration_hours": 12}
 
     def test_start_overwrites_prior_target_for_same_ams(self, mqtt_client):
         """A second start on the same AMS replaces the cached target."""
         mqtt_client.send_drying_command(ams_id=0, temp=55, duration=4, mode=1, filament="PLA")
         mqtt_client.send_drying_command(ams_id=0, temp=70, duration=6, mode=1, filament="ABS")
-        assert mqtt_client._drying_targets[0] == {"filament": "ABS", "temp": 70}
+        assert mqtt_client._drying_targets[0] == {"filament": "ABS", "temp": 70, "duration_hours": 6}
 
     def test_stop_clears_target(self, mqtt_client):
         """mode=0 send drops the cache so the badge stops showing the target."""
@@ -4065,7 +4065,7 @@ class TestSendDryingCommand:
         mqtt_client.send_drying_command(ams_id=128, temp=80, duration=6, mode=1, filament="PA-CF")
         mqtt_client.send_drying_command(ams_id=0, temp=0, duration=0, mode=0)
         assert 0 not in mqtt_client._drying_targets
-        assert mqtt_client._drying_targets[128] == {"filament": "PA-CF", "temp": 80}
+        assert mqtt_client._drying_targets[128] == {"filament": "PA-CF", "temp": 80, "duration_hours": 6}
 
 
 class TestStartPrintAmsMapping:
@@ -6119,6 +6119,89 @@ class TestDryingCompleteCallback:
         mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 720, "tray": []}]})
         mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
         assert mqtt_client._drying_events == [0]
+
+    def test_early_end_logs_firmware_reason_codes(self, mqtt_client, caplog):
+        """#2770 — a 12-hour cycle the firmware abandoned 20 minutes in logged
+        only 'drying complete', so the report carried no evidence of why. An
+        early end now names the shortfall and the reason fields we already
+        parse: phase, sub-phase, cannot-dry codes and live HMS."""
+        from backend.app.services.bambu_mqtt import HMSError
+
+        mqtt_client.state.hms_errors = [
+            HMSError(code="0x2000003", attr=0x07008000, module=7, severity=2, full_code="0700800002000003")
+        ]
+        mqtt_client._client = MagicMock()
+        mqtt_client.send_drying_command(ams_id=0, temp=65, duration=12, mode=1, filament="PETG")
+        mqtt_client._handle_ams_data(
+            {"ams": [{"id": "0", "dry_time": 700, "info": "10002123", "dry_sf_reason": [1], "tray": []}]}
+        )
+        with caplog.at_level(logging.INFO, logger="backend.app.services.bambu_mqtt"):
+            mqtt_client._handle_ams_data(
+                {"ams": [{"id": "0", "dry_time": 0, "info": "10002103", "dry_sf_reason": [1], "tray": []}]}
+            )
+
+        assert mqtt_client._drying_events == [0]
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert "drying ended early" in message
+        # The shortfall, against the duration we asked the firmware for.
+        assert "700 of 720 minutes" in message
+        # dry_status 0 (Off) and dry_sub_status 0 from info hex 10002103.
+        assert "dry_status=0" in message
+        assert "dry_sub_status=0" in message
+        # InsufficientPower, and the AMS heater-fan HMS that goes with it.
+        assert "dry_sf_reason=[1]" in message
+        assert "0700800002000003" in message
+
+    def test_early_end_without_a_cached_target_still_logs(self, mqtt_client, caplog):
+        """A cycle Bambuddy did not start — from the printer's screen, from
+        Studio, or from before a restart — has no cached duration to compare
+        against. The remaining time alone still proves it was cut short, so the
+        reason codes must be logged rather than withheld for lack of a target."""
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 480, "tray": []}]})
+        with caplog.at_level(logging.INFO, logger="backend.app.services.bambu_mqtt"):
+            mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
+
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert "drying ended early" in message
+        assert "480 of ? minutes" in message
+        assert "hms=none" in message
+
+    def test_stop_we_sent_is_not_blamed_on_the_firmware(self, mqtt_client, caplog):
+        """A stop Bambuddy sends — print takes priority, or the user's Stop
+        button — also ends the cycle far short of its duration, which on the
+        telemetry alone looks exactly like the firmware abandoning it. It must
+        be named as ours rather than reported as an unexplained early end."""
+        mqtt_client._client = MagicMock()
+        mqtt_client.send_drying_command(ams_id=0, temp=65, duration=12, mode=1, filament="PETG")
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 700, "tray": []}]})
+        mqtt_client.send_drying_command(ams_id=0, temp=0, duration=0, mode=0)
+        with caplog.at_level(logging.INFO, logger="backend.app.services.bambu_mqtt"):
+            mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
+
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert "drying stopped by Bambuddy" in message
+        assert "ended early" not in message
+        # And the attribution is consumed, so a later firmware-ended cycle on
+        # the same unit is not credited to a stop we sent hours earlier.
+        mqtt_client.send_drying_command(ams_id=0, temp=65, duration=12, mode=1, filament="PETG")
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 700, "tray": []}]})
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="backend.app.services.bambu_mqtt"):
+            mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
+        assert "drying ended early" in "\n".join(r.getMessage() for r in caplog.records)
+
+    def test_cycle_that_runs_to_term_keeps_the_plain_completion_log(self, mqtt_client, caplog):
+        """The countdown of a cycle that finishes normally is all but exhausted
+        when it drops to 0. Nothing needs explaining, so it keeps the one-line
+        message it has always had — the early-end diagnostics must not become
+        noise on every completed dry."""
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 1, "tray": []}]})
+        with caplog.at_level(logging.INFO, logger="backend.app.services.bambu_mqtt"):
+            mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
+
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert "drying complete (dry_time 1 → 0)" in message
+        assert "ended early" not in message
 
 
 class TestPrintRunningObservedCallback:
