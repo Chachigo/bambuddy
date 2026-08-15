@@ -121,9 +121,12 @@ class GiteaBackend(GitHubBackend):
         exact failure the GitHub version refuses to allow, so this pages instead.
 
         The cap mirrors GitLab's: reaching it means there are more pages, and
-        that is a failure rather than a partial result.
+        that is a failure rather than a partial result. Because the page size is
+        the server's choice rather than ours (see below), the cap is a page count
+        and not a file count.
         """
         blobs: dict[str, str] = {}
+        seen = 0
         page = 1
         while page <= 50:
             response = await client.get(
@@ -155,9 +158,18 @@ class GiteaBackend(GitHubBackend):
                     blobs[path] = sha
 
             # total_count counts every entry, trees included, so compare against
-            # what this page returned rather than against len(blobs).
+            # what came back rather than against len(blobs).
+            #
+            # Count what the server actually returned, never the per_page we
+            # asked for: Gitea clamps per_page to MAX_RESPONSE_ITEMS, which
+            # defaults to 50. Deriving the offset from the requested 1000 made
+            # page 2 report 1050 entries seen, which clears any total_count below
+            # that — so the loop stopped and returned the first two pages of a
+            # much larger tree as a success. The restore then read every missing
+            # path as "category not present in this commit" and skipped it
+            # silently, the exact failure this override exists to prevent.
             total = data.get("total_count")
-            seen = (page - 1) * 1000 + len(entries)
+            seen += len(entries)
             if not isinstance(total, int) or seen >= total or not entries:
                 return blobs, ""
             page += 1

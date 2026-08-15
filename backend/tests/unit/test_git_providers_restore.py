@@ -426,6 +426,42 @@ class TestGiteaAndForgejoInheritReads:
         assert client.get.await_count == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("backend_cls", [GiteaBackend, ForgejoBackend])
+    async def test_a_clamped_page_size_is_still_read_to_the_end(self, backend_cls):
+        """Gitea clamps per_page to MAX_RESPONSE_ITEMS — 50 by default (#2656).
+
+        Paging off the *requested* 1000 made page 2 believe it had seen 1050
+        entries, which clears any total_count below that. The loop then returned
+        the first 100 entries of a 120-entry tree as a success, and the restore
+        reported the categories it could not see as absent from the commit.
+        """
+        clamped = 50
+        total = 120
+        pages = []
+        for start in range(0, total, clamped):
+            count = min(clamped, total - start)
+            pages.append(
+                _make_mock_response(
+                    200,
+                    {
+                        "tree": [
+                            {"type": "blob", "path": f"f{i}.json", "sha": f"s{i}"} for i in range(start, start + count)
+                        ],
+                        "total_count": total,
+                    },
+                )
+            )
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=pages)
+
+        result = await backend_cls().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is True
+        assert client.get.await_count == 3
+        assert len(result["paths"]) == total
+        assert "f119.json" in result["paths"], "the tail of the tree is what a clamped pager loses"
+
+    @pytest.mark.asyncio
     async def test_a_tree_beyond_the_page_cap_fails_rather_than_truncating(self):
         page = {"tree": [{"type": "blob", "path": f"f{i}.json", "sha": f"s{i}"} for i in range(1000)]}
         page["total_count"] = 10_000_000
