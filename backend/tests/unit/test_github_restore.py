@@ -1375,11 +1375,21 @@ class TestRestoreArchives:
 
 class TestRestoreKprofiles:
     @staticmethod
-    def _live(slot_id, filament_id="GFA00", name="Bambu PLA", setting_id="PFUS123", extruder_id=0):
+    def _live(
+        slot_id,
+        filament_id="GFA00",
+        name="Bambu PLA",
+        setting_id="PFUS123",
+        extruder_id=0,
+        nozzle_id="HS00-0.4",
+    ):
         """One profile as the printer currently reports it.
 
-        ``extruder_id`` mirrors ``KProfile`` (bambu_mqtt.py), which has carried
-        it all along; single-nozzle printers report 0.
+        ``extruder_id`` and ``nozzle_id`` mirror ``KProfile`` (bambu_mqtt.py),
+        which has carried both all along; single-nozzle printers report
+        extruder 0. Both are non-default fields there, so a live profile always
+        has them — the double must too, or it licenses code that would break on
+        the real object.
         """
         return SimpleNamespace(
             slot_id=slot_id,
@@ -1387,6 +1397,7 @@ class TestRestoreKprofiles:
             name=name,
             setting_id=setting_id,
             extruder_id=extruder_id,
+            nozzle_id=nozzle_id,
         )
 
     def _client(self, live=None, sent="7", ack=(True, "")):
@@ -1772,6 +1783,73 @@ class TestRestoreKprofiles:
         profiles, _ = client.set_kprofiles_batch.call_args.args
         assert profiles[0]["cali_idx"] == 4606
         assert tally.restored == 1
+
+    @pytest.mark.asyncio
+    async def test_a_backup_without_a_nozzle_id_omits_the_key(self, db_session, printer_factory):
+        """``set_kprofiles_batch`` defaults it, and only an absent key lets it.
+
+        The default is ``p.get("nozzle_id", f"HS00-{diameter}")``, which a key
+        present-and-None defeats — the batch would publish a null nozzle_id to
+        the printer. Printers that omit the field (#1748) are the reason the
+        default exists, so it has to be reachable.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        payload["kprofiles/00M09A123456789/0.4.json"]["profiles"][0].pop("nozzle_id")
+        # No live match either, so neither source can supply one.
+        client = self._client(live=[])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert "nozzle_id" not in profiles[0]
+
+    @pytest.mark.asyncio
+    async def test_the_backups_nozzle_id_is_used_when_nothing_is_live(self, db_session, printer_factory):
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(live=[])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["nozzle_id"] == "HS00-0.4"
+
+    @pytest.mark.asyncio
+    async def test_the_live_nozzle_id_beats_the_backups(self, db_session, printer_factory):
+        """The nozzle may have been swapped since the backup; we write to the
+        one that is fitted now, exactly as with setting_id."""
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(live=[self._live(slot_id=4606, nozzle_id="SS00-0.4")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["nozzle_id"] == "SS00-0.4"
+
+    @pytest.mark.asyncio
+    async def test_a_live_profile_without_a_nozzle_id_falls_back_to_the_backup(self, db_session, printer_factory):
+        """Same defensive read as extruder_id: not every live profile carries
+        every field."""
+        await printer_factory(serial_number="00M09A123456789")
+        live = SimpleNamespace(slot_id=4606, filament_id="GFA00", name="Bambu PLA", setting_id="PFUS123")
+        client = self._client(live=[live])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["nozzle_id"] == "HS00-0.4"
 
     @pytest.mark.asyncio
     async def test_unknown_serial_is_skipped_with_reason(self, db_session):

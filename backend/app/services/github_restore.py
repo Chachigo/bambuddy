@@ -1621,24 +1621,35 @@ class GitHubRestoreService:
                         unmatched += 1
                     else:
                         claimed.add(match.slot_id)
-                    profile_dicts.append(
-                        {
-                            "filament_id": p.get("filament_id", ""),
-                            "name": p.get("name", ""),
-                            "k_value": p.get("k_value", "0.020000"),
-                            "nozzle_id": p.get("nozzle_id"),
-                            "extruder_id": p.get("extruder_id", 0),
-                            # Prefer the live setting_id when we matched: it is
-                            # what the printer currently associates with the slot.
-                            "setting_id": (match.setting_id if match else None) or p.get("setting_id"),
-                            # cali_idx -1 tells the printer to add a new profile
-                            # rather than address a slot that isn't there.
-                            "cali_idx": match.slot_id if match else -1,
-                            # Only consulted for the generated-setting_id
-                            # fallback; cali_idx above takes precedence.
-                            "slot_id": 0,
-                        }
-                    )
+                    entry = {
+                        "filament_id": p.get("filament_id", ""),
+                        "name": p.get("name", ""),
+                        "k_value": p.get("k_value", "0.020000"),
+                        "extruder_id": p.get("extruder_id", 0),
+                        # Prefer the live setting_id when we matched: it is
+                        # what the printer currently associates with the slot.
+                        "setting_id": (match.setting_id if match else None) or p.get("setting_id"),
+                        # cali_idx -1 tells the printer to add a new profile
+                        # rather than address a slot that isn't there.
+                        "cali_idx": match.slot_id if match else -1,
+                        # Only consulted for the generated-setting_id
+                        # fallback; cali_idx above takes precedence.
+                        "slot_id": 0,
+                    }
+
+                    # Same precedence as setting_id, and set only when known.
+                    # nozzle_id encodes the fitted nozzle's type and diameter
+                    # ("HS00-0.4"), so the live value beats the backup's: the
+                    # user may have swapped the nozzle since. When neither knows,
+                    # the key has to be *absent* — set_kprofiles_batch supplies
+                    # HS00-{diameter} via p.get(..., default), which a key
+                    # present-and-None defeats, publishing a null nozzle_id.
+                    # Printers that omit it are the reason the default is there
+                    # (#1748), so it has to be reachable.
+                    nozzle_id = (getattr(match, "nozzle_id", None) if match else None) or p.get("nozzle_id")
+                    if nozzle_id:
+                        entry["nozzle_id"] = nozzle_id
+                    profile_dicts.append(entry)
                 if not profile_dicts:
                     continue
                 if unmatched:
