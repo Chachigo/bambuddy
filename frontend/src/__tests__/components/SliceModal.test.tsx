@@ -8,7 +8,7 @@
  * the tracker — not here.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
@@ -1517,6 +1517,72 @@ describe('SliceModal', () => {
 
 // Pure-function tests for the filament slot picker. Pinned as a separate
 // describe so the contract is visible without needing the modal mount.
+/**
+ * The slice dialog switches to a two-column layout once there is room for it,
+ * and the process-settings panel then owns the right-hand column. The global
+ * test setup pins matchMedia to `matches: false`, so every other test in this
+ * file exercises the narrow single-stack path; these override it.
+ */
+describe('SliceModal — process settings layout', () => {
+  const setViewport = (wide: boolean) => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: (query: string) => ({
+        matches: wide,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => true,
+      }),
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getLibraryFilePlates.mockResolvedValue({
+      file_id: 100,
+      filename: 'Cube.stl',
+      plates: [],
+      is_multi_plate: false,
+    });
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue({
+      file_id: 100,
+      filename: 'Cube.stl',
+      plate_id: 1,
+      filaments: [],
+    });
+  });
+
+  afterEach(() => setViewport(false));
+
+  it('keeps the panel collapsed behind a disclosure in the narrow layout', async () => {
+    setViewport(false);
+    renderWithTracker({ source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' }, onClose: vi.fn() });
+
+    const header = await screen.findByRole('button', { name: /Process settings/ });
+    expect(header).toBeEnabled();
+    expect(screen.queryByPlaceholderText('Search settings')).not.toBeInTheDocument();
+
+    await userEvent.setup().click(header);
+    await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
+  });
+
+  it('opens the panel without a click once it has a column of its own', async () => {
+    setViewport(true);
+    renderWithTracker({ source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' }, onClose: vi.fn() });
+
+    // No disclosure to operate: the panel is the column, so its header is
+    // inert rather than offering to collapse something that has room.
+    await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Process settings/ })).toBeDisabled();
+  });
+});
+
 describe('pickFilamentForSlot — printer-compat contract (#1851)', () => {
   // Index that recognises @BBL H2C / @BBL A1 tokens via the canonical
   // PRINTER_MODEL_MAP. Real production data comes through

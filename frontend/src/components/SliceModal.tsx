@@ -15,6 +15,7 @@ import {
 } from '../api/client';
 import { useSliceJobTracker } from '../contexts/SliceJobTrackerContext';
 import { useToast } from '../contexts/ToastContext';
+import { useIsWideLayout } from '../hooks/useIsWideLayout';
 import { PlatePickerModal } from './PlatePickerModal';
 import SlicerSettingsPanel from './SlicerSettingsPanel';
 import type { DesignOverride, PlateFilament } from '../types/plates';
@@ -264,6 +265,12 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
   const [processOverrides, setProcessOverrides] = useState<Record<string, SettingValue>>({});
   const [serializedProcessOverrides, setSerializedProcessOverrides] = useState<Record<string, string | string[]>>({});
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  // Wide enough for the two-column layout, where the panel has a column to
+  // itself and so is always open. The disclosure only exists for the narrow
+  // single-stack layout, in which 348 unfolded options would bury the preset
+  // pickers above them.
+  const isWideLayout = useIsWideLayout();
+  const panelOpen = isWideLayout || settingsExpanded;
 
   // Slicer Pipelines (#1425) — apply a saved preset bundle to all four slots
   // with one pick, or save the current selection as a new pipeline.
@@ -614,7 +621,7 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
       }}
     >
       <div
-        className="w-full max-w-xl max-h-[85vh] flex flex-col rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary/60"
+        className="w-full max-w-xl lg:max-w-5xl max-h-[85vh] flex flex-col rounded-lg bg-bambu-dark-secondary border border-bambu-dark-tertiary/60"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -685,6 +692,13 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
                   status === 'ok' (returns null in that case), but the Refresh
                   button stays visible regardless so users can pick up cloud /
                   bundled changes even when sign-in is healthy. */}
+              {/* Two columns once there is room for them. The left keeps the
+                  "what am I slicing with" decisions together; the right gives
+                  the process-settings panel a column of its own, which is the
+                  only way 348 options are comfortable to work through. Below
+                  lg both collapse back into the original single stack. */}
+              <div className="lg:grid lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] lg:gap-5 lg:items-start">
+                <div className="space-y-4 min-w-0">
               {/* Slicer Pipelines (#1425): apply a saved preset bundle to all
                   four slots, or save the current selection as a pipeline.
                   Pipelines are managed in Settings → Workflow → Pipelines. */}
@@ -906,46 +920,6 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
                 </div>
               )}
 
-              {/* Process settings, mirroring OrcaSlicer's own Print Settings
-                  tabs. Collapsed by default: the common case is slicing with a
-                  preset as-is, and 348 options unfolded would bury the preset
-                  pickers above. Hidden entirely in embedded mode, where no
-                  process JSON is sent for these to patch. */}
-              {!useEmbedded && (
-                <div className="rounded border border-bambu-dark-tertiary p-3">
-                  <button
-                    type="button"
-                    onClick={() => setSettingsExpanded((v) => !v)}
-                    className="flex w-full items-center justify-between gap-2 text-left"
-                  >
-                    <span className="text-sm text-white">
-                      {t('slice.processSettings', 'Process settings')}
-                      <span className="block text-xs text-bambu-gray/70">
-                        {t('slice.processSettingsHint', "Adjust the picked preset for this slice. Anything you don't touch stays as the preset defines it.")}
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-xs text-bambu-gray">
-                      {Object.keys(serializedProcessOverrides).length > 0
-                        ? t('slice.processSettingsChanged', '{{count}} changed', {
-                            count: Object.keys(serializedProcessOverrides).length,
-                          })
-                        : t('slice.processSettingsUnchanged', 'Preset defaults')}
-                    </span>
-                  </button>
-                  {settingsExpanded && (
-                    <div className="mt-3 border-t border-bambu-dark-tertiary pt-3">
-                      <SlicerSettingsPanel
-                        values={processOverrides}
-                        onChange={(values, serialized) => {
-                          setProcessOverrides(values);
-                          setSerializedProcessOverrides(serialized);
-                        }}
-                        disabled={isEnqueuing}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
               {/* Bed-type override (#1337). Always visible, always enabled.
                   The backend patches curr_bed_type on the resolved process
                   JSON before forwarding to the sidecar. */}
@@ -1047,6 +1021,55 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
                   );
                 })
               )}
+                </div>
+
+                {/* Right column: the settings panel. It owns this column, so
+                    there is nothing to collapse it out of the way of — the
+                    disclosure below lg exists only because the single-column
+                    stack cannot afford 348 options unfolded. */}
+                <div className="mt-4 lg:mt-0 min-w-0">
+                {/* Process settings, mirroring OrcaSlicer's own Print Settings
+                    tabs. Hidden entirely in embedded mode, where no process
+                    JSON is sent for these to patch. */}
+                {!useEmbedded && (
+                  <div className="rounded border border-bambu-dark-tertiary p-3">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsExpanded((v) => !v)}
+                      aria-expanded={panelOpen}
+                      disabled={isWideLayout}
+                      className="flex w-full items-center justify-between gap-2 text-left lg:cursor-default"
+                    >
+                      <span className="text-sm text-white">
+                        {t('slice.processSettings', 'Process settings')}
+                        <span className="block text-xs text-bambu-gray/70">
+                          {t('slice.processSettingsHint', "Adjust the picked preset for this slice. Anything you don't touch stays as the preset defines it.")}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs text-bambu-gray">
+                        {Object.keys(serializedProcessOverrides).length > 0
+                          ? t('slice.processSettingsChanged', '{{count}} changed', {
+                              count: Object.keys(serializedProcessOverrides).length,
+                            })
+                          : t('slice.processSettingsUnchanged', 'Preset defaults')}
+                      </span>
+                    </button>
+                    {panelOpen && (
+                      <div className="mt-3 border-t border-bambu-dark-tertiary pt-3">
+                        <SlicerSettingsPanel
+                          values={processOverrides}
+                          onChange={(values, serialized) => {
+                            setProcessOverrides(values);
+                            setSerializedProcessOverrides(serialized);
+                          }}
+                          disabled={isEnqueuing}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                </div>
+              </div>
             </>
           )}
 

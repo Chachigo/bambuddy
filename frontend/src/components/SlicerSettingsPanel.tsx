@@ -213,7 +213,9 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
           {t('slicerSettings.noMatches', 'No settings match this search.')}
         </p>
       ) : (
-        <div className="flex flex-col gap-4 max-h-[22rem] overflow-y-auto pr-1">
+        // Taller once the panel has a column of its own; the narrow cap keeps
+        // it from swallowing the single-column stack on small screens.
+        <div className="flex flex-col gap-4 max-h-[22rem] lg:max-h-[58vh] overflow-y-auto pr-1">
           {shownPages.map((p) => (
             <div key={p.page} className="flex flex-col gap-3">
               {query.trim() && <p className="text-[0.7rem] uppercase tracking-wide text-bambu-gray/70">{p.page}</p>}
