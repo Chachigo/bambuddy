@@ -125,8 +125,9 @@ class TestSettingKeyBlocklist:
         Carving it out would also be a live hole rather than a tidy-up: an
         attacker-authored ``settings/app_settings.json`` could then get a
         ``*token*``-named row written simply by choosing that name. This
-        blocklist's whole job is belt-and-braces, so a name-shaped exception to
-        it is exactly the wrong shape of fix.
+        The hints are the primary refusal for every credential the collector
+        does not filter, so a name-shaped exception to them is exactly the wrong
+        shape of fix.
         """
         assert _is_blocked_setting_key("ha_token_from_env") is True
 

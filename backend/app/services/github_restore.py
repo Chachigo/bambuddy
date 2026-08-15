@@ -72,8 +72,13 @@ _KPROFILE_PATH_RE = re.compile(r"^kprofiles/([^/]+)/([^/]+)\.json$")
 # contain them, and a restore must not resurrect a stale credential.
 _SENSITIVE_SETTING_KEYS = {"bambu_cloud_token", "auth_secret_key"}
 
-# Belt-and-braces for the same reason: any key that looks like a secret is
-# skipped even if it isn't in the explicit denylist above.
+# The primary refusal, not a backstop for the set above. The collector filters
+# exactly bambu_cloud_token and auth_secret_key, so every other credential —
+# mqtt_password, ldap_bind_password, ha_token, prometheus_token — is present in
+# a current backup and is skipped only because its key matches a hint here.
+# _COMPANION_CREDENTIALS sits downstream of that: it withholds a toggle when the
+# credential it needs was refused, so shortening this tuple would both write a
+# stale credential and quietly make that rule inert.
 _SECRET_KEY_HINTS = ("token", "secret", "password", "access_code", "api_key", "passphrase")
 
 # Settings the MQTT relay reads only when it is (re)configured, so restoring the
