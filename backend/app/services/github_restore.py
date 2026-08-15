@@ -70,6 +70,32 @@ _SENSITIVE_SETTING_KEYS = {"bambu_cloud_token", "auth_secret_key"}
 # skipped even if it isn't in the explicit denylist above.
 _SECRET_KEY_HINTS = ("token", "secret", "password", "access_code", "api_key", "passphrase")
 
+# Keys that decide *who can reach the instance* rather than how it behaves. The
+# backup collector writes them like any other Settings row, so a backup taken
+# before auth was turned on carries auth_enabled=false — and a restore reaches
+# the table directly, so honouring them would:
+#
+#   * disable authentication outright. ``set_auth_enabled`` pairs its write with
+#     ``invalidate_auth_enabled_cache()``; we cannot, so the 30 s TTL in
+#     core.auth is the only thing between the write and an open instance. That
+#     cache is built to fail closed — writing the stored value behind its back
+#     is what would make it fail open.
+#   * bypass the lockout refusals ``update_settings`` enforces (a
+#     ``local_login_enabled=false`` with no enabled OIDC provider, or with no
+#     OIDC link on the caller, is a 400 there — #1589).
+#   * cross a permission boundary: /github-backup/restore is gated on
+#     GITHUB_RESTORE alone, so this would be a way to rewrite auth config
+#     without SETTINGS_UPDATE.
+#
+# Auth is reconfigured through the auth UI, which has the guards. Restoring it
+# from a snapshot has no safe reading.
+_PROTECTED_SETTING_KEYS = {
+    "auth_enabled",
+    "advanced_auth_enabled",
+    "local_login_enabled",
+    "setup_completed",
+}
+
 # Nozzle diameters the backup collector iterates. A path outside this set means
 # the backup was written by a newer version, so accept it rather than dropping
 # data, but keep the list for validation messages.
@@ -89,6 +115,15 @@ def _parse_dt(value) -> datetime | None:
 def _is_blocked_setting_key(key: str) -> bool:
     lowered = key.lower()
     return key in _SENSITIVE_SETTING_KEYS or any(hint in lowered for hint in _SECRET_KEY_HINTS)
+
+
+def _is_protected_setting_key(key: str) -> bool:
+    return key in _PROTECTED_SETTING_KEYS
+
+
+def _is_skipped_setting_key(key: str) -> bool:
+    """True for any key ``_restore_settings`` refuses to write, for either reason."""
+    return _is_blocked_setting_key(key) or _is_protected_setting_key(key)
 
 
 class _CategoryTally:
@@ -276,9 +311,14 @@ class GitHubRestoreService:
             values = payload.get("settings") if isinstance(payload, dict) else None
             if not isinstance(values, dict):
                 return 0, "No settings in payload"
+            # Both refusals are counted the same way here so the preview's item
+            # count matches what the restore actually writes; the wording only
+            # calls out the credential ones, which are what a user might expect
+            # to come back.
             blocked = sum(1 for key in values if _is_blocked_setting_key(key))
+            skipped = sum(1 for key in values if _is_skipped_setting_key(key))
             detail = f"{blocked} credential-like keys will be skipped" if blocked else None
-            return len(values) - blocked, detail
+            return len(values) - skipped, detail
 
         if category == RestoreCategory.SPOOLS:
             payload = parsed.get(SPOOLS_PATH)
@@ -825,12 +865,17 @@ class GitHubRestoreService:
             return
 
         blocked = 0
+        protected = 0
         for key, value in values.items():
             if not isinstance(key, str) or not key:
                 tally.failed += 1
                 continue
             if _is_blocked_setting_key(key):
                 blocked += 1
+                tally.skipped += 1
+                continue
+            if _is_protected_setting_key(key):
+                protected += 1
                 tally.skipped += 1
                 continue
             if value is None:
@@ -852,6 +897,11 @@ class GitHubRestoreService:
 
         if blocked:
             tally.note(f"{blocked} credential-like key(s) skipped — re-enter secrets manually")
+        if protected:
+            tally.note(
+                f"{protected} authentication setting(s) skipped — change those in Settings > "
+                "Authentication so the lockout checks still run"
+            )
 
     async def _restore_kprofiles(self, db: AsyncSession, payload: dict, tally: _CategoryTally) -> None:
         by_serial: dict[str, list[tuple[str, dict]]] = {}

@@ -26,6 +26,8 @@ from backend.app.services.github_restore import (
     GitHubRestoreService,
     _CategoryTally,
     _is_blocked_setting_key,
+    _is_protected_setting_key,
+    _is_skipped_setting_key,
     _parse_dt,
 )
 
@@ -70,6 +72,20 @@ class TestSettingKeyBlocklist:
     )
     def test_ordinary_keys_are_allowed(self, key):
         assert _is_blocked_setting_key(key) is False
+
+    @pytest.mark.parametrize(
+        "key",
+        ["auth_enabled", "advanced_auth_enabled", "local_login_enabled", "setup_completed"],
+    )
+    def test_auth_policy_keys_are_protected(self, key):
+        # Not credential-shaped, so the secret hints never catch them.
+        assert _is_blocked_setting_key(key) is False
+        assert _is_protected_setting_key(key) is True
+        assert _is_skipped_setting_key(key) is True
+
+    @pytest.mark.parametrize("key", ["currency", "ldap_enabled", "auth_secret_key"])
+    def test_protected_set_is_only_the_auth_policy_keys(self, key):
+        assert _is_protected_setting_key(key) is False
 
 
 class TestCategoryTally:
@@ -163,6 +179,36 @@ class TestRestoreSettings:
         assert keys == {"currency"}
         assert tally.skipped == 2
         assert any("credential-like" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_auth_settings_are_never_restored(self, db_session):
+        """Restoring auth_enabled=false would disable auth behind the cache's back."""
+        db_session.add(Settings(key="auth_enabled", value="true"))
+        db_session.add(Settings(key="local_login_enabled", value="true"))
+        await db_session.commit()
+        tally = _CategoryTally()
+        payload = {
+            "settings": {
+                "currency": "EUR",
+                "auth_enabled": "false",
+                "advanced_auth_enabled": "false",
+                "local_login_enabled": "false",
+                "setup_completed": "false",
+            }
+        }
+
+        await _service()._restore_settings(db_session, payload, overwrite=True, tally=tally)
+        await db_session.commit()
+
+        rows = {s.key: s.value for s in (await db_session.execute(select(Settings))).scalars().all()}
+        assert rows["auth_enabled"] == "true"
+        assert rows["local_login_enabled"] == "true"
+        assert "advanced_auth_enabled" not in rows
+        assert "setup_completed" not in rows
+        assert rows["currency"] == "EUR"
+        assert tally.restored == 1
+        assert tally.skipped == 4
+        assert any("authentication setting" in note for note in tally.notes)
 
     @pytest.mark.asyncio
     async def test_missing_payload_is_noted_not_fatal(self, db_session):
