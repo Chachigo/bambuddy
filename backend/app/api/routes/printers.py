@@ -52,6 +52,7 @@ from backend.app.services.bambu_ftp import (
 )
 from backend.app.services.printer_diagnostic import run_connection_diagnostic
 from backend.app.services.printer_manager import (
+    display_temperatures,
     drying_screen_only,
     get_derived_status_name,
     printer_manager,
@@ -868,6 +869,7 @@ async def get_overlay_status(
             "layer_num": None,
             "total_layers": None,
             "stg_cur_name": None,
+            "temperatures": {},
             "time_format": time_format,
         }
 
@@ -884,6 +886,9 @@ async def get_overlay_status(
         "layer_num": state.layer_num,
         "total_layers": state.total_layers,
         "stg_cur_name": get_derived_status_name(state, printer.model),
+        # Nozzle / bed / chamber readings for the overlay's temperature fields
+        # (#1422). Filtered rather than passed through: see display_temperatures.
+        "temperatures": display_temperatures(state.temperatures, printer.model),
         "time_format": time_format,
     }
 

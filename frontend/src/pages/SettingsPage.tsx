@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Plus, Plug, AlertTriangle, RotateCcw, Bell, Download, RefreshCw, ExternalLink, Globe, Droplets, Thermometer, FileText, Edit2, Send, CheckCircle, XCircle, History, Trash2, Zap, TrendingUp, Calendar, DollarSign, Power, PowerOff, Key, Copy, Database, X, Shield, Printer, Cylinder, Wifi, Home, Video, Users, Lock, Unlock, ChevronDown, Save, Mail, Flame, Layers, ListOrdered, Code, Search, Scale, Settings as SettingsIcon, ScanEye, Cog, QrCode, Heart, Briefcase, Workflow, UploadCloud } from 'lucide-react';
+import { Loader2, Plus, Plug, AlertTriangle, RotateCcw, Bell, Download, RefreshCw, ExternalLink, Globe, Droplets, Thermometer, FileText, Edit2, Send, CheckCircle, XCircle, History, Trash2, Zap, TrendingUp, Calendar, DollarSign, Power, PowerOff, Key, Copy, Database, X, Shield, Printer, Cylinder, Wifi, Home, Video, Users, Lock, Unlock, ChevronDown, Save, Mail, Flame, Layers, ListOrdered, Code, Search, Scale, Settings as SettingsIcon, ScanEye, Cog, QrCode, Heart, Briefcase, Workflow, UploadCloud, MonitorPlay } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
@@ -16,6 +16,7 @@ import { Card, CardContent, CardDensityProvider, CardHeader } from '../component
 import { SlicerBundlesPanel } from '../components/SlicerBundlesPanel';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
+import { StreamOverlayBuilder } from '../components/StreamOverlayBuilder';
 import { Collapsible } from '../components/Collapsible';
 import { CopyButton } from '../components/CopyButton';
 import { Button } from '../components/Button';
@@ -4249,6 +4250,21 @@ export function SettingsPage() {
               </CardHeader>
               <CardContent>
                 <CameraTokensSection />
+              </CardContent>
+            </Card>
+
+            {/* Streaming-overlay URL builder (#1422). Sits under the camera
+                tokens it usually needs — an overlay for a login-enabled
+                deployment is a token plus a URL, and both are made here. */}
+            <Card className="mt-6">
+              <CardHeader>
+                <h3 className="text-base font-semibold text-white flex items-center gap-2" id="card-stream-overlay">
+                  <MonitorPlay className="w-4 h-4 text-bambu-green" />
+                  {t('streamOverlay.builder.title', 'Streaming Overlay')}
+                </h3>
+              </CardHeader>
+              <CardContent>
+                <StreamOverlayBuilder />
               </CardContent>
             </Card>
           </div>

@@ -10,6 +10,7 @@ import pytest
 
 from backend.app.services.printer_manager import (
     PrinterManager,
+    display_temperatures,
     drying_screen_only,
     get_derived_status_name,
     has_stg_cur_idle_bug,
@@ -1476,6 +1477,56 @@ class TestDryingTargetExposure:
         result = printer_state_to_dict(state, drying_targets={})
         assert result["ams"][0]["dry_filament"] == "PLA"
         assert result["ams"][0]["dry_target_temp"] == 45
+
+
+class TestDisplayTemperatures:
+    """#1422 — the readings handed to the streaming overlay.
+
+    `state.temperatures` doubles as the MQTT client's working memory: alongside
+    the readings it carries derived heater flags and private timestamps. The
+    overlay feed is reached by a token rather than a login, so it gets an
+    allow-list rather than the dict.
+    """
+
+    def test_keeps_the_readings_the_overlay_draws(self):
+        result = display_temperatures({"nozzle": 219.5, "nozzle_target": 220.0, "bed": 60.0, "bed_target": 60.0}, "X1C")
+        assert result == {"nozzle": 219.5, "nozzle_target": 220.0, "bed": 60.0, "bed_target": 60.0}
+
+    def test_drops_heater_flags_and_private_bookkeeping(self):
+        result = display_temperatures(
+            {
+                "nozzle": 219.5,
+                "nozzle_heating": True,
+                "bed_heating": False,
+                "_nozzle_target_set_time": 1754300000.0,
+                "_chamber_target_set_time": 1754300000.0,
+            },
+            "X1C",
+        )
+        assert result == {"nozzle": 219.5}
+
+    def test_chamber_kept_on_models_with_a_real_sensor(self):
+        result = display_temperatures({"chamber": 38.0, "chamber_target": 40.0}, "X1C")
+        assert result == {"chamber": 38.0, "chamber_target": 40.0}
+
+    def test_chamber_dropped_on_models_without_one(self):
+        """P1P, P1S, A1 and A1 mini publish a meaningless chamber_temper. Drawing
+        it on a live stream would state a measurement that doesn't exist."""
+        for model in ("P1S", "P1P", "A1", "A1MINI"):
+            assert display_temperatures({"nozzle": 200.0, "chamber": 38.0}, model) == {"nozzle": 200.0}
+
+    def test_second_nozzle_is_included(self):
+        result = display_temperatures({"nozzle": 220.0, "nozzle_2": 240.0, "nozzle_2_target": 250.0}, "H2D")
+        assert result == {"nozzle": 220.0, "nozzle_2": 240.0, "nozzle_2_target": 250.0}
+
+    def test_unparseable_and_missing_values_are_skipped(self):
+        """A reading that isn't a number is dropped rather than crashing the
+        feed or reaching the page as a string."""
+        assert display_temperatures({"nozzle": None, "bed": "warm", "chamber": 38.0}, "X1C") == {"chamber": 38.0}
+
+    def test_empty_and_none_are_empty(self):
+        assert display_temperatures(None, "X1C") == {}
+        assert display_temperatures({}, "X1C") == {}
 
 
 class TestSupportsChamberTemp:

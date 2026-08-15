@@ -7699,6 +7699,18 @@ async def security_headers_middleware(request, call_next):
             "base-uri 'self'; " + _frame_ancestors("'none'")
         )
     else:
+        # The streaming overlay is embedded same-origin by the URL builder's
+        # preview in Settings (#1422) — the same reason /gcode-viewer allows
+        # 'self' above. Embedding from anywhere else is still refused: 'self'
+        # only permits a framer on this origin, which is Bambuddy's own UI, so
+        # a clickjacking page on another host is blocked exactly as before.
+        # (The overlay draws status over a camera feed and its only interactive
+        # element is the logo link, so there is nothing to bait a click into
+        # even from a same-origin framer.) Cross-origin embedding of the
+        # overlay — Home Assistant on another port — remains what
+        # TRUSTED_FRAME_ORIGINS is for, and _frame_ancestors already folds that
+        # allowlist in.
+        embeddable_same_origin = request.url.path.startswith("/overlay/")
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{csp_nonce}'; "
@@ -7709,7 +7721,7 @@ async def security_headers_middleware(request, call_next):
             "font-src 'self' data:; "
             "object-src 'none'; "
             "base-uri 'self'; "
-            "frame-src 'self' http: https:; " + _frame_ancestors("'none'")
+            "frame-src 'self' http: https:; " + _frame_ancestors("'self'" if embeddable_same_origin else "'none'")
         )
     if request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

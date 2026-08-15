@@ -341,6 +341,10 @@ export interface OverlayStatus {
   layer_num: number | null;
   total_layers: number | null;
   stg_cur_name: string | null;
+  // Nozzle / bed / chamber readings for the overlay's temperature fields
+  // (#1422). Only the keys a viewer is shown; chamber is absent on models
+  // without a real sensor.
+  temperatures: Record<string, number>;
   time_format: 'system' | '12h' | '24h';
 }
 

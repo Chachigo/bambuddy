@@ -114,6 +114,43 @@ async def test_default_headers_strict(async_client: AsyncClient, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_overlay_route_allows_same_origin_framing(async_client: AsyncClient, monkeypatch):
+    """#1422 — the overlay is framed same-origin by the URL builder's preview.
+
+    'none' blocks that too, which is why the preview showed Firefox's "will not
+    allow Firefox to display the page if another site has embedded it". 'self'
+    permits only a framer on this origin — Bambuddy's own UI — so a
+    clickjacking page on another host is refused exactly as before.
+    """
+    from backend.app import main as main_module
+
+    monkeypatch.setattr(main_module, "_TRUSTED_FRAME_ORIGINS", ())
+
+    resp = await async_client.get("/overlay/1")
+    csp = resp.headers.get("Content-Security-Policy", "")
+    assert "frame-ancestors 'self';" in csp
+    # The legacy header already permitted same-origin framing; only the CSP was
+    # blocking it. Assert it still says so rather than being dropped.
+    assert resp.headers.get("X-Frame-Options") == "SAMEORIGIN"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_other_spa_routes_still_refuse_all_framing(async_client: AsyncClient, monkeypatch):
+    """The #1422 carve-out is the overlay path only — everything else keeps
+    'none', including paths that merely start with something similar."""
+    from backend.app import main as main_module
+
+    monkeypatch.setattr(main_module, "_TRUSTED_FRAME_ORIGINS", ())
+
+    for path in ("/", "/settings", "/printers", "/overlays", "/camwall"):
+        resp = await async_client.get(path)
+        csp = resp.headers.get("Content-Security-Policy", "")
+        assert "frame-ancestors 'none'" in csp, f"{path} must not be framable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_trusted_origins_relaxes_csp_and_drops_xfo(async_client: AsyncClient, monkeypatch):
     """With env var set: X-Frame-Options is absent, frame-ancestors lists the origins."""
     from backend.app import main as main_module
