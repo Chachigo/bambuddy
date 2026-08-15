@@ -33,6 +33,7 @@ export default {
 
   // Ortak
   common: {
+    plusNMore: '+{{count}} tane daha',
     save: 'Kaydet',
     saving: 'Kaydediliyor...',
     cancel: 'İptal',
@@ -3558,6 +3559,13 @@ export default {
 
   // Dosya yöneticisi
   fileManager: {
+    variants: {
+      badge: '{{count}} sürüm',
+      groupAction: 'Sürüm olarak grupla',
+      groupTooltip: 'Bu dosyaları farklı yazıcılar için dilimlenmiş aynı iş olarak işaretle',
+      grouped: '{{count}} dosya sürüm olarak gruplandı',
+      printAlternatives: 'Yazdır ({{count}} alternatif)',
+    },
     title: 'Dosya Yöneticisi',
     subtitle: 'Baskı dosyalarınızı organize edin ve yönetin',
     uploadFiles: 'Dosya Yükle',
@@ -4080,6 +4088,10 @@ export default {
     allPresetsRequired: 'Tüm ön ayarlar seçilmelidir',
     useEmbedded: 'Dosyanın yerleşik ayarlarını kullan',
     useEmbeddedHint: 'Yukarıdaki profiller yerine tasarımcının ayarladığı gibi (duvarlar, dolgu, filament) dilimle. Yazıcınız dosyayla eşleştiği için sunuluyor.',
+    autoOrient: 'Nesneleri otomatik yönlendir',
+    autoOrientHint: 'Dilimleyici, dilimlemeden önce her nesneyi en iyi basılan yüzüne çevirir. Dosyada kayıtlı yönlendirmenin yerini alır.',
+    autoArrange: 'Tablaya otomatik yerleştir',
+    autoArrangeHint: 'Dilimleyici nesneleri üst üste binmeyecek şekilde yerleştirir. Dosyadaki yerleşimin yerini alır.',
     designSettings: 'Tasarımcının ayarlarını koru',
     designSettingsHint: 'Bu dosya standart profile göre {{count}} baskı ayarını değiştiriyor.',
     designSettingsSelected: '{{total}} ayardan {{selected}} tanesi seçili',
@@ -4606,6 +4618,16 @@ export default {
 
   // Baskı modali
   printModal: {
+    variants: {
+      editNote: 'Bu alternatifler iş kuyruğa alınırken belirlendi. Değiştirmek için iptal edip yeniden kuyruğa alın.',
+      title: 'Yazıcı alternatifleri',
+      help: 'Tek iş, tek kuyruk yeri. Uygun olan ilk boşalan yazıcı kendi dosyasını yazdırır.',
+      unknownModel: 'Bilinmeyen model',
+      plateFor: '{{filename}} için tabla',
+      moveUp: 'Yukarı taşı',
+      moveDown: 'Aşağı taşı',
+      queued: '{{count}} alternatifle kuyruğa alındı',
+    },
     selectPrinter: 'Yazıcı Seç',
     selectPlate: 'Plaka Seç',
     filamentMapping: 'Filament Eşlemesi',

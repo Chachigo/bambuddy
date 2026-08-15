@@ -33,6 +33,7 @@ export default {
 
   // Common
   common: {
+    plusNMore: '+{{count}} altri',
     save: 'Salva',
     saving: 'Salvataggio...',
     cancel: 'Annulla',
@@ -3550,6 +3551,13 @@ export default {
 
   // File manager
   fileManager: {
+    variants: {
+      badge: '{{count}} versioni',
+      groupAction: 'Raggruppa come versioni',
+      groupTooltip: 'Segna questi file come lo stesso lavoro elaborato per stampanti diverse',
+      grouped: '{{count}} file raggruppati come versioni',
+      printAlternatives: 'Stampa ({{count}} alternative)',
+    },
     title: 'Gestore file',
     subtitle: 'Organizza e gestisci i tuoi file di stampa',
     uploadFiles: 'Carica file',
@@ -4078,6 +4086,10 @@ export default {
     allPresetsRequired: 'Tutti i preset devono essere selezionati',
     useEmbedded: 'Usa le impostazioni integrate del file',
     useEmbeddedHint: 'Slicia come impostato dal designer (pareti, riempimento, filamento) invece dei profili sopra. Disponibile perché la tua stampante corrisponde a quella del file.',
+    autoOrient: 'Orienta automaticamente gli oggetti',
+    autoOrientHint: "Lo slicer ruota ogni oggetto sul lato che si stampa meglio prima di affettare. Sostituisce l'orientamento salvato nel file.",
+    autoArrange: 'Disponi automaticamente sul piatto',
+    autoArrangeHint: 'Lo slicer dispone gli oggetti in modo che non si sovrappongano più. Sostituisce la disposizione del file.',
     designSettings: 'Mantieni le impostazioni del progettista',
     designSettingsHint: 'Questo file modifica {{count}} impostazione/i di stampa rispetto al profilo standard.',
     designSettingsSelected: '{{selected}} di {{total}} selezionate',
@@ -4616,6 +4628,16 @@ export default {
 
   // Print modal
   printModal: {
+    variants: {
+      editNote: 'Queste alternative sono state definite al momento dell\'accodamento. Annulla e riaccoda per modificarle.',
+      title: 'Alternative di stampante',
+      help: 'Un lavoro, un posto in coda. La prima stampante compatibile che si libera stampa il suo file.',
+      unknownModel: 'Modello sconosciuto',
+      plateFor: 'Piatto per {{filename}}',
+      moveUp: 'Sposta su',
+      moveDown: 'Sposta giù',
+      queued: 'In coda con {{count}} alternative',
+    },
     selectPrinter: 'Seleziona stampante',
     selectPlate: 'Seleziona piatto',
     filamentMapping: 'Mappatura filamento',

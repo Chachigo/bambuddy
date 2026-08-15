@@ -33,6 +33,7 @@ export default {
 
   // Common
   common: {
+    plusNMore: '他{{count}}件',
     save: '保存',
     saving: '保存中...',
     cancel: 'キャンセル',
@@ -3562,6 +3563,13 @@ export default {
 
   // File manager
   fileManager: {
+    variants: {
+      badge: '{{count}}個のバージョン',
+      groupAction: 'バージョンとしてグループ化',
+      groupTooltip: 'これらのファイルを、異なるプリンター向けにスライスした同一ジョブとして扱います',
+      grouped: '{{count}}個のファイルをバージョンとしてグループ化しました',
+      printAlternatives: '印刷（{{count}}件の候補）',
+    },
     title: 'ファイル管理',
     subtitle: '印刷ファイルの整理と管理',
     uploadFiles: 'ファイルをアップロード',
@@ -4090,6 +4098,10 @@ export default {
     allPresetsRequired: 'すべてのプリセットを選択する必要があります',
     useEmbedded: 'ファイルに埋め込まれた設定を使用',
     useEmbeddedHint: '上のプロファイルではなく、設計者が設定したとおり（ウォール、インフィル、フィラメント）にスライスします。お使いのプリンターがファイルと一致するため利用できます。',
+    autoOrient: 'オブジェクトの向きを自動で調整',
+    autoOrientHint: 'スライスする前に、各オブジェクトを印刷に適した面へ自動で回転させます。ファイルに保存された向きは上書きされます。',
+    autoArrange: 'プレート上に自動配置',
+    autoArrangeHint: 'オブジェクトが重ならないようにスライサーが並べ直します。ファイルの配置は置き換えられます。',
     designSettings: '設計者の設定を保持',
     designSettingsHint: 'このファイルは標準プロファイルから {{count}} 個の印刷設定を変更しています。',
     designSettingsSelected: '{{total}} 個中 {{selected}} 個を選択',
@@ -4628,6 +4640,16 @@ export default {
 
   // Print modal
   printModal: {
+    variants: {
+      editNote: 'これらの候補はキュー追加時に決まります。変更するにはキャンセルして追加し直してください。',
+      title: 'プリンターの候補',
+      help: '1つのジョブ、キューは1枠。条件に合う最初に空いたプリンターがそのファイルを印刷します。',
+      unknownModel: '不明なモデル',
+      plateFor: '{{filename}} のプレート',
+      moveUp: '上へ',
+      moveDown: '下へ',
+      queued: '{{count}}件の候補付きでキューに追加しました',
+    },
     selectPrinter: 'プリンターを選択',
     selectPlate: 'プレートを選択',
     filamentMapping: 'フィラメントマッピング',

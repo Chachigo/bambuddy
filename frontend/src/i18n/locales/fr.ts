@@ -33,6 +33,7 @@ export default {
 
   // Common
   common: {
+    plusNMore: '+{{count}} autres',
     save: 'Enregistrer',
     saving: 'Enregistrement...',
     cancel: 'Annuler',
@@ -3551,6 +3552,13 @@ export default {
 
   // File manager
   fileManager: {
+    variants: {
+      badge: 'Versions : {{count}}',
+      groupAction: 'Grouper comme versions',
+      groupTooltip: 'Marquer ces fichiers comme le même travail tranché pour différentes imprimantes',
+      grouped: '{{count}} fichiers groupés comme versions',
+      printAlternatives: 'Imprimer ({{count}} alternatives)',
+    },
     title: 'Gestionnaire de fichiers',
     subtitle: 'Organisez vos fichiers d\'impression',
     uploadFiles: 'Téléverser fichiers',
@@ -4079,6 +4087,10 @@ export default {
     allPresetsRequired: 'Tous les préréglages doivent être sélectionnés',
     useEmbedded: 'Utiliser les réglages intégrés du fichier',
     useEmbeddedHint: "Slicer tel que le concepteur l'a configuré (parois, remplissage, filament) au lieu des profils ci-dessus. Proposé car votre imprimante correspond à celle du fichier.",
+    autoOrient: 'Orienter les objets automatiquement',
+    autoOrientHint: "Le trancheur fait pivoter chaque objet sur sa meilleure face d'impression avant de trancher. Remplace l'orientation enregistrée dans le fichier.",
+    autoArrange: 'Disposer automatiquement sur le plateau',
+    autoArrangeHint: "Le trancheur place les objets pour qu'ils ne se chevauchent plus. Remplace la disposition du fichier.",
     designSettings: 'Conserver les réglages du concepteur',
     designSettingsHint: 'Ce fichier modifie {{count}} réglage(s) d\'impression par rapport au profil standard.',
     designSettingsSelected: '{{selected}} sur {{total}} sélectionnés',
@@ -4617,6 +4629,16 @@ export default {
 
   // Print modal
   printModal: {
+    variants: {
+      editNote: 'Ces alternatives ont été définies lors de la mise en file. Annulez et remettez en file pour les modifier.',
+      title: 'Alternatives d\'imprimante',
+      help: 'Un travail, une place dans la file. La première imprimante compatible qui se libère imprime son fichier.',
+      unknownModel: 'Modèle inconnu',
+      plateFor: 'Plateau pour {{filename}}',
+      moveUp: 'Monter',
+      moveDown: 'Descendre',
+      queued: 'Mis en file avec {{count}} alternatives',
+    },
     selectPrinter: 'Choisir l\'imprimante',
     selectPlate: 'Choisir le plateau',
     filamentMapping: 'Mapping Filament',

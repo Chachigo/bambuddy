@@ -33,6 +33,7 @@ export default {
 
   // Common
   common: {
+    plusNMore: '+{{count}} outros',
     save: 'Salvar',
     saving: 'Salvando...',
     cancel: 'Cancelar',
@@ -3550,6 +3551,13 @@ export default {
 
   // File manager
   fileManager: {
+    variants: {
+      badge: '{{count}} versões',
+      groupAction: 'Agrupar como versões',
+      groupTooltip: 'Marcar estes arquivos como o mesmo trabalho fatiado para impressoras diferentes',
+      grouped: '{{count}} arquivos agrupados como versões',
+      printAlternatives: 'Imprimir ({{count}} alternativas)',
+    },
     title: 'Gerenciador de Arquivos',
     subtitle: 'Organize e gerencie seus arquivos de impressão',
     uploadFiles: 'Enviar Arquivos',
@@ -4078,6 +4086,10 @@ export default {
     allPresetsRequired: 'Todas as predefinições devem ser selecionadas',
     useEmbedded: 'Usar as configurações incorporadas do arquivo',
     useEmbeddedHint: 'Fatiar como o designer configurou (paredes, preenchimento, filamento) em vez dos perfis acima. Disponível porque sua impressora corresponde à do arquivo.',
+    autoOrient: 'Orientar os objetos automaticamente',
+    autoOrientHint: 'O fatiador gira cada objeto para o lado que imprime melhor antes de fatiar. Substitui a orientação salva no arquivo.',
+    autoArrange: 'Organizar automaticamente na mesa',
+    autoArrangeHint: 'O fatiador posiciona os objetos para que não se sobreponham. Substitui a disposição do arquivo.',
     designSettings: 'Manter as configurações do designer',
     designSettingsHint: 'Este arquivo altera {{count}} configuração(ões) de impressão em relação ao perfil padrão.',
     designSettingsSelected: '{{selected}} de {{total}} selecionadas',
@@ -4616,6 +4628,16 @@ export default {
 
   // Print modal
   printModal: {
+    variants: {
+      editNote: 'Estas alternativas foram definidas ao enfileirar o trabalho. Cancele e enfileire de novo para alterá-las.',
+      title: 'Alternativas de impressora',
+      help: 'Um trabalho, uma vaga na fila. A primeira impressora compatível que ficar livre imprime o arquivo dela.',
+      unknownModel: 'Modelo desconhecido',
+      plateFor: 'Mesa para {{filename}}',
+      moveUp: 'Mover para cima',
+      moveDown: 'Mover para baixo',
+      queued: 'Na fila com {{count}} alternativas',
+    },
     selectPrinter: 'Selecionar Impressora',
     selectPlate: 'Selecionar Placa',
     filamentMapping: 'Mapeamento de Filamento',

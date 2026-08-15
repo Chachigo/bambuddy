@@ -30,6 +30,7 @@ export default {
     installAppSuccess: 'Bambuddy가 설치되었습니다'
   },
   common: {
+    plusNMore: '외 {{count}}개',
     save: '저장',
     saving: '저장 중...',
     cancel: '취소',
@@ -3374,6 +3375,13 @@ export default {
     bundleStepBuild: '지원 번들 ZIP 빌드 중'
   },
   fileManager: {
+    variants: {
+      badge: '버전 {{count}}개',
+      groupAction: '버전으로 그룹화',
+      groupTooltip: '이 파일들을 서로 다른 프린터용으로 슬라이스한 동일 작업으로 표시합니다',
+      grouped: '파일 {{count}}개를 버전으로 그룹화했습니다',
+      printAlternatives: '인쇄 (대안 {{count}}개)',
+    },
     title: '파일 관리자',
     subtitle: '인쇄 파일 정리 및 관리',
     uploadFiles: '파일 업로드',
@@ -3879,6 +3887,10 @@ export default {
     allPresetsRequired: '모든 프리셋을 선택해야 합니다',
     useEmbedded: '파일에 포함된 설정 사용',
     useEmbeddedHint: '위 프로필 대신 디자이너가 설정한 대로(벽, 내부 채움, 필라멘트) 슬라이싱합니다. 프린터가 파일과 일치하여 사용할 수 있습니다.',
+    autoOrient: '개체 방향 자동 조정',
+    autoOrientHint: '슬라이싱하기 전에 각 개체를 출력하기 좋은 면으로 회전시킵니다. 파일에 저장된 방향을 덮어씁니다.',
+    autoArrange: '플레이트에 자동 배치',
+    autoArrangeHint: '개체가 겹치지 않도록 슬라이서가 다시 배치합니다. 파일의 배치를 대체합니다.',
     designSettings: '디자이너 설정 유지',
     designSettingsHint: '이 파일은 기본 프로파일에서 {{count}}개의 출력 설정을 변경합니다.',
     designSettingsSelected: '{{total}}개 중 {{selected}}개 선택됨',
@@ -4400,6 +4412,16 @@ export default {
     emptySlotReset: '필라멘트가 할당되지 않음'
   },
   printModal: {
+    variants: {
+      editNote: '이 대안은 대기열에 추가할 때 정해집니다. 변경하려면 취소 후 다시 추가하세요.',
+      title: '프린터 대안',
+      help: '작업 하나, 대기열 한 자리. 조건이 맞는 프린터 중 먼저 비는 프린터가 해당 파일을 인쇄합니다.',
+      unknownModel: '알 수 없는 모델',
+      plateFor: '{{filename}}의 플레이트',
+      moveUp: '위로',
+      moveDown: '아래로',
+      queued: '대안 {{count}}개와 함께 대기열에 추가했습니다',
+    },
     selectPrinter: '프린터 선택',
     selectPlate: '플레이트 선택',
     filamentMapping: '필라멘트 매핑',

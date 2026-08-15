@@ -33,6 +33,7 @@ export default {
 
   // Common
   common: {
+    plusNMore: '另 {{count}} 个',
     save: '保存',
     saving: '保存中...',
     cancel: '取消',
@@ -3550,6 +3551,13 @@ export default {
 
   // File manager
   fileManager: {
+    variants: {
+      badge: '{{count}} 个版本',
+      groupAction: '归为版本组',
+      groupTooltip: '将这些文件标记为针对不同打印机切片的同一任务',
+      grouped: '已将 {{count}} 个文件归为版本组',
+      printAlternatives: '打印（{{count}} 个备选）',
+    },
     title: '文件管理器',
     subtitle: '组织和管理您的打印文件',
     uploadFiles: '上传文件',
@@ -4078,6 +4086,10 @@ export default {
     allPresetsRequired: '必须选择所有预设',
     useEmbedded: '使用文件的内置设置',
     useEmbeddedHint: '按设计者的设置（壁、填充、耗材）切片，而非上方的配置文件。因您的打印机与文件匹配而可用。',
+    autoOrient: '自动摆正模型',
+    autoOrientHint: '切片前由切片器把每个模型转到最适合打印的一面，会覆盖文件中保存的朝向。',
+    autoArrange: '自动排布在热床上',
+    autoArrangeHint: '由切片器重新摆放模型，使其不再重叠，会替换文件自带的布局。',
     designSettings: '保留设计者的设置',
     designSettingsHint: '此文件相对标准配置修改了 {{count}} 项打印设置。',
     designSettingsSelected: '已选择 {{selected}} / {{total}}',
@@ -4616,6 +4628,16 @@ export default {
 
   // Print modal
   printModal: {
+    variants: {
+      editNote: '这些备选在任务加入队列时确定。如需更改，请取消后重新加入队列。',
+      title: '打印机备选',
+      help: '一个任务，占一个队列位。第一台空闲且匹配的打印机会打印它对应的文件。',
+      unknownModel: '未知型号',
+      plateFor: '{{filename}} 的盘',
+      moveUp: '上移',
+      moveDown: '下移',
+      queued: '已加入队列，含 {{count}} 个备选',
+    },
     selectPrinter: '选择打印机',
     selectPlate: '选择板',
     filamentMapping: '耗材映射',
