@@ -2374,6 +2374,7 @@ async def run_migrations(conn):
             layer_usage TEXT,
             filament_properties TEXT,
             tray_remain_start TEXT,
+            tray_now_at_start INTEGER,
             UNIQUE(printer_id, archive_id)
         )
         """
@@ -2389,6 +2390,7 @@ async def run_migrations(conn):
             layer_usage TEXT,
             filament_properties TEXT,
             tray_remain_start TEXT,
+            tray_now_at_start INTEGER,
             UNIQUE(printer_id, archive_id)
         )
         """,
@@ -2397,6 +2399,18 @@ async def run_migrations(conn):
     # the original schema: add tray_remain_start, and relax filament_usage's
     # NOT NULL so the no-3MF branch can persist a remain-only tracking row.
     await _safe_execute(conn, "ALTER TABLE active_print_spoolman ADD COLUMN tray_remain_start TEXT")
+    # Which slot the print was drawing from at the start, so the remain%-delta
+    # fallback can tell a slot this print used from one it never touched
+    # (#1820). Nullable, because a row written mid-upgrade has no answer to
+    # give. INTEGER is spelled the same either way; the branch is only for
+    # IF NOT EXISTS, which SQLite's ALTER TABLE does not accept.
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE active_print_spoolman ADD COLUMN tray_now_at_start INTEGER")
+    else:
+        await _safe_execute(
+            conn,
+            "ALTER TABLE active_print_spoolman ADD COLUMN IF NOT EXISTS tray_now_at_start INTEGER",
+        )
     if is_sqlite():
         # SQLite can't ALTER COLUMN; patch sqlite_master directly. Mirrors the
         # users.password_hash NULL-relaxation a few hundred lines below — see

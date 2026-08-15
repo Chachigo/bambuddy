@@ -791,7 +791,13 @@ async def on_print_complete(
                     gid = change[0]
                     if isinstance(gid, int) and gid >= 0:
                         print_used_keys.add(_global_to_ams_key(gid))
-            if session.tray_now_at_start is not None and session.tray_now_at_start >= 0:
+            # 255 is not a slot: it is what ``tray_now`` reads at rest, before
+            # the printer has reported one and while nothing is loaded, and an
+            # unparseable reading falls back to it too. Mapped as a tray id it
+            # becomes (255, 1), and if it were the only evidence every real
+            # slot would be excluded and the fallback would charge nothing at
+            # all (#1820). The external spool reports 254 when in use.
+            if session.tray_now_at_start is not None and 0 <= session.tray_now_at_start <= 254:
                 print_used_keys.add(_global_to_ams_key(session.tray_now_at_start))
 
             # Collect all trays to check: AMS trays + VT (external) trays
@@ -851,7 +857,23 @@ async def on_print_complete(
                 delta_pct = start_remain - current_remain
 
                 if delta_pct <= 0:
-                    continue  # No consumption or tray was refilled
+                    # Not necessarily "nothing was printed". A fresh spool sits
+                    # at 100% for the first tens of grams, and the AMS estimate
+                    # drifts upward on its own, so a real print can end with the
+                    # same or a higher reading than it started with. Said out
+                    # loud because the alternative -- charging nothing, silently
+                    # -- is indistinguishable from having nothing to charge, and
+                    # the operator has no other way to find the prints that went
+                    # uncounted (#1820).
+                    logger.info(
+                        "[UsageTracker] %s: remain%% did not fall over the print (%d%% -> %d%%), "
+                        "nothing charged for printer %d",
+                        tray_label,
+                        start_remain,
+                        current_remain,
+                        printer_id,
+                    )
+                    continue
 
                 spool_id = await _resolve_spool_id_for_tray(
                     printer_id=printer_id,

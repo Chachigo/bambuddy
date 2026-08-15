@@ -32,8 +32,8 @@ from backend.app.services.archive import ArchiveService
 from backend.app.services.design_settings import overrides_from_config
 from backend.app.services.filament_requirements import annotate_rack_groups
 from backend.app.services.print_storage import REASON_INTERNAL_STORAGE, REASON_NO_EXTERNAL_STORAGE
+from backend.app.utils.archive_paths import archive_photos_dir, find_archive_photo
 from backend.app.utils.http import build_content_disposition
-from backend.app.utils.safe_path import safe_join_under
 from backend.app.utils.threemf_tools import (
     default_plate_gcode_name,
     expand_to_project_slots,
@@ -2932,10 +2932,10 @@ async def upload_photo(
     if not file.filename or not file.filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
         raise HTTPException(400, "File must be an image (.jpg, .jpeg, .png, .webp)")
 
-    # Get archive directory
-    archive_dir = settings.base_dir / Path(archive.file_path).parent
-    photos_dir = archive_dir / "photos"
-    photos_dir.mkdir(exist_ok=True)
+    # Get archive directory. parents=True because an archive with no 3MF owns
+    # <archive_dir>/<id>/, which nothing else has necessarily created yet.
+    photos_dir = archive_photos_dir(archive)
+    photos_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate unique filename
     import uuid
@@ -2982,15 +2982,14 @@ async def get_photo(
     if not archive.photos or filename not in archive.photos:
         raise HTTPException(404, "Photo not found")
 
-    archive_dir = settings.base_dir / Path(archive.file_path).parent
-    photos_dir = archive_dir / "photos"
     # Defence-in-depth: even though the membership check above already
-    # constrains `filename` to UUID-generated names from upload, the
-    # resolve + containment check guards against future code paths that
-    # might populate `archive.photos` from a less-trusted source.
-    photo_path = safe_join_under(photos_dir, filename)
+    # constrains `filename` to UUID-generated names from upload,
+    # find_archive_photo resolves and containment-checks each candidate,
+    # guarding against future code paths that might populate
+    # `archive.photos` from a less-trusted source.
+    photo_path = find_archive_photo(archive, filename)
 
-    if not photo_path.exists():
+    if photo_path is None:
         raise HTTPException(404, "Photo not found")
 
     # Determine media type
@@ -3026,11 +3025,11 @@ async def delete_photo(
     if not archive.photos or filename not in archive.photos:
         raise HTTPException(404, "Photo not found")
 
-    # Delete file — same defence-in-depth as get_photo above.
-    archive_dir = settings.base_dir / Path(archive.file_path).parent
-    photos_dir = archive_dir / "photos"
-    photo_path = safe_join_under(photos_dir, filename)
-    if photo_path.exists():
+    # Delete file — same lookup as get_photo above, so a photo that is
+    # readable is also deletable. Removing the name while leaving the file is
+    # how a no-3MF archive accumulated photos nobody could see or remove.
+    photo_path = find_archive_photo(archive, filename)
+    if photo_path is not None:
         photo_path.unlink()
 
     # Update archive photos list

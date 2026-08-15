@@ -6327,13 +6327,12 @@ async def on_print_complete(printer_id: int, data: dict):
 
             import uuid
             from datetime import datetime
-            from pathlib import Path
 
-            if archive.file_path:
-                archive_dir = app_settings.base_dir / Path(archive.file_path).parent
-            else:
+            from backend.app.utils.archive_paths import archive_dir as resolve_archive_dir
+
+            if not archive.file_path:
                 logger.warning("[PHOTO-BG] Archive %s has no file_path, using fallback dir", archive_id)
-                archive_dir = app_settings.archive_dir / str(archive.id)
+            archive_dir = resolve_archive_dir(archive)
             photo_filename = None
 
             # Prefer the timelapse last-frame source when a timelapse was
@@ -6653,15 +6652,10 @@ async def on_print_complete(printer_id: int, data: dict):
 
                             # Read finish photo bytes for image attachment (e.g. Pushover)
                             try:
-                                from pathlib import Path
+                                from backend.app.utils.archive_paths import find_archive_photo
 
-                                photo_path = (
-                                    app_settings.base_dir
-                                    / Path(archive.file_path).parent
-                                    / "photos"
-                                    / finish_photo_filename
-                                )
-                                if photo_path.exists():
+                                photo_path = find_archive_photo(archive, finish_photo_filename)
+                                if photo_path is not None:
                                     photo_bytes = await asyncio.to_thread(photo_path.read_bytes)
                                     if len(photo_bytes) <= 2_500_000:
                                         archive_data["image_data"] = photo_bytes
