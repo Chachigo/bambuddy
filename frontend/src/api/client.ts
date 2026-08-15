@@ -1860,6 +1860,11 @@ export interface SliceResponse {
   filament_used_g: number;
   filament_used_mm: number;
   used_embedded_settings: boolean;
+  /** Why the result could not be written to the external folder the source
+   * lives in, and so went to managed storage instead. Null on every normal
+   * slice. Surfaced to the user — a file filed somewhere they aren't looking
+   * with no signal is what made #2810 invisible from the UI. */
+  external_write_fallback?: string | null;
 }
 
 export interface SliceArchiveResponse {

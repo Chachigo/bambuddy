@@ -73,6 +73,7 @@ from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_miss
 from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_stl_thumbnail
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
+from backend.app.utils.safe_path import PathTraversalError, safe_join_under
 from backend.app.utils.threemf_tools import (
     expand_to_project_slots,
     extract_embedded_presets_from_3mf,
@@ -290,6 +291,82 @@ def _resolve_upload_destination(target_folder: LibraryFolder | None, filename: s
         return dest, True
     ext = os.path.splitext(filename)[1].lower()
     return get_library_files_dir() / f"{uuid.uuid4().hex}{ext}", False
+
+
+def _unique_external_name(ext_dir: Path, filename: str) -> str:
+    """Return ``filename``, or the first free ``<stem> (n)<suffix>`` variant.
+
+    Splits on the *compound* extension so re-slicing ``Bidoof.3mf`` yields
+    ``Bidoof (2).gcode.3mf`` rather than ``Bidoof.gcode (2).3mf``.
+
+    Uploads answer a name collision with a 409, which is right for a file the
+    user just chose to send. A slice is not that: re-slicing the same source
+    with different settings is routine, and the second run has already spent
+    minutes of CPU by the time the name is known -- refusing to store it would
+    throw that away. Overwriting is worse still, since the target is somebody's
+    NAS and the file being replaced may not even be ours.
+    """
+    stem = filename[: -len(".gcode.3mf")] if filename.endswith(".gcode.3mf") else Path(filename).stem
+    suffix = ".gcode.3mf" if filename.endswith(".gcode.3mf") else Path(filename).suffix
+    candidate = filename
+    counter = 2
+    # Bounded: a directory holding 999 re-slices of one model is pathological,
+    # and an unbounded loop here would hang the request on a mount that lies
+    # about exists() (some SMB shares do under contention).
+    #
+    # safe_join_under rather than `ext_dir / candidate`: `filename` derives
+    # from a name read out of a 3MF, so the very first probe must not be able
+    # to stat its way outside the mount. It raises PathTraversalError, which
+    # the caller turns into a managed-storage fallback.
+    while safe_join_under(ext_dir, candidate, http=False).exists() and counter < 1000:
+        candidate = f"{stem} ({counter}){suffix}"
+        counter += 1
+    return candidate
+
+
+def _resolve_slice_destination(target_folder: LibraryFolder | None, out_filename: str) -> tuple[Path, bool, str | None]:
+    """Resolve where a slice result should be written.
+
+    Returns ``(path, is_external, fallback_reason)``. ``fallback_reason`` is
+    ``None`` on the normal paths and otherwise names why an external folder
+    could not receive the file, so the caller can tell the user instead of
+    quietly filing it elsewhere.
+
+    Slicing a file that lives on an external mount used to store the output in
+    the managed library dir unconditionally, while giving the new row the
+    external folder's ``folder_id`` (#2810). The file therefore appeared in the
+    right folder in the UI and never arrived on the share, which is the one
+    place the user was looking -- and made it un-reproducible from the web UI
+    alone. Uploads learned this in #1112 (``_resolve_upload_destination``) and
+    moves in its follow-up (``_move_file_bytes``); slicing was the last write
+    path still assuming managed storage.
+
+    Unlike uploads, a failure here does not raise. The bytes exist and cost
+    real time to produce, so an unwritable target falls back to managed storage
+    with a reason attached rather than discarding the slice.
+    """
+    if target_folder is None or not target_folder.is_external:
+        return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, None
+
+    if target_folder.external_readonly:
+        return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, "external_readonly"
+    if not target_folder.external_path:
+        return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, "external_no_path"
+
+    ext_dir = Path(target_folder.external_path)
+    if not ext_dir.exists() or not ext_dir.is_dir():
+        return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, "external_unreachable"
+    if not os.access(ext_dir, os.W_OK):
+        return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, "external_not_writable"
+
+    try:
+        dest = safe_join_under(ext_dir, _unique_external_name(ext_dir, out_filename), http=False)
+    except PathTraversalError:
+        # The source filename reached us from a 3MF on disk, so this is
+        # defensive rather than expected -- but a name that escapes the mount
+        # must land in managed storage, never outside it.
+        return get_library_files_dir() / f"{uuid.uuid4().hex}.gcode.3mf", False, "external_invalid_name"
+    return dest, True, None
 
 
 def _stored_file_path(abs_path: Path, is_external: bool) -> str:
@@ -4162,8 +4239,25 @@ async def slice_and_persist(
 
     base_name = model_filename.rsplit(".", 1)[0]
     out_filename = f"{base_name}.gcode.3mf"
-    unique_name = f"{uuid.uuid4().hex}.gcode.3mf"
-    out_path = get_library_files_dir() / unique_name  # SEC-PATH-OK: unique_name = uuid.uuid4().hex + ".gcode.3mf"
+    # Write next to the source when the source lives on an external mount
+    # (#2810). The folder is loaded here rather than passed in because every
+    # caller already has only the id.
+    target_folder: LibraryFolder | None = None
+    if folder_id is not None:
+        folder_result = await db.execute(select(LibraryFolder).where(LibraryFolder.id == folder_id))
+        target_folder = folder_result.scalar_one_or_none()
+    out_path, out_is_external, external_fallback = _resolve_slice_destination(target_folder, out_filename)
+    if out_is_external:
+        # _unique_external_name may have suffixed it; the library row has to
+        # show the name the file actually has on the share, or the two drift.
+        out_filename = out_path.name
+    if external_fallback:
+        logger.warning(
+            "Slice output for %s stored in managed library instead of external folder %s: %s",
+            model_filename,
+            target_folder.external_path if target_folder else None,
+            external_fallback,
+        )
     # BS/Orca CLIs skip plate_N.png in headless --export-3mf — render +
     # inject server-side so the library card has a thumbnail. Best-effort:
     # no-op when the slicer did embed thumbs (desktop Studio path), and
@@ -4211,13 +4305,16 @@ async def slice_and_persist(
     )
     if used_embedded_settings:
         metadata["used_embedded_settings"] = True
+    if external_fallback:
+        metadata["external_write_fallback"] = external_fallback
     if extra_metadata:
         metadata.update(extra_metadata)
 
     new_file = LibraryFile(
         folder_id=folder_id,
+        is_external=out_is_external,
         filename=out_filename,
-        file_path=to_relative_path(out_path),
+        file_path=_stored_file_path(out_path, out_is_external),
         # The on-disk payload is a ZIP container — the file_type must
         # record that so the preview endpoint opens it as a 3MF instead
         # of returning the ZIP bytes as text/plain (#1709 / yanglei1980).
@@ -4245,6 +4342,7 @@ async def slice_and_persist(
         filament_used_g=filament_g,
         filament_used_mm=filament_mm,
         used_embedded_settings=used_embedded_settings,
+        external_write_fallback=external_fallback,
     )
 
 

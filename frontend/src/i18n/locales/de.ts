@@ -4356,6 +4356,7 @@ export default {
     runningWithProgress: '{{name}} – {{stage}} ({{percent}} %) – {{elapsed}}',
     runningWithProgressMultiPlate: 'Plate {{plateIndex}} von {{plateCount}} • {{name}} – {{stage}} ({{percent}} %) – {{elapsed}}',
     completedToast: '{{name}} wurde gesliced',
+    externalWriteFallbackToast: 'In der internen Bibliothek gespeichert: In den externen Ordner konnte nicht geschrieben werden',
     failedTitle: 'Slicen fehlgeschlagen',
     failedToast: 'Slicen von {{name}} fehlgeschlagen: {{detail}}',
     tier: {

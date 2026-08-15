@@ -4356,6 +4356,7 @@ export default {
     runningWithProgress: '{{name}} – {{stage}} ({{percent}}%) – {{elapsed}}',
     runningWithProgressMultiPlate: 'プレート {{plateIndex}} / {{plateCount}} • {{name}} – {{stage}} ({{percent}}%) – {{elapsed}}',
     completedToast: '{{name}}をスライス済み',
+    externalWriteFallbackToast: '内部ライブラリに保存しました: 外部フォルダーに書き込めませんでした',
     failedTitle: 'スライスに失敗しました',
     failedToast: '{{name}}のスライスに失敗: {{detail}}',
     tier: {

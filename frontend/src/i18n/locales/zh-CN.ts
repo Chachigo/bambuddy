@@ -4344,6 +4344,7 @@ export default {
     runningWithProgress: '{{name}} – {{stage}} ({{percent}}%) – {{elapsed}}',
     runningWithProgressMultiPlate: '盘面 {{plateIndex}} / {{plateCount}} • {{name}} – {{stage}} ({{percent}}%) – {{elapsed}}',
     completedToast: '已切片 {{name}}',
+    externalWriteFallbackToast: '已保存到内部库：无法写入外部文件夹',
     failedTitle: '切片失败',
     failedToast: '切片 {{name}} 失败：{{detail}}',
     tier: {

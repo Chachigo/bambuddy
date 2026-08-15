@@ -4345,6 +4345,7 @@ export default {
     runningWithProgress: '{{name}} — {{stage}} (%{{percent}}) — {{elapsed}}',
     runningWithProgressMultiPlate: '{{plateCount}}/{{plateIndex}} plaka • {{name}} — {{stage}} (%{{percent}}) — {{elapsed}}',
     completedToast: '{{name}} dilimlendi',
+    externalWriteFallbackToast: 'Dahili kitaplığa kaydedildi: harici klasöre yazılamadı',
     failedTitle: 'Dilimleme başarısız',
     failedToast: '{{name}} dilimleme başarısız: {{detail}}',
     tier: {

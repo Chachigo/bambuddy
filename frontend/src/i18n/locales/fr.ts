@@ -4345,6 +4345,7 @@ export default {
     runningWithProgress: '{{name}} – {{stage}} ({{percent}} %) – {{elapsed}}',
     runningWithProgressMultiPlate: 'Plateau {{plateIndex}} sur {{plateCount}} • {{name}} – {{stage}} ({{percent}} %) – {{elapsed}}',
     completedToast: '{{name}} découpé',
+    externalWriteFallbackToast: 'Enregistré dans la bibliothèque interne : impossible d\'écrire dans le dossier externe',
     failedTitle: 'Échec du découpage',
     failedToast: 'Échec du découpage de {{name}} : {{detail}}',
     tier: {

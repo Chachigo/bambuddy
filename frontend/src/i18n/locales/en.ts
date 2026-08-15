@@ -4390,6 +4390,7 @@ export default {
     runningWithProgress: '{{name}} — {{stage}} ({{percent}}%) — {{elapsed}}',
     runningWithProgressMultiPlate: 'Plate {{plateIndex}} of {{plateCount}} • {{name}} — {{stage}} ({{percent}}%) — {{elapsed}}',
     completedToast: 'Sliced {{name}}',
+    externalWriteFallbackToast: 'Saved to the internal library: the external folder could not be written to',
     failedTitle: 'Slicing failed',
     failedToast: 'Slicing {{name}} failed: {{detail}}',
     tier: {

@@ -4142,6 +4142,7 @@ export default {
     runningToast: '{{name}} 슬라이싱 중 — {{elapsed}}',
     runningWithProgress: '{{name}} — {{stage}} ({{percent}}%) — {{elapsed}}',
     completedToast: '{{name}} 슬라이싱 완료',
+    externalWriteFallbackToast: '내부 라이브러리에 저장했습니다: 외부 폴더에 쓸 수 없습니다',
     failedToast: '{{name}} 슬라이싱 실패: {{detail}}',
     tier: {
       local: '가져온 것',

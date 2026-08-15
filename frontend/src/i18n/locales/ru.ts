@@ -4139,6 +4139,7 @@ export default {
     runningWithProgress: "{{name}} — {{stage}} ({{percent}}%) — {{elapsed}}",
     runningWithProgressMultiPlate: "Пластина {{plateIndex}} из {{plateCount}} • {{name}} — {{stage}} ({{percent}}%) — {{elapsed}}",
     completedToast: "Нарезка {{name}} завершена",
+    externalWriteFallbackToast: "Сохранено во внутренней библиотеке: не удалось записать во внешнюю папку",
     failedTitle: "Ошибка нарезки",
     failedToast: "Не удалось нарезать {{name}}: {{detail}}",
     tier: {

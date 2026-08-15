@@ -4344,6 +4344,7 @@ export default {
     runningWithProgress: '{{name}} – {{stage}} ({{percent}}%) – {{elapsed}}',
     runningWithProgressMultiPlate: 'Bandeja {{plateIndex}} de {{plateCount}} • {{name}} – {{stage}} ({{percent}}%) – {{elapsed}}',
     completedToast: '{{name}} fatiado',
+    externalWriteFallbackToast: 'Salvo na biblioteca interna: não foi possível gravar na pasta externa',
     failedTitle: 'Falha ao fatiar',
     failedToast: 'Falha ao fatiar {{name}}: {{detail}}',
     tier: {

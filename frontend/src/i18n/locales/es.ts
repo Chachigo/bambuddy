@@ -4358,6 +4358,7 @@ export default {
     runningWithProgress: '{{name}} — {{stage}} ({{percent}}%) — {{elapsed}}',
     runningWithProgressMultiPlate: 'Bandeja {{plateIndex}} de {{plateCount}} • {{name}} — {{stage}} ({{percent}}%) — {{elapsed}}',
     completedToast: '{{name}} laminado',
+    externalWriteFallbackToast: 'Guardado en la biblioteca interna: no se pudo escribir en la carpeta externa',
     failedTitle: 'Error al laminar',
     failedToast: 'Error al laminar {{name}}: {{detail}}',
     tier: {
