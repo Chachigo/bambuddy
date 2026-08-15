@@ -4313,6 +4313,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: "Showing slicer defaults: the picked preset's own values could not be read. Anything you don't change still uses the preset.",
     filamentDefault: 'Default',
     fromFile: 'from file',
     fromFileHint: 'The designer changed this in the source file. Its value is {{value}}.',

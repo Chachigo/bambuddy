@@ -4268,6 +4268,7 @@ export default {
 
   // Dilimle (SliceModal ile slicer-API entegrasyonu)
   slicerSettings: {
+    presetValuesUnavailable: 'Dilimleyici varsayılanları gösteriliyor: seçilen ön ayarın kendi değerleri okunamadı. Değiştirmediğiniz her şey yine ön ayarı kullanır.',
     filamentDefault: 'Varsayılan',
     fromFile: 'dosyadan',
     fromFileHint: 'Tasarımcı bunu kaynak dosyada değiştirdi. Değeri {{value}}.',

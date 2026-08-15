@@ -421,6 +421,26 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
     [printerModelsQuery.data],
   );
 
+  // The picked process preset's effective values, flattened by the sidecar.
+  // Without this the settings panel shows OrcaSlicer's compiled-in defaults —
+  // a preset with a 0.42mm line width would read 0, which is the C++ default
+  // meaning "derive from the nozzle". Keyed on the preset so switching presets
+  // re-baselines the panel.
+  const presetValuesQuery = useQuery({
+    queryKey: ['slicer-preset-values', processPreset?.source, processPreset?.id],
+    queryFn: () => api.getSlicerPresetValues(processPreset as PresetRef),
+    enabled: processPreset != null,
+    // Preset contents only change when the user edits them in the slicer, and
+    // the modal is short-lived; no need to re-fetch while it is open.
+    staleTime: 5 * 60_000,
+  });
+
+  // A failed fetch is not an error the user must act on — the panel falls back
+  // to schema defaults and says so — so treat "no data yet" as unresolved
+  // rather than blocking the panel on it.
+  const presetValues = presetValuesQuery.data?.values as Record<string, SettingValue> | undefined;
+  const presetValuesResolved = presetValuesQuery.data?.resolved ?? presetValuesQuery.isLoading;
+
   // Slot list for the settings panel's filament pickers (support base and
   // interface, and the Multimaterial page's per-region options). Those store a
   // plain integer, so without this the user has to map slot numbers onto their
@@ -1029,6 +1049,8 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
                           // so the backend keeps reading them from the file
                           // and keys outside the vendored schema stay faithful.
                           filamentChoices={filamentChoices}
+                          presetValues={presetValues}
+                          presetValuesResolved={presetValuesResolved}
                           sourceOverrides={designOverrides}
                           sourceSelected={designKeys}
                           onToggleSource={(key, on) =>

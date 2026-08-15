@@ -4267,6 +4267,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: 'Sono mostrati i valori predefiniti dello slicer: quelli del profilo scelto non sono leggibili. Tutto ciò che non modifichi continua a usare il profilo.',
     filamentDefault: 'Predefinito',
     fromFile: 'dal file',
     fromFileHint: 'Il designer ha modificato questo parametro nel file di origine. Il valore è {{value}}.',

@@ -4267,6 +4267,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: 'Exibindo os padrões do fatiador: não foi possível ler os valores do perfil escolhido. Tudo o que você não alterar continua usando o perfil.',
     filamentDefault: 'Padrão',
     fromFile: 'do arquivo',
     fromFileHint: 'O designer alterou isto no arquivo de origem. O valor é {{value}}.',

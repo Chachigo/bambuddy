@@ -4267,6 +4267,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: '当前显示切片器默认值：无法读取所选预设的实际值。未改动的项目仍使用预设。',
     filamentDefault: '默认',
     fromFile: '来自文件',
     fromFileHint: '设计者在源文件中修改了此项，其值为 {{value}}。',

@@ -4070,6 +4070,7 @@ export default {
     },
   },
   slicerSettings: {
+    presetValuesUnavailable: '슬라이서 기본값을 표시합니다. 선택한 프리셋의 값을 읽을 수 없었습니다. 변경하지 않은 항목은 계속 프리셋 값을 사용합니다.',
     filamentDefault: '기본값',
     fromFile: '파일에서',
     fromFileHint: '디자이너가 원본 파일에서 이 항목을 변경했습니다. 값은 {{value}}입니다.',

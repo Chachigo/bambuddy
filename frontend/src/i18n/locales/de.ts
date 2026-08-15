@@ -4279,6 +4279,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: 'Es werden Slicer-Standardwerte angezeigt: Die Werte des gewählten Profils konnten nicht gelesen werden. Alles, was Sie nicht ändern, verwendet weiterhin das Profil.',
     filamentDefault: 'Standard',
     fromFile: 'aus Datei',
     fromFileHint: 'Der Designer hat dies in der Quelldatei geändert. Wert: {{value}}.',

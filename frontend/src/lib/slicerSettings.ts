@@ -41,9 +41,17 @@ export function displaySidetext(option: ProcessOption): string | undefined {
   return s;
 }
 
-/** The schema default, rendered the way the panel's inputs want to display it. */
-export function defaultForDisplay(option: ProcessOption): string {
-  const d = option.default;
+/**
+ * What an untouched field shows.
+ *
+ * The picked preset's own value when we have it, else the option schema's
+ * compiled-in default. The distinction is user-visible: `line_width` defaults
+ * to 0 in OrcaSlicer's C++ (meaning "derive from the nozzle"), while a real
+ * process preset sets something like 0.42 — showing the former for a preset
+ * that sets the latter is simply wrong.
+ */
+export function baselineForDisplay(option: ProcessOption, presetValue?: SettingValue): string {
+  const d = presetValue !== undefined ? presetValue : option.default;
   if (d === undefined) return '';
   // Per-extruder vectors render as a comma-separated list. C++ literal
   // artefacts (`0.`, `0.3f`, `100.%`) are normalised by
@@ -95,20 +103,28 @@ export function serializeOverrides(values: Record<string, SettingValue>, schema:
 }
 
 /**
- * True when an edited value differs from the option's default. Used to mark
- * modified rows and to decide what is worth sending: an override equal to the
- * default is noise in the process JSON.
+ * True when an edited value differs from the baseline this slice would
+ * otherwise use. Marks modified rows, and decides what is worth sending: an
+ * override equal to what the preset already says is noise in the process JSON.
+ *
+ * The baseline is the preset's value when known. Comparing against the schema
+ * default instead would flag every field the preset moved off the C++ default
+ * as "changed by the user", and would send back values nobody typed.
  */
-export function isModified(option: ProcessOption, value: SettingValue | undefined): boolean {
+export function isModified(
+  option: ProcessOption,
+  value: SettingValue | undefined,
+  presetValue?: SettingValue,
+): boolean {
   if (value === undefined || value === '') return false;
-  const serialized = serializeSetting(option, value);
-  const asString = Array.isArray(serialized) ? serialized.join(', ') : serialized;
 
-  const d = option.default;
-  if (d === undefined) return asString !== '';
+  const flatten = (v: SettingValue): string => {
+    const serialized = serializeSetting(option, Array.isArray(v) ? v.map(String).join(', ') : v);
+    return Array.isArray(serialized) ? serialized.join(', ') : serialized;
+  };
 
-  const defaultSerialized = serializeSetting(option, Array.isArray(d) ? d.map(String).join(', ') : (d as SettingValue));
-  const defaultString = Array.isArray(defaultSerialized) ? defaultSerialized.join(', ') : defaultSerialized;
-
-  return asString !== defaultString;
+  const asString = flatten(value);
+  const baseline = presetValue !== undefined ? presetValue : option.default;
+  if (baseline === undefined) return asString !== '';
+  return asString !== flatten(baseline as SettingValue);
 }

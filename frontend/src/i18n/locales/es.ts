@@ -4281,6 +4281,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: 'Se muestran los valores predeterminados del laminador: no se pudieron leer los del perfil seleccionado. Todo lo que no cambies seguirá usando el perfil.',
     filamentDefault: 'Predeterminado',
     fromFile: 'del archivo',
     fromFileHint: 'El diseñador cambió esto en el archivo de origen. Su valor es {{value}}.',

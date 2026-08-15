@@ -4279,6 +4279,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: 'スライサーの既定値を表示しています。選択したプリセットの値を読み取れませんでした。変更しない項目は引き続きプリセットの値が使われます。',
     filamentDefault: '既定',
     fromFile: 'ファイル由来',
     fromFileHint: 'この項目は元ファイルで設計者が変更しています。値は {{value}} です。',

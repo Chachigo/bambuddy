@@ -1614,6 +1614,13 @@ export interface PresetRef {
   source: PresetSource;
   id: string;
 }
+export interface SlicerPresetValues {
+  /** False when the sidecar could not supply values; `values` is then empty. */
+  resolved: boolean;
+  /** Flattened key -> value map, in the string forms a process preset stores. */
+  values: Record<string, string | string[]>;
+}
+
 export interface SliceRequest {
   printer_preset_id?: number;
   process_preset_id?: number;
@@ -7259,6 +7266,21 @@ export const api = {
   // `@BBL <code>` suffix against the selected printer-preset name (#1325).
   getSlicerPrinterModels: () =>
     request<Record<string, string>>('/slicer/printer-models'),
+
+  /**
+   * Effective values of a process preset, with its `inherits:` chain flattened
+   * by the slicer sidecar. Powers the slice modal's settings panel, which would
+   * otherwise show the option schema's compiled-in defaults (a preset setting a
+   * 0.42mm line width appears as the C++ default of 0).
+   *
+   * `resolved: false` means the values could not be obtained -- sidecar offline,
+   * too old for the endpoint, or slicing not configured -- and the caller should
+   * fall back to schema defaults rather than treat it as a failure.
+   */
+  getSlicerPresetValues: (ref: PresetRef) =>
+    request<SlicerPresetValues>(
+      `/slicer/preset-values?source=${encodeURIComponent(ref.source)}&id=${encodeURIComponent(ref.id)}`,
+    ),
 
   // Local Presets (OrcaSlicer imports)
   getLocalPresets: () =>

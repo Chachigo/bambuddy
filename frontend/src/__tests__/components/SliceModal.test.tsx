@@ -34,6 +34,7 @@ vi.mock('../../api/client', () => ({
     listSlicerPipelines: vi.fn(),
     createSlicerPipeline: vi.fn(),
     getSlicerPrinterModels: vi.fn(),
+    getSlicerPresetValues: vi.fn(),
   },
 }));
 
@@ -49,6 +50,7 @@ const mockApi = api as unknown as {
   listSlicerPipelines: ReturnType<typeof vi.fn>;
   createSlicerPipeline: ReturnType<typeof vi.fn>;
   getSlicerPrinterModels: ReturnType<typeof vi.fn>;
+  getSlicerPresetValues: ReturnType<typeof vi.fn>;
 };
 
 function makeUnified(overrides: Partial<UnifiedPresetsResponse> = {}): UnifiedPresetsResponse {
@@ -103,6 +105,7 @@ describe('SliceModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {} });
     mockApi.getSliceJob.mockResolvedValue({
       job_id: 42,
       status: 'running',
@@ -1556,6 +1559,7 @@ describe('SliceModal — process settings in "slice as designed" mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {} });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
     mockApi.getSlicerPrinterModels.mockResolvedValue({});
     mockApi.getLibraryFilePlates.mockResolvedValue({
@@ -1639,6 +1643,7 @@ describe('SliceModal — process settings layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.getSlicerPresets.mockResolvedValue(fullThreeTier);
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {} });
     mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
     mockApi.getLibraryFilePlates.mockResolvedValue({
       file_id: 100,

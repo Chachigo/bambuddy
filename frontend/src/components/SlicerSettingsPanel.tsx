@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { Search, RotateCcw, Loader2, ChevronDown } from 'lucide-react';
 
 import { disabledKeys, type ToggleRules } from '../lib/slicerToggle';
-import { defaultForDisplay, displaySidetext, isModified, numericBound, serializeOverrides } from '../lib/slicerSettings';
+import { baselineForDisplay, displaySidetext, isModified, numericBound, serializeOverrides } from '../lib/slicerSettings';
 import type { OptionMode, ProcessOption, ProcessSchema, ProcessUiTree, SettingValue } from '../types/slicerSettings';
 import type { DesignOverride } from '../types/plates';
 
@@ -72,6 +72,15 @@ interface Props {
    * picks instead.
    */
   filamentChoices?: FilamentChoice[];
+  /**
+   * The picked process preset's effective values, flattened by the sidecar.
+   * Used as the baseline an untouched field shows and a revert returns to.
+   * Empty when unavailable, in which case the panel falls back to the option
+   * schema's compiled-in defaults and says the values are indicative.
+   */
+  presetValues?: Record<string, SettingValue>;
+  /** False when the preset's values could not be fetched. */
+  presetValuesResolved?: boolean;
 }
 
 export interface FilamentChoice {
@@ -112,6 +121,8 @@ export default function SlicerSettingsPanel({
   sourceSelected,
   onToggleSource,
   filamentChoices,
+  presetValues,
+  presetValuesResolved = true,
 }: Props) {
   const { t } = useTranslation();
   const [data, setData] = useState<SlicerData | null>(null);
@@ -165,7 +176,7 @@ export default function SlicerSettingsPanel({
     // request harder to read when something goes wrong.
     const changed: Record<string, SettingValue> = {};
     for (const [k, v] of Object.entries(next)) {
-      if (data.schema[k] && isModified(data.schema[k], v)) changed[k] = v;
+      if (data.schema[k] && isModified(data.schema[k], v, presetValues?.[k])) changed[k] = v;
     }
     onChange(next, serializeOverrides(changed, data.schema));
   };
@@ -217,8 +228,8 @@ export default function SlicerSettingsPanel({
 
   const modifiedCount = useMemo(() => {
     if (!data) return 0;
-    return Object.keys(values).filter((k) => data.schema[k] && isModified(data.schema[k], values[k])).length;
-  }, [data, values]);
+    return Object.keys(values).filter((k) => data.schema[k] && isModified(data.schema[k], values[k], presetValues?.[k])).length;
+  }, [data, values, presetValues]);
 
   if (!data) {
     return (
@@ -275,6 +286,15 @@ export default function SlicerSettingsPanel({
         )}
       </div>
 
+      {!presetValuesResolved && (
+        <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[0.7rem] text-amber-800 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-200">
+          {t(
+            'slicerSettings.presetValuesUnavailable',
+            "Showing slicer defaults: the picked preset's own values could not be read. Anything you don't change still uses the preset.",
+          )}
+        </p>
+      )}
+
       {!query.trim() && (
         <div className="flex flex-wrap gap-1">
           {visiblePages.map((p) => (
@@ -320,6 +340,7 @@ export default function SlicerSettingsPanel({
                       sourceOn={sourceSelected?.has(key) ?? false}
                       onToggleSource={onToggleSource}
                       filamentChoices={FILAMENT_SLOT_OPTIONS.has(key) ? filamentChoices : undefined}
+                      presetValue={presetValues?.[key]}
                     />
                   ))}
                 </fieldset>
@@ -378,6 +399,8 @@ interface RowProps {
   onToggleSource?: (key: string, on: boolean) => void;
   /** Set only for options whose integer value names a filament slot. */
   filamentChoices?: FilamentChoice[];
+  /** The picked preset's value for this option, when known. */
+  presetValue?: SettingValue;
 }
 
 function OptionRow({
@@ -391,30 +414,40 @@ function OptionRow({
   sourceOn = false,
   onToggleSource,
   filamentChoices,
+  presetValue,
 }: RowProps) {
   const { t } = useTranslation();
-  const modified = isModified(option, value);
+  const modified = isModified(option, value, presetValue);
   const unit = displaySidetext(option);
   // What this slice will actually use, in precedence order: a value typed here
-  // wins, then the designer's value if it is switched on, then the preset's.
+  // wins, then the designer's value if it is switched on, then the preset's own
+  // (or the schema default when the preset's values are unavailable).
   const current =
     value !== undefined
       ? String(value)
       : sourceOn && source
         ? formatSourceValue(source.value)
-        : defaultForDisplay(option);
+        : baselineForDisplay(option, presetValue);
 
   return (
     <div className="flex items-center gap-2 group" title={option.tooltip}>
+      {/* Label takes the slack; the control group is a fixed width anchored to
+          the right edge. Fixed widths on the control *and* the unit are what
+          keep that column straight — sizing either to content makes each row's
+          input land at a different x. */}
       <label
         htmlFor={`slicer-opt-${optionKey}`}
-        className={`flex-1 text-xs truncate ${disabledBySlicer ? 'text-bambu-gray/40' : 'text-bambu-gray'}`}
+        className={`flex min-w-0 flex-1 items-center gap-1 text-xs ${disabledBySlicer ? 'text-bambu-gray/40' : 'text-bambu-gray'}`}
       >
-        {option.label || optionKey}
-        {modified && <span className="ml-1 text-bambu-green" aria-hidden="true">•</span>}
+        {/* Own title: a fixed column truncates more than the old flex-1 label
+            did, and the row's title carries the tooltip, not the name. */}
+        <span className="truncate" title={option.label || optionKey}>
+          {option.label || optionKey}
+        </span>
+        {modified && <span className="shrink-0 text-bambu-green" aria-hidden="true">•</span>}
         {source && (
           <span
-            className={`ml-1.5 rounded px-1 py-0.5 text-[10px] ${
+            className={`shrink-0 rounded px-1 py-0.5 text-[10px] ${
               source.printer_coupled
                 ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400'
                 : 'bg-bambu-green/15 text-bambu-green'
@@ -432,31 +465,45 @@ function OptionRow({
         )}
       </label>
 
-      <div className="flex items-center gap-1 shrink-0">
-        <OptionControl
-          id={`slicer-opt-${optionKey}`}
-          option={option}
-          current={current}
-          onChange={onChange}
-          disabled={disabled}
-          filamentChoices={filamentChoices}
-        />
-        {unit && <span className="text-[0.65rem] text-bambu-gray/60 w-10 truncate">{unit}</span>}
-        {source && onToggleSource && (
-          <input
-            type="checkbox"
-            checked={sourceOn}
+      <div className="flex shrink-0 items-center gap-1.5">
+        {/* The "use the file's value" tick comes *before* the control it
+            qualifies, as a checkbox that gates a field conventionally does —
+            it used to sit past the unit, out at the right edge, reading as
+            unrelated to the field. The slot is reserved on every row so rows
+            with and without a source override keep the control column
+            straight. */}
+        <span className="flex w-3 shrink-0 justify-center">
+          {source && onToggleSource && (
+            <input
+              type="checkbox"
+              checked={sourceOn}
+              disabled={disabled}
+              onChange={(e) => onToggleSource(optionKey, e.target.checked)}
+              aria-label={t('slicerSettings.useFromFile', "Use the source file's value for {{option}}", {
+                option: option.label || optionKey,
+              })}
+              title={t('slicerSettings.useFromFile', "Use the source file's value for {{option}}", {
+                option: option.label || optionKey,
+              })}
+              className="w-3 h-3 cursor-pointer disabled:opacity-40"
+            />
+          )}
+        </span>
+        <div className="w-40">
+          <OptionControl
+            id={`slicer-opt-${optionKey}`}
+            option={option}
+            current={current}
+            onChange={onChange}
             disabled={disabled}
-            onChange={(e) => onToggleSource(optionKey, e.target.checked)}
-            aria-label={t('slicerSettings.useFromFile', "Use the source file's value for {{option}}", {
-              option: option.label || optionKey,
-            })}
-            title={t('slicerSettings.useFromFile', "Use the source file's value for {{option}}", {
-              option: option.label || optionKey,
-            })}
-            className="w-3 h-3 cursor-pointer disabled:opacity-40"
+            filamentChoices={filamentChoices}
           />
-        )}
+        </div>
+        {/* Fixed width so the control column stays straight, but wide enough
+            for the longest unit in the schema ("mm/s² or %") — a narrower cap
+            truncated those to "mm o...". Rendered even when empty so rows
+            without a unit keep the revert button aligned. */}
+        <span className="w-16 shrink-0 whitespace-nowrap text-[0.65rem] text-bambu-gray/60">{unit ?? ''}</span>
         <button
           type="button"
           onClick={() => onChange(undefined)}
@@ -498,7 +545,7 @@ function OptionControl({ id, option, current, onChange, disabled, filamentChoice
   // bambu-dark-tertiary are CSS variables that follow the active theme, and
   // `text-white` is remapped to --text-primary in index.css.
   const inputClass =
-    'w-24 rounded border border-bambu-dark-tertiary bg-bambu-dark px-1.5 py-0.5 text-xs text-white focus:border-bambu-green focus:outline-none disabled:opacity-40';
+    'w-full rounded border border-bambu-dark-tertiary bg-bambu-dark px-1.5 py-0.5 text-xs text-white focus:border-bambu-green focus:outline-none disabled:opacity-40';
 
   // Filament-slot pickers come before the generic branches: the value is an
   // integer, but offering a spinner over "1, 2, 3" makes the user map slot
@@ -506,7 +553,7 @@ function OptionControl({ id, option, current, onChange, disabled, filamentChoice
   if (filamentChoices && filamentChoices.length > 0) {
     const selected = filamentChoices.find((c) => String(c.index) === current);
     return (
-      <div className="relative w-24">
+      <div className="relative w-full">
         <select
           id={id}
           value={current}
@@ -547,7 +594,7 @@ function OptionControl({ id, option, current, onChange, disabled, filamentChoice
     // Bambuddy: appearance-none plus our own chevron, so the control matches
     // the app in both themes instead of whatever the browser paints.
     return (
-      <div className="relative w-24">
+      <div className="relative w-full">
         <select
           id={id}
           value={current}
@@ -595,7 +642,7 @@ function OptionControl({ id, option, current, onChange, disabled, filamentChoice
       id={id}
       type="text"
       value={current}
-      onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value)}
+      onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
       className={inputClass}
     />

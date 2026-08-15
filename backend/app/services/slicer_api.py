@@ -10,6 +10,7 @@ under the hood, response body is raw G-code or 3MF with metadata in the
 
 import asyncio
 import io
+import json
 import logging
 import time
 import zipfile
@@ -308,6 +309,57 @@ class SlicerApiService:
         if response.status_code >= 400:
             raise SlicerApiUnavailableError(f"Slicer sidecar /health returned {response.status_code}")
         return response.json()
+
+    async def resolve_profile(self, profile_json: str, category: str) -> dict | None:
+        """POST /profiles/resolve — flatten a preset's ``inherits:`` chain.
+
+        Returns the effective key/value map the slicer would actually use, so
+        the slice modal's settings panel can show a preset's real values rather
+        than the option schema's compiled-in defaults (a "Standard" pick is
+        only a ``{inherits: ...}`` stub on our side; everything else it sets
+        lives in the sidecar's bundled profiles).
+
+        This deliberately asks the sidecar rather than resolving locally.
+        Bambuddy has its own ``inherits:`` resolver in ``orca_profiles``, but it
+        walks OrcaSlicer's *published* profile tree, which is not necessarily
+        the one baked into the running sidecar image — values from it would look
+        authoritative and could quietly disagree with what gets sliced.
+
+        Returns ``None`` when the sidecar is too old to have the endpoint, so
+        callers can degrade to schema defaults instead of failing the modal.
+        Genuine transport failures still raise.
+        """
+        try:
+            payload = json.loads(profile_json)
+        except json.JSONDecodeError:
+            logger.warning("Cannot resolve %s preset: content is not valid JSON", category)
+            return None
+
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/profiles/resolve",
+                json={"category": category, "profile": payload},
+                timeout=15.0,
+            )
+        except httpx.RequestError as exc:
+            raise SlicerApiUnavailableError(f"Slicer sidecar unreachable: {exc}") from exc
+
+        if response.status_code == 404:
+            # Sidecar predates the endpoint. Not an error — the caller shows
+            # schema defaults and says so.
+            logger.info("Slicer sidecar has no /profiles/resolve; falling back to schema defaults")
+            return None
+        if response.status_code >= 400:
+            logger.warning(
+                "Slicer sidecar /profiles/resolve returned %s: %s",
+                response.status_code,
+                _format_sidecar_error(response),
+            )
+            return None
+
+        body = response.json()
+        resolved = body.get("profile") if isinstance(body, dict) else None
+        return resolved if isinstance(resolved, dict) else None
 
     async def list_bundled_profiles(self) -> dict:
         """GET /profiles/bundled — return the slicer's stock profiles by slot.

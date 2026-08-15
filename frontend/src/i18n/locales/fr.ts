@@ -4268,6 +4268,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: "Valeurs par défaut du trancheur affichées : celles du profil choisi n'ont pas pu être lues. Tout ce que vous ne modifiez pas utilise toujours le profil.",
     filamentDefault: 'Par défaut',
     fromFile: 'du fichier',
     fromFileHint: 'Le concepteur a modifié ce paramètre dans le fichier source. Sa valeur est {{value}}.',

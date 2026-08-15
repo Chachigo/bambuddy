@@ -20,12 +20,16 @@ function Harness({
   sourceOverrides,
   initialSelected,
   filamentChoices,
+  presetValues,
+  presetValuesResolved,
 }: {
   initial: Record<string, SettingValue>;
   onChange: (v: Record<string, SettingValue>, s: Record<string, string | string[]>) => void;
   sourceOverrides?: DesignOverride[];
   initialSelected?: string[];
   filamentChoices?: FilamentChoice[];
+  presetValues?: Record<string, SettingValue>;
+  presetValuesResolved?: boolean;
 }) {
   const [values, setValues] = useState(initial);
   const [selected, setSelected] = useState(new Set(initialSelected ?? []));
@@ -37,6 +41,8 @@ function Harness({
         onChange(v, s);
       }}
       filamentChoices={filamentChoices}
+      presetValues={presetValues}
+      presetValuesResolved={presetValuesResolved}
       sourceOverrides={sourceOverrides}
       sourceSelected={selected}
       onToggleSource={(key, on) =>
@@ -58,6 +64,8 @@ async function renderPanel(
     sourceOverrides?: DesignOverride[];
     initialSelected?: string[];
     filamentChoices?: FilamentChoice[];
+    presetValues?: Record<string, SettingValue>;
+    presetValuesResolved?: boolean;
   } = {},
 ) {
   const onChange = vi.fn();
@@ -180,6 +188,18 @@ describe('SlicerSettingsPanel', () => {
     expect(input).toHaveValue(null);
   });
 
+  it('lets a free-text field be emptied too', async () => {
+    // coFloatOrPercent / coString / vector options render as text rather than
+    // number inputs, and the same drop-the-key-on-empty bug lived on that
+    // branch after the number branch was fixed.
+    const user = userEvent.setup();
+    await renderPanel();
+
+    const input = await showOption(user, 'Default', 'line_width');
+    await user.clear(input);
+    expect(input).toHaveValue('');
+  });
+
   it('clears every override from the header reset', async () => {
     const user = userEvent.setup();
     const { onChange } = await renderPanel({ layer_height: '0.16' });
@@ -247,6 +267,19 @@ describe("SlicerSettingsPanel — the source file's own settings", () => {
     // wall_loops defaults to 2 in the schema.
     const input = await showOption(user, 'Wall loops', 'wall loops');
     expect(input).toHaveValue(2);
+  });
+
+  it("puts the file's tick before the control it qualifies", async () => {
+    // A checkbox that gates a field belongs ahead of it. It used to render
+    // after the unit, out at the row's right edge, reading as unrelated.
+    const user = userEvent.setup();
+    await renderPanel({}, { sourceOverrides, initialSelected: ['wall_loops'] });
+    const control = await showOption(user, 'Wall loops', 'wall loops');
+
+    const row = control.closest('div.group') as HTMLElement;
+    const tick = within(row).getByRole('checkbox');
+    const controlFollowsTick = tick.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(controlFollowsTick).toBeTruthy();
   });
 
   it('flags a machine-coupled setting rather than applying it quietly', async () => {
@@ -348,5 +381,75 @@ describe('SlicerSettingsPanel — filament-slot options', () => {
     await renderPanel({}, { filamentChoices });
     const control = await showOption(user, 'Wall loops', 'wall loops');
     expect(control.tagName).toBe('INPUT');
+  });
+});
+
+describe('SlicerSettingsPanel — the picked preset\'s values', () => {
+  it('shows the preset value rather than the compiled-in default', async () => {
+    // The reported bug: line_width defaults to 0 in OrcaSlicer's C++ (meaning
+    // "derive from the nozzle"), so every Line width field read 0 regardless
+    // of what the chosen preset actually sets.
+    const user = userEvent.setup();
+    await renderPanel({}, { presetValues: { line_width: '0.42' } });
+    const input = await showOption(user, 'Default', 'line_width');
+    expect(input).toHaveValue('0.42');
+  });
+
+  it('does not mark a preset value as a user change', async () => {
+    // Comparing against the schema default would flag every field the preset
+    // moved off the C++ default as edited, and send values nobody typed.
+    const { onChange } = await renderPanel({}, { presetValues: { line_width: '0.42' } });
+    await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Reset \d/ })).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('sends an edit that differs from the preset', async () => {
+    const user = userEvent.setup();
+    const { onChange } = await renderPanel({}, { presetValues: { line_width: '0.42' } });
+    const input = await showOption(user, 'Default', 'line_width');
+
+    await user.clear(input);
+    await user.type(input, '0.5');
+
+    await waitFor(() => {
+      const [, serialized] = onChange.mock.calls.at(-1)!;
+      expect(serialized.line_width).toBe('0.5');
+    });
+  });
+
+  it('sends nothing for a value retyped to match the preset', async () => {
+    const user = userEvent.setup();
+    const { onChange } = await renderPanel({}, { presetValues: { line_width: '0.42' } });
+    const input = await showOption(user, 'Default', 'line_width');
+
+    await user.clear(input);
+    await user.type(input, '0.42');
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const [, serialized] = onChange.mock.calls.at(-1)!;
+    expect(serialized).not.toHaveProperty('line_width');
+  });
+
+  it('reverts to the preset value, not the schema default', async () => {
+    const user = userEvent.setup();
+    await renderPanel({ line_width: '0.5' }, { presetValues: { line_width: '0.42' } });
+    const input = await showOption(user, 'Default', 'line_width');
+    expect(input).toHaveValue('0.5');
+
+    const row = input.closest('div.group') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Reset to default' }));
+    await waitFor(() => expect(screen.getByLabelText(/^Default/)).toHaveValue('0.42'));
+  });
+
+  it('says so when the preset values could not be read', async () => {
+    await renderPanel({}, { presetValuesResolved: false });
+    await waitFor(() => expect(screen.getByText(/Showing slicer defaults/)).toBeInTheDocument());
+  });
+
+  it('shows no such notice when they resolved', async () => {
+    await renderPanel({}, { presetValues: { line_width: '0.42' }, presetValuesResolved: true });
+    await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
+    expect(screen.queryByText(/Showing slicer defaults/)).not.toBeInTheDocument();
   });
 });

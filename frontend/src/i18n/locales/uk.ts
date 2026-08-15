@@ -4312,6 +4312,7 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    presetValuesUnavailable: 'Показано типові значення слайсера: значення вибраного профілю не вдалося прочитати. Усе, чого ви не змінюєте, і далі береться з профілю.',
     filamentDefault: 'За замовчуванням',
     fromFile: 'з файлу',
     fromFileHint: 'Автор моделі змінив цей параметр у вихідному файлі. Значення: {{value}}.',
