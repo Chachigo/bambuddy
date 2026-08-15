@@ -4911,9 +4911,15 @@ function PrinterCard({
                               <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-500/10 px-2 py-1 text-[length:var(--pc-t9,9px)]">
                                 <Flame className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] text-amber-600 dark:text-amber-400 shrink-0" />
                                 <span className="text-amber-700 dark:text-amber-400 font-medium">{t('printers.drying.active')}</span>
-                                {ams.dry_filament && ams.dry_target_temp != null && (
+                                {/* The temperature is only ever known from the target we
+                                    cached when sending the command — the filament can also
+                                    be read off a uniformly loaded unit, so it can outlive
+                                    the temperature (#2759). */}
+                                {ams.dry_filament && (
                                   <span className="text-amber-700/80 dark:text-amber-300/70">
-                                    {t('printers.drying.targetSummary', { filament: ams.dry_filament, temp: ams.dry_target_temp })}
+                                    {ams.dry_target_temp != null
+                                      ? t('printers.drying.targetSummary', { filament: ams.dry_filament, temp: ams.dry_target_temp })
+                                      : ams.dry_filament}
                                   </span>
                                 )}
                                 <span className="text-amber-700/80 dark:text-amber-300/70">
@@ -5453,9 +5459,11 @@ function PrinterCard({
                             {ams.dry_time > 0 && (
                               <div className="flex items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-lg bg-amber-50 dark:bg-amber-500/10 px-2 py-1 text-[length:var(--pc-t9,9px)]">
                                 <Flame className="w-[var(--pc-i3,0.75rem)] h-[var(--pc-i3,0.75rem)] text-amber-600 dark:text-amber-400 shrink-0" />
-                                {ams.dry_filament && ams.dry_target_temp != null && (
+                                {ams.dry_filament && (
                                   <span className="text-amber-700/80 dark:text-amber-300/70 text-[length:var(--pc-t8,8px)] truncate">
-                                    {t('printers.drying.targetSummary', { filament: ams.dry_filament, temp: ams.dry_target_temp })}
+                                    {ams.dry_target_temp != null
+                                      ? t('printers.drying.targetSummary', { filament: ams.dry_filament, temp: ams.dry_target_temp })
+                                      : ams.dry_filament}
                                   </span>
                                 )}
                                 <span className="text-amber-700/80 dark:text-amber-300/70 text-[length:var(--pc-t8,8px)] truncate">
