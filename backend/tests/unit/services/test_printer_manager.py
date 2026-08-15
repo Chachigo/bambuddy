@@ -1378,8 +1378,8 @@ class TestDryingTargetExposure:
         assert result["ams"][0]["dry_target_temp"] == 65
 
     def test_falls_back_to_loaded_tray_when_no_cache(self):
-        """No cached target → derive from first loaded tray's tray_type +
-        RFID-recommended drying_temp (popover seed heuristic)."""
+        """No cached target → derive from the loaded trays' tray_type +
+        RFID-recommended drying_temp when they agree on a filament."""
         state = self._state_with_ams(
             {
                 "id": 0,
@@ -1418,6 +1418,64 @@ class TestDryingTargetExposure:
         result = printer_state_to_dict(state, drying_targets={1: {"filament": "PETG", "temp": 65}})
         assert result["ams"][0]["dry_filament"] is None
         assert result["ams"][0]["dry_target_temp"] is None
+
+    def test_no_fallback_when_loaded_trays_disagree(self):
+        """#2759 — the reporter's AMS held 2 PETG and 2 PLA and was drying the
+        PLA at 45°C, but the fallback read slot 1 and labelled it "PETG @ 65°C".
+        A mixed unit gives no evidence of what the cycle is running, so the
+        badge must show the countdown alone rather than a confident wrong
+        answer."""
+        state = self._state_with_ams(
+            {
+                "id": 0,
+                "dry_time": 719,
+                "tray": [
+                    {"id": 0, "tray_type": "PETG", "drying_temp": 65, "state": 11},
+                    {"id": 1, "tray_type": "PETG", "drying_temp": 65, "state": 11},
+                    {"id": 2, "tray_type": "PLA", "drying_temp": 45, "state": 11},
+                    {"id": 3, "tray_type": "PLA", "drying_temp": 45, "state": 11},
+                ],
+            }
+        )
+        result = printer_state_to_dict(state, drying_targets={})
+        assert result["ams"][0]["dry_filament"] is None
+        assert result["ams"][0]["dry_target_temp"] is None
+
+    def test_fallback_survives_multiple_trays_of_one_type(self):
+        """Agreement across slots is still evidence — a unit loaded entirely
+        with PLA keeps the fallback the mixed case gives up."""
+        state = self._state_with_ams(
+            {
+                "id": 0,
+                "dry_time": 719,
+                "tray": [
+                    {"id": 0, "tray_type": "PLA", "drying_temp": 45, "state": 11},
+                    {"id": 1, "tray_type": "PLA", "drying_temp": 45, "state": 11},
+                    {"id": 2},
+                ],
+            }
+        )
+        result = printer_state_to_dict(state, drying_targets={})
+        assert result["ams"][0]["dry_filament"] == "PLA"
+        assert result["ams"][0]["dry_target_temp"] == 45
+
+    def test_fallback_takes_temp_from_a_later_tray_when_slot_one_has_none(self):
+        """Only Bambu spools carry an RFID drying_temp. A third-party spool in
+        slot 1 alongside a genuine one of the same type should not cost us the
+        temperature."""
+        state = self._state_with_ams(
+            {
+                "id": 0,
+                "dry_time": 719,
+                "tray": [
+                    {"id": 0, "tray_type": "PLA", "state": 11},
+                    {"id": 1, "tray_type": "PLA", "drying_temp": 45, "state": 11},
+                ],
+            }
+        )
+        result = printer_state_to_dict(state, drying_targets={})
+        assert result["ams"][0]["dry_filament"] == "PLA"
+        assert result["ams"][0]["dry_target_temp"] == 45
 
 
 class TestSupportsChamberTemp:

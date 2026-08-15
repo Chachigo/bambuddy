@@ -6078,6 +6078,48 @@ class TestDryingCompleteCallback:
         mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
         assert mqtt_client._drying_events == [0]
 
+    def test_transient_zero_while_checking_is_not_completion(self, mqtt_client):
+        """#2759 — between the command ack and the countdown settling, firmware
+        publishes a dry_time of 0 while the AMS is still in its Checking phase.
+        The reporter's log caught 720 → 0 → 719 one minute into a 12-hour
+        cycle: it dropped the cached target (so the badge guessed the filament
+        from tray 1 and read "PETG @ 65°C" for a PLA dry) and armed smart-plug
+        auto-off."""
+        mqtt_client._drying_targets[0] = {"filament": "PLA", "temp": 45}
+        # Cycle starts: 12 hours, unit reports dry_status 1 (Checking).
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 720, "info": "11402113", "tray": []}]})
+        assert mqtt_client._drying_events == []
+
+        # The blip: dry_time 0, still Checking.
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "info": "11402113", "tray": []}]})
+        assert mqtt_client._drying_events == []
+        # And the user's chosen target survived it.
+        assert mqtt_client._drying_targets[0] == {"filament": "PLA", "temp": 45}
+
+        # Countdown settles and the unit moves to dry_status 2 (Drying).
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 719, "info": "11402123", "tray": []}]})
+        assert mqtt_client._drying_events == []
+
+        # Twelve hours later it really finishes, back to dry_status 0 (Off).
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "info": "11402103", "tray": []}]})
+        assert mqtt_client._drying_events == [0]
+        assert 0 not in mqtt_client._drying_targets
+
+    def test_zero_while_stopping_completes(self, mqtt_client):
+        """dry_status 4 (Stopping) means the cycle is ending, not running — the
+        edge must still fire so smart-plug auto-off runs when a user stops a
+        dry early."""
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 720, "info": "11402123", "tray": []}]})
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "info": "11402143", "tray": []}]})
+        assert mqtt_client._drying_events == [0]
+
+    def test_absent_dry_status_still_completes(self, mqtt_client):
+        """The phase gate is a suppression, not a requirement: firmware that
+        never reports an info hex must still be able to end a cycle."""
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 720, "tray": []}]})
+        mqtt_client._handle_ams_data({"ams": [{"id": "0", "dry_time": 0, "tray": []}]})
+        assert mqtt_client._drying_events == [0]
+
 
 class TestPrintRunningObservedCallback:
     """#1485 follow-up: on_print_running_observed fires the FIRST time we

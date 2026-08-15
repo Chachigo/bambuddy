@@ -40,6 +40,12 @@ _AMS_MODULE_PREFIXES = ("ams/", "n3f/", "n3s/")
 # printer_manager.ACTIVE_PRINT_STATES and print_scheduler._ACTIVE_PRINT_STATES.
 _ACTIVE_PRINT_STATES = frozenset({"PREPARE", "SLICING", "RUNNING", "PAUSE"})
 
+# AMS dry_status phases (info bits 4-7) in which a drying cycle is still live, so
+# a dry_time of 0 alongside one of them is a transient rather than a completion
+# (#2759). 0=Off, 4=Stopping and 5=Error all mean the cycle is over or ending and
+# are deliberately excluded — those SHOULD end it.
+_ACTIVE_DRY_STATUSES = frozenset({1, 2, 3})  # Checking, Drying, Cooling
+
 # CONNACK reason codes that mean the printer actively refused our credentials,
 # as opposed to being unreachable or busy. Bambu speaks MQTT 3.1.1, whose
 # single-byte CONNACK return codes paho maps onto the v5 reason-code space:
@@ -2788,6 +2794,27 @@ class BambuMQTTClient:
             try:
                 current = int(raw_dry_time)
             except (TypeError, ValueError):
+                continue
+            # A dry_time of 0 only means "finished" when the unit also reports
+            # an idle phase. Between the command ack and the countdown settling
+            # the firmware publishes a transient 0 while the AMS is still
+            # Checking — #2759 caught a 720 → 0 → 719 sequence one minute into a
+            # 12-hour cycle. Taking that at face value dropped the cached target
+            # (leaving the badge to guess the filament from tray 1, so a PLA
+            # cycle read "PETG @ 65°C") and fired on_drying_complete, which
+            # schedules smart-plug auto-off. dry_status comes from the same info
+            # hex parsed above; when it is absent we let the edge through, so a
+            # firmware that never reports one still ends its cycles.
+            if current == 0 and ams_unit.get("dry_status") in _ACTIVE_DRY_STATUSES:
+                # Leave the remembered value alone, exactly as the absent-
+                # dry_time skip above does: whichever push ends the cycle for
+                # real must still see a non-zero previous.
+                logger.debug(
+                    "[%s] AMS %d reported dry_time 0 in phase %s — cycle still live, ignoring",
+                    self.serial_number,
+                    ams_id,
+                    ams_unit.get("dry_status"),
+                )
                 continue
             previous = self._previous_dry_times.get(ams_id, 0)
             self._previous_dry_times[ams_id] = current

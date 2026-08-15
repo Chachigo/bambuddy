@@ -238,6 +238,43 @@ def drying_screen_only(model: str | None) -> bool:
     return model.strip().upper() in _DRYING_SCREEN_ONLY_MODELS
 
 
+def uniform_tray_drying_hint(loaded_trays: list[tuple[str, object]]) -> tuple[str | None, int | None]:
+    """Guess an active cycle's filament + target temperature from the loaded trays.
+
+    Bambu never echoes back which filament or temperature a drying cycle is
+    running, so the badge normally reads the target we cached when we sent the
+    command. This is the fallback for when we have no record — drying started in
+    a previous backend lifetime, or from the printer's own screen.
+
+    It answers only when every loaded tray holds the same filament type. On a
+    mixed unit the first tray is evidence of nothing: an AMS holding two PETG
+    and two PLA spools, drying PLA at the 45°C the user picked, was labelled
+    "PETG @ 65°C" purely because slot 1 happened to be PETG (#2759). Saying
+    nothing and letting the badge show just the countdown beats stating a
+    temperature the cycle isn't using.
+
+    Args:
+        loaded_trays: ``(tray_type, drying_temp)`` for each tray, in slot order.
+            Empty slots (falsy tray_type) are ignored. ``drying_temp`` is the
+            RFID-recommended value and may be None or unparseable.
+
+    Returns:
+        ``(filament, temp)``, either of which may be None.
+    """
+    types = {str(tray_type) for tray_type, _ in loaded_trays if tray_type}
+    if len(types) != 1:
+        return None, None
+    filament = next(iter(types))
+    for tray_type, drying_temp in loaded_trays:
+        if not tray_type or not drying_temp:
+            continue
+        try:
+            return filament, int(drying_temp)
+        except (TypeError, ValueError):
+            continue
+    return filament, None
+
+
 def supports_drying(model: str | None, firmware: str | None) -> bool:
     """Check if a printer model accepts remote AMS drying commands.
 
@@ -1254,9 +1291,8 @@ def printer_state_to_dict(
             # per-tick AMS push, so prefer the cached target from the last
             # ``send_drying_command``. When we have no record (drying
             # started in a previous backend lifetime, or the cache was
-            # never seeded), fall back to the first loaded tray's
-            # tray_type + RFID-recommended drying_temp — the same heuristic
-            # the popover already uses to seed defaults.
+            # never seeded), fall back to the loaded trays — but only when
+            # they agree on a filament type. See uniform_tray_drying_hint.
             ams_id_int = int(ams_data.get("id", 0))
             target = (drying_targets or {}).get(ams_id_int)
             dry_target_temp: int | None = None
@@ -1272,16 +1308,13 @@ def printer_state_to_dict(
                 if fil_val:
                     dry_filament = str(fil_val)
             if dry_target_temp is None or not dry_filament:
-                for tray in trays:
-                    if tray.get("tray_type"):
-                        if not dry_filament:
-                            dry_filament = str(tray["tray_type"])
-                        if dry_target_temp is None and tray.get("drying_temp"):
-                            try:
-                                dry_target_temp = int(tray["drying_temp"])
-                            except (TypeError, ValueError):
-                                pass
-                        break
+                hint_filament, hint_temp = uniform_tray_drying_hint(
+                    [(tray.get("tray_type") or "", tray.get("drying_temp")) for tray in trays]
+                )
+                if not dry_filament:
+                    dry_filament = hint_filament
+                if dry_target_temp is None:
+                    dry_target_temp = hint_temp
 
             ams_units.append(
                 {
