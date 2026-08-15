@@ -380,6 +380,180 @@ def extract_slot_extruders_from_3mf(file_path: Path, plate_id: int | None = None
     return [by_slot.get(slot, -1) for slot in range(1, highest_slot + 1)]
 
 
+@dataclass(frozen=True)
+class RackGroup:
+    """One filament group on a nozzle-rack plate, and what hotend it needs.
+
+    A group is the slicer's *logical* nozzle. On an H2C the rack carriage hosts
+    six of them, so several groups share one extruder index -- which is exactly
+    the case ``extract_nozzle_mapping_from_3mf`` refuses to answer, because the
+    physical rack position per group is the operator's choice and is stated
+    nowhere in the file.
+    """
+
+    group_id: int
+    on_rack: bool
+    nozzle_diameter: str
+    volume_type: str
+    # Only a hint, for preferring a rack position already loaded with this
+    # colour. Excluded from equality on purpose: two filaments may share a
+    # group and differ in colour without the group being contradictory, and
+    # the agreement check below must not reject that file.
+    filament_color: str = field(default="", compare=False)
+
+
+@dataclass(frozen=True)
+class RackPlan:
+    """Everything a rack dispatch needs from the 3MF, short of the choice itself.
+
+    ``slot_groups`` is dense: index 0 is filament slot 1, and a slot the plate
+    does not print is ``-1``, matching :func:`extract_slot_extruders_from_3mf`.
+    ``groups`` is keyed by group id.
+    """
+
+    slot_groups: list[int]
+    groups: dict[int, RackGroup]
+
+    @property
+    def rack_group_ids(self) -> list[int]:
+        """Groups needing a rack position, lowest first, for stable assignment."""
+        return sorted(gid for gid, group in self.groups.items() if group.on_rack)
+
+    def group_dicts(self) -> dict[int, dict]:
+        """The groups as plain dicts, the form the resolver and the API take.
+
+        Keeps one definition of the shape rather than two that can drift: the
+        dispatcher resolves against it and the print dialog renders from it.
+        """
+        return {
+            gid: {
+                "on_rack": group.on_rack,
+                "nozzle_diameter": group.nozzle_diameter,
+                "volume_type": group.volume_type,
+                "filament_color": group.filament_color,
+            }
+            for gid, group in self.groups.items()
+        }
+
+
+def extract_rack_plan_from_3mf(file_path: Path, plate_id: int | None = None) -> RackPlan | None:
+    """What a nozzle-rack plate needs per group, or None (#1784).
+
+    :func:`extract_nozzle_mapping_from_3mf` answers "which carriage" and
+    withholds the whole mapping when a plate needs several hotends off one
+    rack. This answers the question underneath it -- which groups exist, which
+    of them are rack-bound, and what nozzle each one wants -- so the caller can
+    pair it with a chosen rack position and build a mapping the other function
+    cannot.
+
+    Measured basis (maintainer's H2C, 2026-08-14): the same plate was sent
+    twice with different rack picks and every member of the two 3MFs was
+    identical bar float noise -- ``group_id`` values, the toolchange stream and
+    the ``NOZZLE_CHANGE`` markers included. The pick lives only in the
+    dispatched ``nozzle_mapping``, so nothing here can or should derive it.
+
+    Returns None whenever the plate cannot be described completely: a partial
+    plan would place some slots and leave others at "not printed", which is the
+    contradiction the firmware rejects as HMS 0500-4047.
+
+    Takes a path rather than an open archive for the same reason
+    :func:`extract_slot_extruders_from_3mf` does -- the dispatcher is holding
+    the file, and a broken one must not take the print down.
+    """
+    try:
+        with zipfile.ZipFile(file_path) as zf:
+            return _rack_plan(zf, plate_id=plate_id)
+    except (zipfile.BadZipFile, OSError) as exc:
+        logger.warning("Failed to read rack plan from %s: %s", file_path, exc)
+        return None
+    except Exception:
+        logger.exception("Unreadable rack plan in %s", file_path)
+        return None
+
+
+def _rack_plan(zf: zipfile.ZipFile, plate_id: int | None) -> RackPlan | None:
+    """Body of :func:`extract_rack_plan_from_3mf`, on an already-open archive."""
+    names = zf.namelist()
+    if "Metadata/project_settings.config" not in names:
+        return None
+    if "Metadata/slice_info.config" not in names:
+        return None
+
+    data = json.loads(zf.read("Metadata/project_settings.config").decode())
+    physical_extruder_map = data.get("physical_extruder_map")
+    if not physical_extruder_map or len(physical_extruder_map) <= 1:
+        return None
+
+    # Which extruder index is the rack, taken from the file rather than a
+    # constant: the rack is the carriage that can address more than one nozzle.
+    # `extruder_max_nozzle_count` is ['1', '6'] on an H2C, and reading it here
+    # means a future rack of a different size needs no change.
+    rack_indices: set[int] = set()
+    for index, count in enumerate(data.get("extruder_max_nozzle_count") or []):
+        try:
+            if int(count) > 1:
+                rack_indices.add(index)
+        except (TypeError, ValueError):
+            return None
+    if not rack_indices:
+        return None
+
+    si_root = ET.fromstring(zf.read("Metadata/slice_info.config").decode())
+    plates = _plates_in_scope(si_root, plate_id)
+    group_extruders = _group_extruder_indices(plates)
+    if not group_extruders:
+        return None
+
+    filament_elems = [elem for plate in plates for elem in plate.findall(".//filament")]
+    if not filament_elems:
+        return None
+
+    slot_groups: dict[int, int] = {}
+    groups: dict[int, RackGroup] = {}
+    for elem in filament_elems:
+        group_id_str = elem.get("group_id")
+        slot_id_str = elem.get("id")
+        if group_id_str is None or not slot_id_str:
+            # One ungrouped filament makes the plan partial, and a partial plan
+            # dispatches the ungrouped slot as unprinted.
+            return None
+        try:
+            group_id = int(group_id_str)
+            slot_id = int(slot_id_str)
+        except (TypeError, ValueError):
+            return None
+
+        extruder_index = group_extruders.get(group_id)
+        if extruder_index is None or not 0 <= extruder_index < len(physical_extruder_map):
+            return None
+
+        # Two plates in scope may name the same slot; they must agree, or the
+        # dispatched plate is ambiguous.
+        if slot_groups.setdefault(slot_id, group_id) != group_id:
+            return None
+
+        group = RackGroup(
+            group_id=group_id,
+            on_rack=extruder_index in rack_indices,
+            nozzle_diameter=(elem.get("nozzle_diameter") or "").strip(),
+            volume_type=(elem.get("volume_type") or "").strip(),
+            filament_color=(elem.get("color") or "").strip(),
+        )
+        # Filaments sharing a group must want the same hotend, or "the group is
+        # one nozzle" is not true and no single position can serve them.
+        if groups.setdefault(group_id, group) != group:
+            return None
+
+    highest_slot = max(slot_groups)
+    if highest_slot < 1 or highest_slot > _MAX_DENSE_FILAMENT_SLOTS:
+        return None
+
+    return RackPlan(
+        slot_groups=[slot_groups.get(slot, -1) for slot in range(1, highest_slot + 1)],
+        groups=groups,
+    )
+
+
 def _plates_in_scope(si_root: XmlElement, plate_id: int | None) -> list[XmlElement]:
     """The ``<plate>`` elements a lookup should read, narrowed to one if asked.
 

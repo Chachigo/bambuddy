@@ -1681,6 +1681,16 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN nozzle_mapping TEXT")
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN nozzles_info TEXT")
 
+    # Migration: nozzle_rack_choice (#1784). Which rack position each filament
+    # group prints from, as JSON {group_id: 1-based position}. Kept separate
+    # from nozzle_mapping above because that one is BambuStudio's own expanded
+    # answer and rides to the printer verbatim, while this is the operator's
+    # pick and has to survive being re-checked against a rack that may have
+    # been re-loaded since. Also on the variants table so a batch clone does
+    # not silently lose it. Nullable TEXT, no Postgres / SQLite divergence.
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN nozzle_rack_choice TEXT")
+    await _safe_execute(conn, "ALTER TABLE print_queue_variants ADD COLUMN nozzle_rack_choice TEXT")
+
     # Migration: Add target_parts_count column to projects for tracking total parts needed
     await _safe_execute(conn, "ALTER TABLE projects ADD COLUMN target_parts_count INTEGER")
 

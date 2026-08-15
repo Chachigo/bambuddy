@@ -603,6 +603,23 @@ export function PrintModal({
   // Manual slot overrides are per plate: slot 3 of plate 1 and slot 3 of plate 2
   // are different prints and may want different trays.
   const [manualMappingsByPlate, setManualMappingsByPlate] = useState<Record<number, Record<number, number>>>({});
+  // Rack position per filament group (#1784), and one set per plate for the
+  // per-plate panels — each plate has its own groups.
+  const [nozzleRackChoice, setNozzleRackChoice] = useState<Record<number, number>>(() => {
+    // Re-opening an item shows the positions it was queued with, so editing
+    // one filament does not silently drop the rest.
+    if (mode === 'edit-queue-item' && queueItem?.nozzle_rack_choice) {
+      const seeded: Record<number, number> = {};
+      for (const [groupId, position] of Object.entries(queueItem.nozzle_rack_choice)) {
+        const group = Number(groupId);
+        if (Number.isInteger(group) && Number.isInteger(position)) seeded[group] = position;
+      }
+      return seeded;
+    }
+    return {};
+  });
+  const [nozzleRackChoiceByPlate, setNozzleRackChoiceByPlate] =
+    useState<Record<number, Record<number, number>>>({});
 
   // Only ever computed for a single target printer: a tray id means nothing on a
   // different printer, so a fan-out across printers must not reuse these.
@@ -1132,6 +1149,15 @@ export function PrintModal({
     };
 
     // Common queue data for create and edit modes
+    // One panel per plate when several are selected, one shared panel
+    // otherwise -- the same split the AMS mappings use above.
+    const rackChoiceForPlate = (plateId: number | null): Record<number, number> | undefined => {
+      const choice = plateId != null && isMultiPlateSelection
+        ? nozzleRackChoiceByPlate[plateId]
+        : nozzleRackChoice;
+      return choice && Object.keys(choice).length > 0 ? choice : undefined;
+    };
+
     const getQueueData = (printerId: number | null, plateOverride?: number | null): PrintQueueItemCreate => {
       const plateId = plateOverride !== undefined ? plateOverride : selectedPlate;
       const plateEstimatedCost =
@@ -1153,6 +1179,11 @@ export function PrintModal({
       // re-flag the item on its first dispatch tick (#1698-followup).
       skip_filament_check: options?.skipFilamentCheck === true ? true : undefined,
       ams_mapping: printerId ? getMappingForPrinter(printerId, plateId) : undefined,
+      // Rack positions per filament group (#1784). Only sent in printer mode:
+      // in model mode the target printer is not known yet, and the rack it
+      // will be dispatched to cannot be validated against here. The dispatcher
+      // assigns them itself in that case.
+      nozzle_rack_choice: printerId ? rackChoiceForPlate(plateId) : undefined,
       plate_id: plateId,
       scheduled_time: scheduleOptions.scheduleType === 'scheduled' && scheduleOptions.scheduledTime
         ? new Date(scheduleOptions.scheduledTime).toISOString()
@@ -1245,6 +1276,10 @@ export function PrintModal({
                 gcode_injection: scheduleOptions.gcodeInjection,
                 manual_start: scheduleOptions.scheduleType === 'queue' && scheduleOptions.requireManualStart,
                 ams_mapping: printerMapping,
+                // null, not undefined: an operator who cleared their picks
+                // means "assign these again", and undefined would leave the
+                // stale ones on the row (#1784).
+                nozzle_rack_choice: rackChoiceForPlate(plateId) ?? null,
                 plate_id: plateId,
                 scheduled_time: scheduleOptions.scheduleType === 'scheduled' && scheduleOptions.scheduledTime
                   ? new Date(scheduleOptions.scheduledTime).toISOString()
@@ -1491,8 +1526,14 @@ export function PrintModal({
       className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
       onClick={isSubmitting ? undefined : onClose}
     >
+      {/* 4xl rather than the 2xl this was: the filament rows carry the most
+          horizontal content in the dialog — a required name, a nozzle picker on
+          rack machines, and an AMS slot dropdown naming type, colour and
+          remaining weight — and anything narrower truncated the name to
+          "Bamb..." (#1784). 4xl is 896px, so it still fits a 1024-wide laptop
+          with the surrounding padding, and `w-full` keeps it fluid below that. */}
       <Card
-        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-4xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <CardContent className="p-0">
@@ -1721,6 +1762,8 @@ export function PrintModal({
                   setForceColorMatch((prev) => ({ ...prev, [slotId]: value }))
                 }
                 archiveAmsMapping={archiveSlicerAmsMapping}
+                nozzleRackChoice={nozzleRackChoice}
+                onNozzleRackChoiceChange={setNozzleRackChoice}
               />
             )}
 
@@ -1753,6 +1796,10 @@ export function PrintModal({
                     setForceColorMatch((prev) => ({ ...prev, [slotId]: value }))
                   }
                   archiveAmsMapping={archiveSlicerAmsMapping}
+                  nozzleRackChoice={nozzleRackChoiceByPlate[plateId] ?? {}}
+                  onNozzleRackChoiceChange={(choice) =>
+                    setNozzleRackChoiceByPlate((prev) => ({ ...prev, [plateId]: choice }))
+                  }
                 />
               );
             })}

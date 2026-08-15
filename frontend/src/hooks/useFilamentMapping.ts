@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { getColorName } from '../utils/colors';
+import type { RackGroupInfo } from '../components/PrintModal/types';
 import {
   normalizeColor,
   normalizeColorForCompare,
@@ -157,6 +158,13 @@ export interface FilamentRequirement {
   tray_info_idx?: string;
   /** Target nozzle for dual-nozzle printers (0=right, 1=left) */
   nozzle_id?: number;
+  /** Filament group this slot prints in, on a nozzle-rack machine (#1784).
+   *  The group is the slicer's logical nozzle, so it is what a rack position
+   *  gets chosen for. Absent on every other model. */
+  group_id?: number;
+  /** What that group needs of a hotend, for filtering the rack positions it
+   *  can be sent to. */
+  group?: RackGroupInfo;
 }
 
 /**

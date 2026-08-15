@@ -2429,6 +2429,10 @@ export interface PrintQueueItem {
   // Auto-print G-code injection
   gcode_injection?: boolean;
   cleanup_library_after_dispatch?: boolean;
+  /** Which rack position each filament group prints from, on a nozzle-rack
+   *  machine (#1784): `{ [group_id]: 1-based position }`. Re-checked against
+   *  the live rack at dispatch; omit to have the dispatcher assign them. */
+  nozzle_rack_choice?: Record<number, number> | null;
 }
 
 export interface PrintBatchPlateTarget {
@@ -2534,6 +2538,10 @@ export interface PrintQueueItemCreate {
   // defeats the point) and with archive_id/library_file_id (these ARE the files).
   // Order is priority — index 0 wins when several printers are idle at once.
   variants?: QueueVariantCreate[];
+  /** Which rack position each filament group prints from, on a nozzle-rack
+   *  machine (#1784): `{ [group_id]: 1-based position }`. Re-checked against
+   *  the live rack at dispatch; omit to have the dispatcher assign them. */
+  nozzle_rack_choice?: Record<number, number> | null;
 }
 
 /** One candidate file for a cross-model queue item (#671). */
@@ -2605,6 +2613,10 @@ export interface PrintQueueItemUpdate {
   gcode_injection?: boolean;
   cost_center_id?: number | null;
   estimated_cost?: number | null;
+  /** Which rack position each filament group prints from, on a nozzle-rack
+   *  machine (#1784): `{ [group_id]: 1-based position }`. Re-checked against
+   *  the live rack at dispatch; omit to have the dispatcher assign them. */
+  nozzle_rack_choice?: Record<number, number> | null;
 }
 
 export interface PrintQueueBulkUpdate {

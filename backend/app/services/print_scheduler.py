@@ -36,7 +36,7 @@ from backend.app.services.bambu_ftp import (
     upload_file_async,
     with_ftp_retry,
 )
-from backend.app.services.bambu_mqtt import HMS_MQTT_VERIFY_FAILED
+from backend.app.services.bambu_mqtt import HMS_MQTT_VERIFY_FAILED, resolve_rack_plan_mapping
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.finance_budget import (
     create_budget_reservation,
@@ -63,7 +63,10 @@ from backend.app.utils.printer_models import (
     is_nozzle_rack_model,
     normalize_printer_model,
 )
-from backend.app.utils.threemf_tools import extract_slot_extruders_from_3mf
+from backend.app.utils.threemf_tools import (
+    extract_rack_plan_from_3mf,
+    extract_slot_extruders_from_3mf,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2252,6 +2255,7 @@ class PrintScheduler:
         item.plate_id = variant.plate_id
         item.ams_mapping = variant.ams_mapping
         item.nozzle_mapping = variant.nozzle_mapping
+        item.nozzle_rack_choice = variant.nozzle_rack_choice
         item.filament_overrides = variant.filament_overrides
         item.required_filament_types = variant.required_filament_types
         if variant.print_time_seconds is not None:
@@ -5759,8 +5763,114 @@ class PrintScheduler:
         # Skipped when the item already carries a Bambu Studio capture: that
         # one wins downstream anyway, so reading the 3MF again would be work
         # thrown away on every dispatch.
-        nozzle_slot_extruders = None
+        # Rack position resolution (#1784), tried before the #2800 fallback
+        # below because it can express what that one cannot: a plate wanting a
+        # *different* hotend off the rack per filament group. The position per
+        # group is the operator's pick — the 3MF states it nowhere, proven by
+        # sending one plate twice with different picks and finding the two
+        # files identical bar float noise — so it is resolved here against the
+        # rack as it stands right now, after the upload, not at queue time.
+        resolved_nozzle_mapping = None
         if not item.nozzle_mapping and file_path is not None and is_nozzle_rack_model(printer.model):
+            rack_plan = extract_rack_plan_from_3mf(file_path, plate_id=item.plate_id or 1)
+            if rack_plan is not None:
+                try:
+                    stored_choice = json.loads(item.nozzle_rack_choice) if item.nozzle_rack_choice else {}
+                except (json.JSONDecodeError, TypeError):
+                    stored_choice = {}
+                    logger.warning(
+                        "Queue item %s: unreadable nozzle_rack_choice %r, assigning rack positions instead",
+                        item.id,
+                        item.nozzle_rack_choice,
+                    )
+                # JSON object keys are strings; the groups are ints.
+                choice: dict[int, int] = {}
+                for key, value in (stored_choice or {}).items():
+                    try:
+                        choice[int(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+
+                live_rack = getattr(printer_manager.get_status(item.printer_id), "nozzle_rack", None) or []
+                resolved_nozzle_mapping, rack_error = resolve_rack_plan_mapping(
+                    rack_plan.slot_groups, rack_plan.group_dicts(), choice, live_rack
+                )
+                if resolved_nozzle_mapping is None and choice:
+                    # An explicit pick that no longer holds stops the print. The
+                    # operator named a hotend; printing from a different one is
+                    # how a plate gets levelled on one nozzle and drawn with
+                    # another, millimetres above the bed. Nothing has been sent
+                    # to the printer yet, so failing here costs only the upload.
+                    item.status = "failed"
+                    item.error_message = (
+                        f"Nozzle rack pick no longer fits the printer: {rack_error}. "
+                        "Edit the item to choose another position."
+                    )
+                    item.completed_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    logger.warning(
+                        "Queue item %s: refusing to dispatch to %s — %s (chose %s, rack %s)",
+                        item.id,
+                        printer.name,
+                        rack_error,
+                        choice,
+                        [slot.get("id") for slot in live_rack],
+                    )
+                    await notification_service.on_queue_job_failed(
+                        job_name=filename.replace(".gcode.3mf", "").replace(".3mf", ""),
+                        printer_id=printer.id,
+                        printer_name=printer.name,
+                        reason=item.error_message,
+                        db=db,
+                    )
+                    try:
+                        await ws_manager.send_queue_item_failed(
+                            user_id=toast_uid,
+                            queue_item_id=item.id,
+                            printer_id=item.printer_id,
+                            reason="nozzle_rack_pick_stale",
+                        )
+                    except Exception:
+                        pass  # Best-effort — don't fail the error handler
+                    # The file is already on the SD card by this point, and a
+                    # 3MF left there is a phantom print waiting to be started
+                    # from the touchscreen. Same cleanup the start_print
+                    # failure path below does, for the same reason.
+                    try:
+                        await delete_file_async(
+                            printer.ip_address,
+                            printer.access_code,
+                            remote_path,
+                            printer_model=printer.model,
+                        )
+                    except Exception:
+                        pass  # Best-effort — don't fail the error handler
+                    return
+                if resolved_nozzle_mapping is None:
+                    # Nothing was picked and nothing could be assigned. Falls
+                    # through to the #2800 path, which is what ran before this
+                    # existed — strictly not worse than today.
+                    logger.info(
+                        "Queue item %s: no rack positions assignable (%s); falling back",
+                        item.id,
+                        rack_error,
+                    )
+                else:
+                    logger.info(
+                        "Queue item %s: rack mapping %s (groups %s, chosen %s)",
+                        item.id,
+                        resolved_nozzle_mapping,
+                        rack_plan.slot_groups,
+                        choice or "auto",
+                    )
+
+        nozzle_slot_extruders = None
+        if (
+            not item.nozzle_mapping
+            and resolved_nozzle_mapping is None
+            and file_path is not None
+            and is_nozzle_rack_model(printer.model)
+        ):
             slot_extruders = extract_slot_extruders_from_3mf(file_path, plate_id=item.plate_id or 1)
             if slot_extruders:
                 nozzle_slot_extruders = json.dumps(slot_extruders)
@@ -5783,7 +5893,8 @@ class PrintScheduler:
             timelapse=effective_timelapse,
             use_ams=item.use_ams,
             nozzle_offset_cali=item.nozzle_offset_cali,
-            nozzle_mapping=item.nozzle_mapping,
+            nozzle_mapping=item.nozzle_mapping
+            or (json.dumps(resolved_nozzle_mapping) if resolved_nozzle_mapping else None),
             nozzle_slot_extruders=nozzle_slot_extruders,
         )
 

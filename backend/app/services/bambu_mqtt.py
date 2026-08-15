@@ -408,6 +408,210 @@ def resolve_rack_nozzle_mapping(
     return wire
 
 
+# A rack position as the operator counts it (and as the printer card and
+# BambuStudio both label it) is 1-based; the physical nozzle id is 15 higher.
+# Measured 2026-08-14: a plate dispatched with the operator picking R1 and R2
+# sent 16 and 17, and the same plate picking R1 and R3 sent 16 and 18.
+_RACK_POSITION_BASE = 15
+RACK_POSITIONS = tuple(range(1, len(_RACK_NOZZLE_IDS) + 1))
+
+
+def rack_position_to_nozzle_id(position: int) -> int | None:
+    """Physical nozzle id for a 1-based rack position, or None if out of range."""
+    if not isinstance(position, int) or isinstance(position, bool):
+        return None
+    if position not in RACK_POSITIONS:
+        return None
+    return _RACK_POSITION_BASE + position
+
+
+def _rack_slot_is_eligible(slot: dict, diameter: str, volume_type: str) -> bool:
+    """Whether a live rack slot can print a group wanting this nozzle.
+
+    Mirrors the filter BambuStudio applies in its own picker: the position has
+    to hold a nozzle at all, and that nozzle has to match the slice's diameter
+    and flow type. A mismatch here is not cosmetic -- it is the printer being
+    asked to lay down a 0.4 extrusion through a 0.2 orifice.
+    """
+    if not isinstance(slot, dict):
+        return False
+    slot_diameter = str(slot.get("diameter") or "").strip()
+    slot_type = str(slot.get("type") or "").strip()
+    if not slot_diameter and not slot_type:
+        return False  # empty position
+
+    # "0.40" and "0.4" are the same nozzle spelled two ways -- the 3MF pads,
+    # the printer does not.
+    try:
+        if round(float(slot_diameter), 2) != round(float(diameter), 2):
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    # Flow type: the printer reports a code ("HS", "HH01"), the slice reports a
+    # name ("Standard", "High Flow"). Compared only when both are stated, so a
+    # printer that omits the code is not thereby ruled ineligible.
+    wanted = volume_type.strip().lower()
+    if wanted and slot_type:
+        is_high_flow = slot_type.upper().startswith("HH")
+        if wanted.startswith("high flow") != is_high_flow:
+            return False
+    return True
+
+
+# The nozzle currently picked up onto the rack carriage. Physical id 1 is the
+# fixed hotend (``_FIXED_NOZZLE_ID``), so the other carriage entry is 0.
+_RACK_CARRIAGE_NOZZLE_ID = 0
+
+
+def _rack_by_position(rack_slots: list[dict]) -> dict[int, dict]:
+    """Live rack contents keyed by 1-based position, mounted nozzle included.
+
+    The firmware omits a rack id entirely while that nozzle is picked up onto
+    the carriage (#943) -- it does not send an empty placeholder. Taking the
+    omission at face value would rule the nozzle ineligible for the very print
+    that wants it, and it is the single most likely position to be picked,
+    because it is the one the last print left mounted.
+
+    The absent id is recoverable only when exactly one is missing: rack ids are
+    fixed at 16..21, so a single gap alongside a loaded carriage is that
+    carriage's nozzle. Two or more gaps are genuinely ambiguous -- an operator
+    with four nozzles in six positions looks the same -- so those stay absent
+    and the caller treats them as empty.
+
+    Measured 2026-08-14 09:02 on the maintainer's H2C: ``IDs: [16, 1, 21, 19,
+    18, 0, 20]`` -- both carriages present, rack id 17 the lone gap.
+    """
+    by_position: dict[int, dict] = {}
+    carriage: dict | None = None
+    for slot in rack_slots or []:
+        if not isinstance(slot, dict) or not isinstance(slot.get("id"), int):
+            continue
+        if slot["id"] == _RACK_CARRIAGE_NOZZLE_ID:
+            carriage = slot
+            continue
+        position = slot["id"] - _RACK_POSITION_BASE
+        if position in RACK_POSITIONS:
+            by_position[position] = slot
+
+    missing = [position for position in RACK_POSITIONS if position not in by_position]
+    if len(missing) == 1 and carriage is not None and (carriage.get("diameter") or carriage.get("type")):
+        by_position[missing[0]] = carriage
+    return by_position
+
+
+def resolve_rack_plan_mapping(
+    slot_groups: list[int],
+    groups: dict[int, dict],
+    choice: dict[int, int],
+    rack_slots: list[dict],
+) -> tuple[list[int] | None, str | None]:
+    """Build a physical ``nozzle_mapping`` from a rack plan and a position pick.
+
+    This is the multi-hotend counterpart to :func:`resolve_rack_nozzle_mapping`.
+    That one can only name the single live rack position, so a plate wanting a
+    different hotend per group is unresolvable to it. Here each group carries
+    its own position, which is the operator's choice (#1784) -- the 3MF states
+    it nowhere, proven by dispatching one plate twice with different picks and
+    diffing the two files down to float noise.
+
+    ``choice`` may be partial or empty; groups it does not name are assigned
+    from the live rack, preferring a position already loaded with the group's
+    own filament colour and otherwise taking the lowest eligible one.
+
+    Returns ``(wire, None)`` on success, or ``(None, reason)`` where *reason*
+    is a sentence naming what could not be satisfied. The caller decides what
+    to do with a failure, and the two cases differ: a stale *explicit* pick
+    should stop the print, while a failed auto-assignment should degrade to
+    letting the firmware choose, exactly as before this existed.
+    """
+    if not isinstance(slot_groups, list) or not slot_groups:
+        return None, "the plate lists no filament slots"
+    if len(slot_groups) > _RACK_WIRE_SLOTS:
+        return None, f"the plate needs {len(slot_groups)} filament slots and the printer takes {_RACK_WIRE_SLOTS}"
+
+    by_position = _rack_by_position(rack_slots)
+
+    # Assign every rack-bound group a position before building the wire, so a
+    # group can never be handed one an earlier group already took. Explicit
+    # picks are placed first: an auto-assignment must yield to them rather than
+    # claim a position the operator asked for.
+    assigned: dict[int, int] = {}
+    rack_group_ids = sorted(gid for gid, g in groups.items() if g.get("on_rack"))
+
+    for group_id in rack_group_ids:
+        position = choice.get(group_id)
+        if position is None:
+            continue
+        group = groups[group_id]
+        if rack_position_to_nozzle_id(position) is None:
+            return None, f"rack position {position} does not exist"
+        if position in assigned.values():
+            return None, f"rack position {position} is picked for more than one filament group"
+        slot = by_position.get(position)
+        if slot is None:
+            return None, f"the printer reports nothing at rack position {position}"
+        if not _rack_slot_is_eligible(slot, group.get("nozzle_diameter", ""), group.get("volume_type", "")):
+            return None, (
+                f"rack position {position} holds a "
+                f"{slot.get('diameter') or 'missing'} {slot.get('type') or ''} nozzle, "
+                f"and the plate needs {group.get('nozzle_diameter')} {group.get('volume_type')}".replace("  ", " ")
+            )
+        assigned[group_id] = position
+
+    for group_id in rack_group_ids:
+        if group_id in assigned:
+            continue
+        group = groups[group_id]
+        eligible = [
+            position
+            for position in RACK_POSITIONS
+            if position not in assigned.values()
+            and position in by_position
+            and _rack_slot_is_eligible(
+                by_position[position], group.get("nozzle_diameter", ""), group.get("volume_type", "")
+            )
+        ]
+        if not eligible:
+            return None, (
+                f"no free rack position holds a {group.get('nozzle_diameter')} "
+                f"{group.get('volume_type')} nozzle for filament group {group_id}"
+            )
+        # Prefer a position already carrying this group's colour: picking it
+        # means the operator does not have to move filament to make the print
+        # match what they asked for.
+        wanted_colour = str(group.get("filament_color") or "").strip().lstrip("#").upper()[:6]
+        assigned[group_id] = next(
+            (
+                position
+                for position in eligible
+                if wanted_colour
+                and str(by_position[position].get("filament_color") or "").strip().lstrip("#").upper()[:6]
+                == wanted_colour
+            ),
+            eligible[0],
+        )
+
+    wire = [-1] * _RACK_WIRE_SLOTS
+    for index, group_id in enumerate(slot_groups):
+        if not isinstance(group_id, int) or isinstance(group_id, bool) or group_id < 0:
+            continue  # slot this plate does not print
+        group = groups.get(group_id)
+        if group is None:
+            return None, f"filament slot {index + 1} names group {group_id}, which the plate does not describe"
+        if not group.get("on_rack"):
+            wire[index] = _FIXED_NOZZLE_ID
+            continue
+        nozzle_id = rack_position_to_nozzle_id(assigned[group_id])
+        if nozzle_id is None:  # pragma: no cover - assigned only ever holds valid positions
+            return None, f"filament group {group_id} resolved to no rack position"
+        wire[index] = nozzle_id
+
+    if all(value == -1 for value in wire):
+        return None, "the plate assigns no filament to a nozzle"
+    return wire, None
+
+
 @dataclass
 class MQTTLogEntry:
     """Log entry for MQTT message debugging."""
