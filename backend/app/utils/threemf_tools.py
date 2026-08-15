@@ -510,6 +510,26 @@ def extract_nozzle_mapping_from_3mf(zf: zipfile.ZipFile, plate_id: int | None = 
                     except (ValueError, TypeError):
                         pass
 
+            # Two groups on one extruder means that extruder is a nozzle rack,
+            # and the plate wants a *different* hotend from it per group. Which
+            # physical rack slot each group takes is the slicer's own choice
+            # against the rack's live contents and is stated nowhere in the
+            # file -- on the plate that prompted this, both rack groups carry
+            # identical nozzle_diameter and volume_type, and BambuStudio still
+            # dispatched them to positions 16 and 18 (captured 2026-08-13
+            # 17:20; that print completed). Nothing here can reproduce that
+            # choice, and answering anyway is what printed in mid-air, so the
+            # whole mapping is withheld and the firmware picks for itself.
+            if group_extruders and len(set(group_extruders.values())) < len(group_extruders):
+                logger.warning(
+                    "Ignoring nozzle mapping: groups %s share extruders %s, so the plate "
+                    "needs more than one nozzle from a rack and the physical positions "
+                    "are not derivable from the file",
+                    sorted(group_extruders),
+                    sorted(set(group_extruders.values())),
+                )
+                return None
+
         # Single-active shortcut: only safe when the slice actually uses one
         # group. extruder_nozzle_stats can under-report a second installed
         # nozzle when its volume-type differs from the profile's enumerated

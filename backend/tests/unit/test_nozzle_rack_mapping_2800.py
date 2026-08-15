@@ -37,31 +37,36 @@ class TestIsNozzleRackModel:
 
 class TestResolveRackNozzleMapping:
     def test_rack_slot_takes_the_live_rack_position(self):
-        mapping = resolve_rack_nozzle_mapping([1], rack_nozzle_id=17)
-        assert mapping == [17]
+        # Extruder index 0 is the rack carriage: measured 2026-08-14 from
+        # ams_extruder_map plus a BambuStudio dispatch that completed.
+        mapping = resolve_rack_nozzle_mapping([0], rack_nozzle_id=17)
+        assert mapping is not None
+        assert len(mapping) == _RACK_WIRE_SLOTS
+        assert mapping[0] == 17
+        assert set(mapping[1:]) == {-1}
 
-    def test_the_wire_is_as_long_as_the_plate_has_slots(self):
-        """One entry per filament slot, not a fixed-length padded array.
+    def test_the_wire_is_padded_to_a_fixed_length(self):
+        """Studio's own dispatch is 32 entries whatever the plate's slot count.
 
-        BambuStudio's own dispatch of a three-filament H2C plate is
-        [1, 16, 16] -- three entries, captured from the maintainer's machine.
-        The earlier fixed 32-length padding was a generalisation from nothing.
+        This was briefly changed to the plate's slot count on the strength of
+        one 3-entry capture, which turned out to be a calibration job; the real
+        project print on the same machine dispatched 32 ([16, 1, 18, -1 x29])
+        and completed. The length is Studio's business, not the file's.
         """
-        assert resolve_rack_nozzle_mapping([1], rack_nozzle_id=17) == [17]
-        assert resolve_rack_nozzle_mapping([0, 1, 0], rack_nozzle_id=16) == [1, 16, 1]
-        assert len(resolve_rack_nozzle_mapping([1, 0, 0, -1], rack_nozzle_id=16)) == 4
+        for slots in ([0], [1, 0], [0, 1, 1, -1]):
+            assert len(resolve_rack_nozzle_mapping(slots, rack_nozzle_id=16)) == _RACK_WIRE_SLOTS
 
     def test_the_fixed_hotend_takes_its_own_physical_id(self):
         """Both carriages are translated; neither extruder index reaches the wire.
 
-        Sending the index for the fixed side (0) is what the printer rejected
-        outright on hardware — it would not start the job at all.
+        Sending an extruder index for the fixed side is what the printer
+        rejected outright on hardware — it would not start the job at all.
         """
-        mapping = resolve_rack_nozzle_mapping([0, 1], rack_nozzle_id=21)
+        mapping = resolve_rack_nozzle_mapping([1, 0], rack_nozzle_id=21)
         assert mapping[:2] == [1, 21]
 
     def test_unprinted_slots_stay_unset(self):
-        mapping = resolve_rack_nozzle_mapping([1, -1, 1], rack_nozzle_id=16)
+        mapping = resolve_rack_nozzle_mapping([0, -1, 0], rack_nozzle_id=16)
         assert mapping[:3] == [16, -1, 16]
 
     @pytest.mark.parametrize("rack_id", [None, 0, 1, 15, 22, 255])
@@ -71,7 +76,7 @@ class TestResolveRackNozzleMapping:
         Guessing here is what prints in mid-air, so returning None (and
         omitting nozzle_mapping) is the intended failure mode.
         """
-        assert resolve_rack_nozzle_mapping([1], rack_nozzle_id=rack_id) is None
+        assert resolve_rack_nozzle_mapping([0], rack_nozzle_id=rack_id) is None
 
     def test_job_that_never_uses_the_rack_is_left_alone(self):
         """BambuStudio omits nozzle_mapping for a fixed-hotend-only plate.
@@ -80,7 +85,7 @@ class TestResolveRackNozzleMapping:
         alone carries ams_mapping and no nozzle_mapping field at all, so
         naming a nozzle here would depart from what the printer expects.
         """
-        assert resolve_rack_nozzle_mapping([0, 0], rack_nozzle_id=17) is None
+        assert resolve_rack_nozzle_mapping([1, 1], rack_nozzle_id=17) is None
 
     @pytest.mark.parametrize("unknown", [2, 3, 31])
     def test_a_carriage_the_h2c_does_not_have_omits_the_field(self, unknown):
@@ -89,16 +94,16 @@ class TestResolveRackNozzleMapping:
         Forwarding it raw would name a physical nozzle by a number that does
         not identify one, which is the class of mistake #2800 was.
         """
-        assert resolve_rack_nozzle_mapping([unknown, 1], rack_nozzle_id=17) is None
+        assert resolve_rack_nozzle_mapping([unknown, 0], rack_nozzle_id=17) is None
 
     @pytest.mark.parametrize(
         "bad_slots",
         [
-            ["a", 1],  # non-numeric
-            [{}, 1],  # nested object
-            [[0], 1],  # nested list
-            [0.5, 1],  # fractional
-            [True, 1],  # bool would reach the wire as JSON `true`
+            ["a", 0],  # non-numeric
+            [{}, 0],  # nested object
+            [[0], 0],  # nested list
+            [0.5, 0],  # fractional
+            [True, 0],  # bool would reach the wire as JSON `true`
             "1",  # not a list at all
         ],
     )
@@ -111,10 +116,10 @@ class TestResolveRackNozzleMapping:
 
     @pytest.mark.parametrize("bad_rack", [[17], {"id": 17}, "17", 17.0, True])
     def test_junk_rack_position_returns_none_and_never_raises(self, bad_rack):
-        assert resolve_rack_nozzle_mapping([1], rack_nozzle_id=bad_rack) is None
+        assert resolve_rack_nozzle_mapping([0], rack_nozzle_id=bad_rack) is None
 
     def test_none_entries_read_as_unprinted(self):
-        assert resolve_rack_nozzle_mapping([None, 1], rack_nozzle_id=17)[:2] == [-1, 17]
+        assert resolve_rack_nozzle_mapping([None, 0], rack_nozzle_id=17)[:2] == [-1, 17]
 
     def test_hardware_confirmed_mixed_nozzle_plate(self):
         """The exact job the reporter ran on an H2C, both ways round.
@@ -125,10 +130,11 @@ class TestResolveRackNozzleMapping:
         BambuStudio captures of mixed plates on the same machine carry
         [1, 17, ...] and [17, 1, ...] depending on filament slot order.
         """
-        wire = resolve_rack_nozzle_mapping([0, -1, -1, 1], rack_nozzle_id=17)
-        assert wire == [1, -1, -1, 17]
+        wire = resolve_rack_nozzle_mapping([1, -1, -1, 0], rack_nozzle_id=17)
+        assert wire[:4] == [1, -1, -1, 17]
+        assert set(wire[4:]) == {-1}
 
-        swapped = resolve_rack_nozzle_mapping([1, 0], rack_nozzle_id=17)
+        swapped = resolve_rack_nozzle_mapping([0, 1], rack_nozzle_id=17)
         assert swapped[:2] == [17, 1]
 
     def test_more_slots_than_the_wire_carries(self):
@@ -192,7 +198,7 @@ class TestDispatch:
     def test_rack_model_resolves_slot_extruders(self):
         client = self._client("H2C")
         client.state.nozzle_rack_tar_id = 18
-        client.start_print("job.3mf", nozzle_slot_extruders=json.dumps([1, -1, 1]))
+        client.start_print("job.3mf", nozzle_slot_extruders=json.dumps([0, -1, 0]))
         cmd = self._print_cmd(client)
         assert cmd["nozzle_mapping"][:3] == [18, -1, 18]
 
@@ -201,7 +207,7 @@ class TestDispatch:
         client = self._client("H2C")
         client.state.nozzle_rack_src_id = 20
         client.state.nozzle_rack_tar_id = 0
-        client.start_print("job.3mf", nozzle_slot_extruders=json.dumps([1]))
+        client.start_print("job.3mf", nozzle_slot_extruders=json.dumps([0]))
         assert self._print_cmd(client)["nozzle_mapping"][0] == 20
 
     def test_unknown_rack_position_omits_the_field(self):
@@ -247,8 +253,8 @@ def _write_dual_nozzle_3mf(path, group_by_slot):
 
     physical_extruder_map is [1, 0] as Bambu ships it, so slicer group 0 comes
     out as MQTT extruder index 1 and group 1 as index 0. On the H2C index 1 is
-    the rack carriage — confirmed on hardware in #2800, and the reason the
-    rack-side fixture below slices its filaments into group 0.
+    the fixed hotend and index 0 the rack carriage — measured 2026-08-14, which
+    is why the rack-side fixtures below slice their filaments into group 1.
     """
     filaments = "".join(f'<filament id="{slot}" group_id="{group}"/>' for slot, group in group_by_slot.items())
     with zipfile.ZipFile(path, "w") as zf:
@@ -272,9 +278,13 @@ class TestSlotExtrudersFromFile:
         assert extract_slot_extruders_from_3mf(source) == [0, -1, 0]
 
     def test_end_to_end_reaches_the_rack_position(self, tmp_path):
-        """The reported failure: a two-slot job that must print from the rack."""
-        source = _write_dual_nozzle_3mf(tmp_path / "job.3mf", {1: 0, 3: 0})
-        assert extract_slot_extruders_from_3mf(source) == [1, -1, 1]
+        """The reported failure: a two-slot job that must print from the rack.
+
+        `physical_extruder_map` is [1, 0], so it is the file's group 1 that
+        lands on extruder 0 -- the rack carriage.
+        """
+        source = _write_dual_nozzle_3mf(tmp_path / "job.3mf", {1: 1, 3: 1})
+        assert extract_slot_extruders_from_3mf(source) == [0, -1, 0]
         wire = resolve_rack_nozzle_mapping(extract_slot_extruders_from_3mf(source), rack_nozzle_id=17)
         assert wire[:3] == [17, -1, 17]
 
@@ -283,7 +293,7 @@ class TestSlotExtrudersFromFile:
         source = _write_dual_nozzle_3mf(tmp_path / "job.3mf", {1: 0, 2: 1})
         assert extract_slot_extruders_from_3mf(source) == [1, 0]
         wire = resolve_rack_nozzle_mapping(extract_slot_extruders_from_3mf(source), rack_nozzle_id=17)
-        assert wire[:2] == [17, 1]
+        assert wire[:2] == [1, 17]
 
     def test_single_nozzle_file_yields_nothing(self, tmp_path):
         path = tmp_path / "single.3mf"
@@ -348,23 +358,42 @@ class TestGroupsBeyondTheExtruderCount:
     value that means "this plate does not print the slot".
     """
 
-    def test_the_dropped_filament_from_the_hms_0500_4047_report(self, tmp_path):
-        """The maintainer's own plate, first print on a new H2C.
+    def test_a_plate_wanting_two_rack_nozzles_is_left_to_the_firmware(self, tmp_path):
+        """The maintainer's own plate, first prints on a new H2C.
 
-        Three filaments in groups 2, 0 and 1 against a two-entry
-        physical_extruder_map. Slot 1 fell out of the mapping and dispatched as
-        [-1, 16, 1, ...] while ams_mapping named tray 6 for that same slot; the
-        printer stopped with "the available hotend quantity or model does not
-        match the sliced file". The file's own nozzle table says group 2 prints
-        on extruder 2, the rack side, same as group 1.
+        Three filaments in groups 2, 0 and 1, where the file's nozzle table
+        puts groups 1 AND 2 on extruder 2. Two groups on one extruder is a
+        rack: the plate wants a different hotend from it per group, which is
+        the whole point of the six-nozzle carriage. Which physical slot each
+        group takes is the slicer's choice against the live rack -- both rack
+        groups here carry identical nozzle_diameter and volume_type, and
+        BambuStudio still dispatched them to 16 and 18 (captured 17:20 on
+        2026-08-13; that print completed).
+
+        Nothing derivable from the file reproduces that, and the two attempts
+        that answered anyway both failed on hardware: dropping the unplaceable
+        filament dispatched [-1, 16, 1, ...] and the printer refused to start
+        (HMS 0500-4047), and placing it dispatched [1, 16, 1] which printed in
+        mid-air. So the mapping is withheld entirely.
         """
         source = _write_h2c_3mf(
             tmp_path / "benchy.3mf",
             [(1, {1: 2, 2: 0, 3: 1}, {0: 1, 1: 2, 2: 2})],
         )
-        assert extract_slot_extruders_from_3mf(source, plate_id=1) == [0, 1, 0]
-        wire = resolve_rack_nozzle_mapping([0, 1, 0], rack_nozzle_id=16)
-        assert wire == [1, 16, 1]
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) is None
+
+    def test_one_rack_group_is_still_answered(self, tmp_path):
+        """The refusal is about naming *several* rack positions, not the rack.
+
+        A plate with one group per carriage needs only the position the printer
+        reports as live, which is knowable -- that is the #2800 case and it
+        must keep working.
+        """
+        source = _write_h2c_3mf(
+            tmp_path / "one-each.3mf",
+            [(1, {1: 0, 2: 1}, {0: 1, 1: 2})],
+        )
+        assert extract_slot_extruders_from_3mf(source, plate_id=1) == [1, 0]
 
     def test_a_group_the_file_never_places_omits_the_whole_mapping(self, tmp_path):
         """Refusing beats answering for the slots that did resolve.

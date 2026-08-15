@@ -286,20 +286,42 @@ def apply_tray_exist_bits(
 # doing exactly that is what #2800 was.
 _RACK_NOZZLE_IDS = frozenset(range(16, 22))
 
-# Ceiling on the nozzle_mapping we will build, not the length we send. The wire
-# carries one physical nozzle ID per filament slot the plate declares, and -1
-# for a slot it does not print: BambuStudio's own dispatch of a three-filament
-# H2C plate is [1, 16, 16], and the hardware A/B in #2800 ran four-slot plates
-# as four entries. Padding to a fixed 32 was an over-generalisation of that.
+# BambuStudio dispatches a fixed-length nozzle_mapping on rack models: one
+# physical nozzle ID per filament slot, -1 for slots the plate does not print.
+#
+# Briefly changed to the plate's own slot count on the strength of a single
+# 3-entry capture, then changed back: Studio's dispatch of a real 3-filament
+# project print on the maintainer's H2C is 32 entries ([16, 1, 18, -1 x29],
+# captured 2026-08-13 17:20, and that print completed). The 3-entry capture was
+# a calibration job, so the length varies with whatever Studio is doing rather
+# than with the filament count -- which makes it the wrong thing to derive.
 _RACK_WIRE_SLOTS = 32
 
 # The two carriages, as extruder indices in the form the queue stores (already
-# translated through the file's physical_extruder_map). Settled on hardware in
-# #2800: the same sliced mixed-nozzle plate dispatched as [17, -1, -1, 1]
-# printed the rack nozzle several millimetres above the bed, and as
-# [1, -1, -1, 17] printed correctly on both nozzles start to finish.
-_FIXED_EXTRUDER_ID = 0
-_RACK_EXTRUDER_ID = 1
+# translated through the file's physical_extruder_map).
+#
+# Measured on the maintainer's H2C 2026-08-14, from three sources that agree:
+#
+#   - telemetry: ``ams_extruder_map {'0': 1, '1': 0, '2': 0}`` -- AMS 0 feeds
+#     extruder 1, AMS 1 and 2 feed extruder 0;
+#   - BambuStudio's own dispatch of a plate using all three units sent AMS 0's
+#     filament to physical nozzle 1 and AMS 1's to rack positions 16 and 18,
+#     and that print completed. So extruder 1 is the fixed hotend and extruder
+#     0 is the rack;
+#   - our own constants were internally inconsistent about it: physical nozzle
+#     id N sits on extruder N (see the L/R split in PrintersPage), and
+#     ``_FIXED_NOZZLE_ID`` is 1, which cannot be reconciled with a fixed
+#     extruder index of 0.
+#
+# These were the other way round until then, which is what dispatched a plate
+# to the carriage that had not been levelled and printed its first layer in
+# mid-air. That value came from #2800, where dispatching [17, -1, -1, 1] printed
+# in mid-air and [1, -1, -1, 17] printed correctly -- but that A/B measured
+# which *wire* worked, and the extruder indices were only inferred from it by
+# pairing with a slot_extruders list the then-buggy 3MF reader had produced. The
+# wire result stands; the inference from it did not.
+_FIXED_EXTRUDER_ID = 1
+_RACK_EXTRUDER_ID = 0
 
 # The fixed hotend's physical ID, which is *not* its extruder index. The same
 # hardware A/B ruled the index out: [0, -1, -1, 17] was rejected by the printer
@@ -320,8 +342,7 @@ def resolve_rack_nozzle_mapping(
     plate does not print. ``rack_nozzle_id`` is the rack position the printer
     reports as live.
 
-    Returns one physical nozzle ID per slot given, matching BambuStudio's own
-    dispatch length, or None
+    Returns a ``_RACK_WIRE_SLOTS``-long list of physical nozzle IDs, or None
     when the mapping cannot be resolved with confidence -- in which case the
     caller omits the field entirely and the firmware falls back to its own
     nozzle pick, exactly as it did before this translation existed. Omitting
@@ -371,7 +392,7 @@ def resolve_rack_nozzle_mapping(
     if _RACK_EXTRUDER_ID not in normalised:
         return None
 
-    wire = [-1] * len(normalised)
+    wire = [-1] * _RACK_WIRE_SLOTS
     for index, extruder in enumerate(normalised):
         if extruder < 0:
             continue
