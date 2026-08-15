@@ -51,6 +51,33 @@ _UNKNOWN_VISIBILITY_ERROR = (
     "repo API."
 )
 
+# The permission that owns each category's rows, required on top of
+# github:restore. Backup is its own permission group, so without this a role
+# holding only Backup writes — via a restore — rows it cannot write through the
+# endpoint that owns them.
+#
+# Each entry is the permission that endpoint actually gates its writes on:
+#
+#   * SETTINGS   → PUT /api/v1/settings/ (settings:update)
+#   * SPOOLS     → POST/PATCH /api/v1/inventory/spools (inventory:update). Spool
+#     rows and their usage history both restore under this category.
+#   * ARCHIVES   → archives:update_all, not archives:create. A restore writes
+#     rows owned by other users — that is the whole point of carrying
+#     created_by_id — and update_all is the permission that means "may write an
+#     archive that is not yours". create alone would let an operator with
+#     archives:create_own-shaped access seed history onto someone else.
+#   * KPROFILES  → POST /api/v1/printers/{id}/kprofiles (kprofiles:update),
+#     which is what the restore ultimately calls through set_kprofiles_batch.
+#
+# Cloud profiles are absent because they are not a restorable category
+# (RestoreCategory's docstring).
+_CATEGORY_WRITE_PERMISSION = {
+    RestoreCategory.SETTINGS: Permission.SETTINGS_UPDATE,
+    RestoreCategory.SPOOLS: Permission.INVENTORY_UPDATE,
+    RestoreCategory.ARCHIVES: Permission.ARCHIVES_UPDATE_ALL,
+    RestoreCategory.KPROFILES: Permission.KPROFILES_UPDATE,
+}
+
 
 async def _enforce_private_repo(repo_url: str, token: str, provider: str) -> None:
     """Run a test_connection and refuse if the repo is not confirmed private.
@@ -449,25 +476,30 @@ async def restore_backup(
     check exists to stop credentials leaving the instance, and this path only
     reads. A config can only be saved against a private repo anyway.
 
-    The settings category needs ``settings:update`` as well — see the check
-    below.
+    Every category needs the permission that owns the rows it writes, on top of
+    ``github:restore`` — see ``_CATEGORY_WRITE_PERMISSION`` and the check below.
     """
-    if RestoreCategory.SETTINGS in request.categories and current_user is not None:
-        # The settings category rewrites arbitrary non-auth Settings rows, which
-        # is what PUT /api/v1/settings/ gates on settings:update. Backup and
-        # Settings are separate permission groups, so a role holding only Backup
-        # could otherwise change settings it cannot change through the endpoint
-        # that owns them. This module already makes that argument — it is why
-        # the four protected auth keys are refused outright — so the gap was an
-        # inconsistency in ours, not a new policy.
+    if current_user is not None:
+        # Each category rewrites rows some other endpoint already owns, and
+        # Backup is its own permission group — so a role holding only Backup
+        # could otherwise write, through a restore, what it cannot write through
+        # the endpoint that owns them. This module already makes that argument;
+        # it is why the four protected auth keys are refused outright.
         #
         # current_user is None only when auth is disabled: github:restore is in
         # _APIKEY_DENIED_PERMISSIONS, so an API key never gets past the
         # dependency to reach this line.
-        if not current_user.has_all_permissions(Permission.SETTINGS_UPDATE.value):
+        missing = sorted(
+            {
+                permission.value
+                for category, permission in _CATEGORY_WRITE_PERMISSION.items()
+                if category in request.categories and not current_user.has_all_permissions(permission.value)
+            }
+        )
+        if missing:
             raise HTTPException(
                 status_code=403,
-                detail=f"Missing required permissions: {Permission.SETTINGS_UPDATE.value}",
+                detail=f"Missing required permissions: {', '.join(missing)}",
             )
 
     result = await db.execute(select(GitHubBackupConfig).limit(1))

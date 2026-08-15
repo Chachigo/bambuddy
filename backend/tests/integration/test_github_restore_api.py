@@ -474,15 +474,20 @@ class TestRestoreDoesNotOpenTheMetricsEndpoint:
 
 
 class TestSettingsRestoreNeedsSettingsUpdate(TestOwnershipPermissionsSetup):
-    """A Backup-only role must not reach around the gate that owns settings (#2656).
+    """A Backup-only role must not reach around the gate that owns the rows (#2656).
 
-    The settings category rewrites arbitrary non-auth ``Settings`` rows, which is
-    exactly what ``PUT /api/v1/settings/`` gates on ``settings:update``. Backup
-    and Settings are separate permission groups, so gating the restore endpoint
-    on ``github:restore`` alone let a role holding only Backup change settings it
-    could not change through the endpoint that owns them. This module already
-    makes that argument — it is why the four protected auth keys are refused
-    outright — so the gap was an inconsistency in ours.
+    Each category rewrites rows some other endpoint already owns —
+    ``PUT /api/v1/settings/`` gates on ``settings:update``, the inventory writes
+    on ``inventory:update``, an archive that is not yours on
+    ``archives:update_all``, and the K-profile batch on ``kprofiles:update``.
+    Backup is its own permission group, so gating the restore endpoint on
+    ``github:restore`` alone let a role holding only Backup write, through a
+    restore, what it could not write through the endpoint that owns them. This
+    module already makes that argument — it is why the four protected auth keys
+    are refused outright — so the gap was an inconsistency in ours.
+
+    Settings was gated first; the other three followed on review, because gating
+    one and not the rest is the only state that is not defensible.
     """
 
     async def _token_for(self, async_client: AsyncClient, admin_token: str, name: str, permissions: list[str]) -> str:
@@ -530,10 +535,47 @@ class TestSettingsRestoreNeedsSettingsUpdate(TestOwnershipPermissionsSetup):
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_the_same_role_can_still_restore_the_other_categories(self, async_client: AsyncClient, auth_setup):
-        """Control: the gate is per-category, not a blanket demotion of github:restore."""
+    @pytest.mark.parametrize(
+        ("category", "permission"),
+        [
+            ("spools", "inventory:update"),
+            ("archives", "archives:update_all"),
+            ("kprofiles", "kprofiles:update"),
+        ],
+    )
+    async def test_backup_only_role_cannot_restore_the_other_categories(
+        self, async_client: AsyncClient, auth_setup, category, permission
+    ):
+        """Same argument as settings: these rows have an owning permission too."""
         token = await self._token_for(
-            async_client, auth_setup["admin_token"], "backuponly2", ["github:backup", "github:restore"]
+            async_client, auth_setup["admin_token"], f"backuponly-{category}", ["github:backup", "github:restore"]
+        )
+        await _create_config(async_client, auth_setup["admin_token"])
+
+        with patch(
+            "backend.app.services.github_restore.github_restore_service.run_restore",
+            new=AsyncMock(return_value={"success": True, "message": "", "log_id": 1, "ref": "aaa1111", "results": {}}),
+        ) as mock:
+            response = await async_client.post(
+                "/api/v1/github-backup/restore",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"categories": [category]},
+            )
+
+        assert response.status_code == 403
+        assert permission in response.json()["detail"]
+        mock.assert_not_awaited(), "the refusal has to happen before anything is written"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_every_missing_permission_is_named_at_once(self, async_client: AsyncClient, auth_setup):
+        """One round trip tells the caller everything to fix, not just the first.
+
+        A restore is a multi-select, so reporting one category at a time turns
+        picking four into four refusals.
+        """
+        token = await self._token_for(
+            async_client, auth_setup["admin_token"], "backuponly-all", ["github:backup", "github:restore"]
         )
         await _create_config(async_client, auth_setup["admin_token"])
 
@@ -544,10 +586,51 @@ class TestSettingsRestoreNeedsSettingsUpdate(TestOwnershipPermissionsSetup):
             response = await async_client.post(
                 "/api/v1/github-backup/restore",
                 headers={"Authorization": f"Bearer {token}"},
-                json={"categories": ["spools", "archives", "kprofiles"]},
+                json={"categories": ["settings", "spools", "archives", "kprofiles"]},
+            )
+
+        assert response.status_code == 403
+        detail = response.json()["detail"]
+        for permission in ("settings:update", "inventory:update", "archives:update_all", "kprofiles:update"):
+            assert permission in detail
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_gate_is_per_category_not_a_blanket_demotion(self, async_client: AsyncClient, auth_setup):
+        """Control: holding one category's permission is enough to restore that one."""
+        token = await self._token_for(
+            async_client,
+            auth_setup["admin_token"],
+            "backupandinventory",
+            ["github:backup", "github:restore", "inventory:read", "inventory:update"],
+        )
+        await _create_config(async_client, auth_setup["admin_token"])
+
+        with patch(
+            "backend.app.services.github_restore.github_restore_service.run_restore",
+            new=AsyncMock(return_value={"success": True, "message": "", "log_id": 1, "ref": "aaa1111", "results": {}}),
+        ):
+            response = await async_client.post(
+                "/api/v1/github-backup/restore",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"categories": ["spools"]},
             )
 
         assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_every_restorable_category_has_an_owning_permission(self):
+        """Guards the map against a category added without a gate.
+
+        A new ``RestoreCategory`` that is missing here is not a failing test
+        anywhere else — it simply restores under ``github:restore`` alone, which
+        is the hole this whole class exists to close.
+        """
+        from backend.app.api.routes.github_backup import _CATEGORY_WRITE_PERMISSION
+        from backend.app.schemas.github_backup import RestoreCategory
+
+        assert set(_CATEGORY_WRITE_PERMISSION) == set(RestoreCategory)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
