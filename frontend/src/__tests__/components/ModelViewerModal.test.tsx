@@ -29,12 +29,13 @@ vi.mock('../../components/GcodeViewer', () => ({
   ),
 }));
 
-vi.mock('../../utils/slicer', () => ({
+// Only the protocol-handler launch is stubbed — it would navigate the jsdom
+// window. Everything else in the module is a pure predicate, so keep the real
+// implementations: re-declaring them here would let the file-type rule these
+// tests assert on drift away from the one the component actually runs.
+vi.mock('../../utils/slicer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/slicer')>()),
   openInSlicer: vi.fn(),
-  resolveDesktopSlicer: vi.fn(
-    (openInSlicer?: string, preferredSlicer?: string) =>
-      (openInSlicer ?? preferredSlicer ?? 'bambu_studio') as 'bambu_studio' | 'orcaslicer',
-  ),
 }));
 
 const mockCapabilities = {

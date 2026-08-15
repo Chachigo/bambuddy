@@ -74,7 +74,7 @@ import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
-import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
+import { isSliceableFilename, openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 
 type SortField = 'name' | 'date' | 'size' | 'type' | 'prints';
 type SortDirection = 'asc' | 'desc';
@@ -743,14 +743,6 @@ function isSlicedFilename(filename: string): boolean {
   return lower.endsWith('.gcode') || lower.endsWith('.gcode.3mf');
 }
 
-// Files that can be fed to the slicer sidecar (model geometry inputs).
-// Excludes .gcode.* (already sliced) and any other non-model formats.
-function isSliceableFilename(filename: string): boolean {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.gcode') || lower.endsWith('.gcode.3mf')) return false;
-  return lower.endsWith('.stl') || lower.endsWith('.3mf') || lower.endsWith('.step') || lower.endsWith('.stp');
-}
-
 // File Card
 interface FileCardProps {
   file: LibraryFileListItem;
@@ -1172,16 +1164,26 @@ export function FileManagerPage() {
     }
   }, [preferredSlicer, showToast, t]);
 
-  // Slice permission: API mode needs upload rights, desktop handoff is a download.
-  // The handoff mirrors the backend's ownership check on the slicer-token
-  // endpoint (library:read_all / library:read_own); `library:read` is a legacy
-  // permission default groups don't carry, so requiring it would disable the
-  // handoff for Operators and Viewers.
+  // Slice permission: API mode needs upload rights, the desktop handoff is a
+  // download. Each mirrors what the backend enforces on the endpoint that
+  // branch actually calls, so the UI never offers an action the server refuses.
+  //
+  // Deliberately NOT accepting the legacy `library:read` on the handoff branch.
+  // It looks like the safe back-compat term to include, but the slicer-token
+  // endpoint gates on require_ownership_permission(LIBRARY_READ_ALL,
+  // LIBRARY_READ_OWN), and neither that dependency nor User.has_permission
+  // expands the legacy name — so a group holding only `library:read` gets a 403
+  // there. It cannot reach this page to find out either: GET /library/folders
+  // gates on the same pair. Accepting it here would only enable a menu item
+  // that fails, and the `library:read` -> `library:read_own` migration in
+  // core/database.py runs only over the groups named in DEFAULT_GROUPS, so a
+  // custom role that still carries it is genuinely stuck rather than silently
+  // upgraded.
   const canSlice = useCallback(() => {
     if (settings?.use_slicer_api) {
       return hasPermission('library:upload');
     }
-    return hasAnyPermission('library:read_all', 'library:read_own', 'library:read');
+    return hasAnyPermission('library:read_all', 'library:read_own');
   }, [settings?.use_slicer_api, hasPermission, hasAnyPermission]);
   const { data: folders, isLoading: foldersLoading } = useQuery({
     queryKey: ['library-folders'],

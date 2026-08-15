@@ -7,7 +7,7 @@ import { GcodeViewer } from './GcodeViewer';
 import { Button } from './Button';
 import { api, withStreamToken } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
-import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
+import { isSliceableFileType, openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse, PlateMetadata } from '../types/plates';
 
 type ViewTab = '3d' | 'gcode';
@@ -373,11 +373,11 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
   }, [isDraggingDivider, dividerHeight, minPlateHeight, minViewerPx, minViewerRatio]);
 
   // Which file types can be handed to a desktop slicer via the URL protocol
-  // handler — and sliced in-app via the sidecar. Kept in step with
-  // `isSliceableFilename()` in FileManagerPage so a file's card-menu "Slice"
-  // and its 3D-preview slicer button never disagree on the same type.
-  const normalizedFileType = (fileType || '').toLowerCase();
-  const slicerReadyType = ['3mf', 'stl', 'step', 'stp'].includes(normalizedFileType);
+  // handler — and sliced in-app via the sidecar. Shares its list with
+  // `isSliceableFilename()`, which the File Manager's card menu and list row
+  // use, so a file's "Slice" action and its 3D-preview slicer button can no
+  // longer disagree about the same file.
+  const slicerReadyType = isSliceableFileType(fileType);
   const canOpenInSlicer = isLibrary ? slicerReadyType : true;
 
   // When the user has the in-app Slicer API enabled (Settings → Workflow →

@@ -12,12 +12,13 @@ import { setAuthToken } from '../../api/client';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
 
-vi.mock('../../utils/slicer', () => ({
+// Only the protocol-handler launch is stubbed — it would navigate the jsdom
+// window. Everything else in the module is a pure predicate, so keep the real
+// implementations: isSliceableFilename decides which rows even offer the
+// action these tests click.
+vi.mock('../../utils/slicer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/slicer')>()),
   openInSlicer: vi.fn(),
-  resolveDesktopSlicer: vi.fn(
-    (openInSlicer?: string, preferredSlicer?: string) =>
-      (openInSlicer ?? preferredSlicer ?? 'bambu_studio') as 'bambu_studio' | 'orcaslicer',
-  ),
 }));
 
 vi.mock('../../components/SliceModal', () => ({
@@ -1239,11 +1240,12 @@ describe('FileManagerPage', () => {
       expect(within(card).queryByText('Slice')).not.toBeInTheDocument();
     });
 
-    // Permission gating is the security-relevant half of the slice action:
-    // the in-app API path needs library:upload (the permission the backend
-    // enforces on the slicer-token endpoint), the desktop handoff mirrors the
-    // backend's ownership check and needs library:read_all / library:read_own
-    // (legacy library:read also accepted).
+    // Permission gating is the security-relevant half of the slice action: the
+    // in-app API path needs library:upload, and the desktop handoff mirrors the
+    // ownership check the slicer-token endpoint runs — library:read_all or
+    // library:read_own. The legacy library:read is deliberately not accepted;
+    // it satisfies neither the token endpoint nor the folder listing that gets
+    // a user to this page at all.
     const mockAuthUser = (permissions: string[]) => {
       setAuthToken('test-token', 'session');
       server.use(
@@ -1320,6 +1322,26 @@ describe('FileManagerPage', () => {
       const card = await openMenu(user, 'bracket.stl');
       const sliceItem = within(card).getByText('Slice').closest('button');
       expect(sliceItem).not.toBeDisabled();
+    });
+
+    it('does not accept the legacy library:read for the desktop handoff', async () => {
+      // require_ownership_permission(LIBRARY_READ_ALL, LIBRARY_READ_OWN) does no
+      // legacy expansion, so this group 403s on the slicer-token endpoint.
+      // Enabling the item would offer an action the server refuses, and the
+      // failure would look like "no slicer installed" once the fallback URL is
+      // handed over.
+      mockAuthUser(['library:read']);
+      const user = userEvent.setup();
+      render(<FileManagerPage />);
+
+      await waitFor(() => expect(screen.getByText('bracket.stl')).toBeInTheDocument());
+
+      const card = await openMenu(user, 'bracket.stl');
+      const sliceItem = within(card).getByText('Slice').closest('button');
+      expect(sliceItem).toBeDisabled();
+
+      await user.click(sliceItem!);
+      expect(openInSlicer).not.toHaveBeenCalled();
     });
 
     it('slices from the list-view button when the slicer API is disabled', async () => {
