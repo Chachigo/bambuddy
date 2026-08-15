@@ -27,6 +27,10 @@ vi.mock('react-i18next', () => ({
         const { printer, filename } = options as { printer: string; filename: string };
         return `Billing kill switch stopped ${filename} on ${printer}`;
       }
+      if (key === 'printers.toast.billingChargeFailed' && options) {
+        const { printer, filename } = options as { printer: string; filename: string };
+        return `Billing failed for ${filename} on ${printer}. The budget reservation was retained; check the server logs.`;
+      }
       return key;
     },
     i18n: {},
@@ -513,6 +517,30 @@ describe('useWebSocket hook', () => {
       });
 
       const toast = screen.getByText('Billing kill switch stopped foreign_job.3mf on Printer B');
+      expect(toast.parentElement).toHaveClass('bg-red-500/10');
+    });
+
+    it('shows an error toast when a completed print could not be charged', async () => {
+      const { useWebSocket } = await import('../../hooks/useWebSocket');
+
+      renderHook(() => useWebSocket(), {
+        wrapper: createWrapper(queryClient),
+      });
+
+      const ws = await waitForWs();
+      act(() => {
+        ws.open();
+        ws.simulateMessage({
+          type: 'billing_charge_failed',
+          printer_id: 7,
+          printer_name: 'Printer B',
+          filename: 'paid-job.3mf',
+        });
+      });
+
+      const toast = screen.getByText(
+        'Billing failed for paid-job.3mf on Printer B. The budget reservation was retained; check the server logs.',
+      );
       expect(toast.parentElement).toHaveClass('bg-red-500/10');
     });
 

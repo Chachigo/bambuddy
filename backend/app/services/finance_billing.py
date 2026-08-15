@@ -1,4 +1,5 @@
 import logging
+import uuid
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -10,6 +11,10 @@ from backend.app.services.finance_balance import sync_personal_wallet_balance
 from backend.app.services.finance_budget import is_billing_enabled, release_budget_reservation
 
 logger = logging.getLogger(__name__)
+
+
+class BillingRunIdCollisionError(RuntimeError):
+    """A billing idempotency key points at a different physical print run."""
 
 
 async def _get_balance_after_for_transaction(
@@ -43,6 +48,7 @@ async def _get_balance_after_for_transaction(
             result = await db.execute(
                 select(func.coalesce(func.sum(WalletTransaction.amount), 0.0)).where(
                     WalletTransaction.cost_center_id == cost_center_id,
+                    WalletTransaction.is_voided.is_(False),
                 )
             )
             current_balance = float(result.scalar() or 0.0)
@@ -110,7 +116,9 @@ async def apply_print_charge_for_archive(
     db: AsyncSession,
     archive_id: int,
     *,
+    charged_user_id: int | None = None,
     cost_center_id: int | None = None,
+    print_queue_id: int | None = None,
     print_run_id: str | None = None,
     base_cost_override: float | None = None,
     filament_usage: tuple[float | None, float | None] | None = None,
@@ -124,7 +132,12 @@ async def apply_print_charge_for_archive(
     """
     try:
         if not await is_billing_enabled(db):
-            await release_budget_reservation(db, print_archive_id=archive_id, status="released")
+            if print_queue_id is not None:
+                await release_budget_reservation(
+                    db, source_type="print_queue", source_id=print_queue_id, status="released"
+                )
+            else:
+                await release_budget_reservation(db, print_archive_id=archive_id, status="released")
             logger.info("Billing is disabled; skipping print charge for archive ID %s.", archive_id)
             return False
 
@@ -135,6 +148,10 @@ async def apply_print_charge_for_archive(
             logger.warning(f"Archive with ID {archive_id} not found.")
             return False
 
+        effective_run_id = print_run_id or archive.billing_run_id
+        # The archive-level flag is retained only for legacy deleted charges.
+        # A new scheduler dispatch clears it while persisting its new run UUID;
+        # current deletions are represented by a voided transaction instead.
         if archive.wallet_charge_skipped:
             logger.info(f"Wallet charge skipped for archive ID {archive_id}.")
             return False
@@ -144,7 +161,8 @@ async def apply_print_charge_for_archive(
             logger.info(f"Archive ID {archive_id} has status {archive.status}, which is not chargeable.")
             return False
 
-        if archive.created_by_id is None:
+        actual_user_id = charged_user_id if charged_user_id is not None else archive.created_by_id
+        if actual_user_id is None:
             logger.warning(f"Archive ID {archive_id} has no creator ID.")
             return False
 
@@ -153,15 +171,33 @@ async def apply_print_charge_for_archive(
             logger.info(f"Base cost for archive ID {archive_id} is zero or negative.")
             return False
 
-        tx_conditions = [WalletTransaction.transaction_type == TransactionType.PRINT_CHARGE.value]
-        if print_run_id:
-            tx_conditions.append(WalletTransaction.print_run_id == print_run_id)
-        else:
-            tx_conditions.append(WalletTransaction.print_archive_id == archive.id)
+        # New dispatches persist a UUID before sending the printer command.
+        # Generate one here only for legacy/in-flight rows created before that
+        # migration; the locked archive row makes this fallback durable.
+        if not effective_run_id:
+            effective_run_id = str(uuid.uuid4())
+            archive.billing_run_id = effective_run_id
+
+        tx_conditions = [
+            WalletTransaction.transaction_type == TransactionType.PRINT_CHARGE.value,
+            WalletTransaction.print_run_id == effective_run_id,
+        ]
 
         existing_tx = (await db.execute(select(WalletTransaction).where(*tx_conditions))).scalar_one_or_none()
         if existing_tx is not None:
+            if existing_tx.print_archive_id != archive.id:
+                logger.critical(
+                    "BILLING RUN ID COLLISION: run %s belongs to archive %s, not archive %s; charge aborted",
+                    effective_run_id,
+                    existing_tx.print_archive_id,
+                    archive.id,
+                )
+                raise BillingRunIdCollisionError(
+                    f"Billing run ID {effective_run_id} is already assigned to another archive"
+                )
             logger.info(f"Transaction already exists for archive ID {archive_id}.")
+            if existing_tx.is_voided:
+                logger.info("Print charge for run %s was voided by an administrator.", effective_run_id)
             return False
 
         # Calculate charge (full for completed, partial for others)
@@ -171,62 +207,87 @@ async def apply_print_charge_for_archive(
             filament_usage=filament_usage,
         )
         if charge <= 0:
-            await release_budget_reservation(db, print_archive_id=archive.id, status="released")
+            if print_queue_id is not None:
+                await release_budget_reservation(
+                    db, source_type="print_queue", source_id=print_queue_id, status="released"
+                )
+            else:
+                await release_budget_reservation(db, print_archive_id=archive.id, status="released")
             logger.info(f"Calculated charge for archive ID {archive_id} is zero or negative.")
             return False
 
         actual_cost_center_id = cost_center_id if cost_center_id is not None else archive.cost_center_id
 
-        wallet = (
-            await db.execute(select(UserWallet).where(UserWallet.user_id == archive.created_by_id))
-        ).scalar_one_or_none()
+        wallet = (await db.execute(select(UserWallet).where(UserWallet.user_id == actual_user_id))).scalar_one_or_none()
         if wallet is None:
-            wallet = UserWallet(user_id=archive.created_by_id, balance=0.0, currency="EUR")
+            wallet = UserWallet(user_id=actual_user_id, balance=0.0, currency="EUR")
             db.add(wallet)
             await db.flush()
-            logger.info(f"Created new wallet for user ID {archive.created_by_id}.")
+            logger.info("Created new wallet for user ID %s.", actual_user_id)
 
         label = archive.print_name or archive.filename or f"Archive {archive.id}"
         description = f"Print charge: {label}{' ' + reason_suffix if reason_suffix else ''}"
 
-        balance_after = await _get_balance_after_for_transaction(
-            db, archive.created_by_id, actual_cost_center_id, -charge
-        )
+        balance_after = await _get_balance_after_for_transaction(db, actual_user_id, actual_cost_center_id, -charge)
         if balance_after is not None:
             balance_after = round(float(balance_after), 2)
 
         tx = WalletTransaction(
-            user_id=archive.created_by_id,
+            user_id=actual_user_id,
             cost_center_id=actual_cost_center_id,
             transaction_type=TransactionType.PRINT_CHARGE.value,
             amount=-charge,
             balance_after=balance_after,
             description=description,
             created_by_user_id=None,
-            print_run_id=print_run_id or archive.subtask_id,
+            print_run_id=effective_run_id,
             print_archive_id=archive.id,
+            print_queue_id=print_queue_id,
         )
-        db.add(tx)
-        # Ensure the transaction is flushed to detect unique/index constraint violations
+        # Limit a concurrent deduplication conflict to a savepoint. The caller
+        # owns the outer transaction, which may already contain archive-owner
+        # backfills and other completion updates that must survive this race.
         try:
-            await db.flush()
+            async with db.begin_nested():
+                db.add(tx)
+                # Flush inside the savepoint to detect unique/index conflicts.
+                await db.flush()
         except IntegrityError as e:
-            # Another concurrent worker likely created the same transaction
-            logger.info("Transaction already exists for archive ID %s (concurrent), skipping: %s", archive_id, e)
-            await db.rollback()
-            return False
+            # Distinguish a legitimate concurrent retry of this exact run from
+            # a collision or an unrelated constraint failure. Only the former
+            # is an idempotent no-op; everything else must remain loud so the
+            # caller rolls back and the budget reservation stays active.
+            concurrent_tx = (await db.execute(select(WalletTransaction).where(*tx_conditions))).scalar_one_or_none()
+            if concurrent_tx is not None and concurrent_tx.print_archive_id == archive.id:
+                logger.info("Transaction already exists for archive ID %s (concurrent), skipping", archive_id)
+                return False
+            logger.critical(
+                "Failed to persist billing charge for archive %s and run %s: %s",
+                archive_id,
+                effective_run_id,
+                e,
+                exc_info=True,
+            )
+            if concurrent_tx is not None:
+                raise BillingRunIdCollisionError(
+                    f"Billing run ID {effective_run_id} is already assigned to another archive"
+                ) from e
+            raise
 
         # Rebuild from the canonical personal-ledger definition. A shared cost
         # center charge must not debit the user's personal wallet.
         new_wallet_balance = await sync_personal_wallet_balance(db, wallet)
 
         # Consume matching budget reservations after the transaction is persisted
-        await release_budget_reservation(db, print_archive_id=archive.id, status="consumed")
+        if print_queue_id is not None:
+            await release_budget_reservation(db, source_type="print_queue", source_id=print_queue_id, status="consumed")
+        else:
+            await release_budget_reservation(db, print_archive_id=archive.id, status="consumed")
         logger.info(f"Applied print charge for archive ID {archive_id}. New balance: {new_wallet_balance}.")
         return True
     except SQLAlchemyError as e:
         logger.error(f"Database error in apply_print_charge_for_archive: {e}", exc_info=True)
-        return False
+        raise
     except ValueError as e:
         logger.error(f"Value error in apply_print_charge_for_archive: {e}", exc_info=True)
         return False

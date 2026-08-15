@@ -74,6 +74,9 @@ class PrintArchive(Base):
     # if the same subtask_id reappears after restart, we know it's the same
     # print and keep the original row instead of cancel-then-create.
     subtask_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Durable Bambuddy UUID for billing idempotency. Unlike subtask_id, this is
+    # not constrained by printer firmware and is replaced for every reprint.
+    billing_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # Which plate of a multi-plate 3MF this print was for (1-based), copied from
     # the queue item at dispatch (#2603). A whole multi-plate 3MF is uploaded

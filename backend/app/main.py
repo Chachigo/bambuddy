@@ -426,6 +426,12 @@ _first_layer_notified: dict[int, bool] = {}
 # Track whether we already sent a kill-switch stop for the current unauthorized print
 _unauthorized_print_kill_sent: set[int] = set()
 
+# The MQTT status callback is a hot path. Cache the two-setting kill-switch
+# lookup briefly so an unknown active print does not query the database on
+# every status frame. A short TTL keeps settings changes responsive.
+_KILL_SWITCH_SETTING_CACHE_TTL_SECONDS = 5.0
+_kill_switch_setting_cache: tuple[bool, float] | None = None
+
 # Provider notification started when the kill switch stops a print. The later
 # MQTT print-complete callback awaits this task and only sends its regular
 # provider notification when the immediate attempt failed.
@@ -695,6 +701,35 @@ def _build_status_print_keys(printer_id: int, state: PrinterState) -> list[tuple
     return possible_keys
 
 
+def _is_bambuddy_authorized_print_in_memory(printer_id: int, state: PrinterState) -> bool:
+    """Check the cheap, process-local print ownership signals."""
+
+    if printer_manager.get_current_print_user(printer_id):
+        return True
+
+    return any(key in _expected_prints or key in _active_prints for key in _build_status_print_keys(printer_id, state))
+
+
+async def _is_printer_kill_switch_enabled_cached() -> bool:
+    """Return the kill-switch setting without querying on every MQTT frame."""
+
+    global _kill_switch_setting_cache
+
+    now = time.monotonic()
+    if _kill_switch_setting_cache is not None:
+        enabled, expires_at = _kill_switch_setting_cache
+        if now < expires_at:
+            return enabled
+
+    async with async_session() as db:
+        from backend.app.services.finance_budget import is_printer_kill_switch_enabled
+
+        enabled = await is_printer_kill_switch_enabled(db)
+
+    _kill_switch_setting_cache = (enabled, now + _KILL_SWITCH_SETTING_CACHE_TTL_SECONDS)
+    return enabled
+
+
 async def _is_bambuddy_authorized_print(printer_id: int, state: PrinterState, db) -> bool | None:
     """Resolve whether the current print was started by Bambuddy.
 
@@ -703,12 +738,10 @@ async def _is_bambuddy_authorized_print(printer_id: int, state: PrinterState, db
     frames after a restart may arrive before all subtask fields are populated.
     """
 
-    if printer_manager.get_current_print_user(printer_id):
+    if _is_bambuddy_authorized_print_in_memory(printer_id, state):
         return True
 
     possible_keys = _build_status_print_keys(printer_id, state)
-    if any(key in _expected_prints or key in _active_prints for key in possible_keys):
-        return True
 
     # In-memory ownership is lost on every Bambuddy restart. The archive row is
     # the durable source of truth; subtask_id is minted per print and avoids
@@ -1429,16 +1462,21 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     is_active_print = state.state in _ACTIVE_PRINT_STATES
     if not is_active_print:
         _unauthorized_print_kill_sent.discard(printer_id)
+    elif printer_id in _unauthorized_print_kill_sent:
+        # stop_print() was already sent for this print; avoid all further
+        # ownership and settings work until the printer leaves an active state.
+        pass
+    elif _is_bambuddy_authorized_print_in_memory(printer_id, state):
+        # Normal Bambuddy-started prints stay entirely on the in-memory path.
+        _unauthorized_print_kill_sent.discard(printer_id)
     else:
         kill_switch_enabled = False
         authorization: bool | None = None
         status_logger = logging.getLogger(__name__)
         try:
-            async with async_session() as db:
-                from backend.app.services.finance_budget import is_printer_kill_switch_enabled
-
-                kill_switch_enabled = await is_printer_kill_switch_enabled(db)
-                if kill_switch_enabled:
+            kill_switch_enabled = await _is_printer_kill_switch_enabled_cached()
+            if kill_switch_enabled:
+                async with async_session() as db:
                     authorization = await _is_bambuddy_authorized_print(printer_id, state, db)
         except Exception as e:
             # Fail safe: a database/reconciliation error must never turn into an
@@ -1456,8 +1494,6 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                 "[KILL SWITCH] Deferring authorization for printer %s until archive state is reconciled",
                 printer_id,
             )
-        elif printer_id in _unauthorized_print_kill_sent:
-            pass
         else:
             try:
                 stopped = printer_manager.stop_print(printer_id)
@@ -5244,6 +5280,10 @@ async def on_print_complete(printer_id: int, data: dict):
     # so queue items don't get stuck in "printing" when archive lookup fails.
     # Uses run_with_retry to handle SQLite "database is locked" errors (#897).
     queue_item_id = None
+    billing_run_id: str | None = None
+    billing_user_id: int | None = None
+    billing_cost_center_id: int | None = None
+    billing_plate_id: int | None = None
     queue_status = None
     queue_auto_off = False
     try:
@@ -5251,6 +5291,7 @@ async def on_print_complete(printer_id: int, data: dict):
         from backend.app.models.print_queue import PrintQueueItem
 
         async def _update_queue_status(db):
+            nonlocal billing_run_id, billing_user_id, billing_cost_center_id, billing_plate_id
             nonlocal queue_item_id, queue_status, queue_auto_off
             result = await db.execute(
                 select(PrintQueueItem)
@@ -5283,6 +5324,10 @@ async def on_print_complete(printer_id: int, data: dict):
 
                 await db.commit()
                 queue_item_id = item.id
+                billing_run_id = item.billing_run_id
+                billing_user_id = item.created_by_id
+                billing_cost_center_id = item.cost_center_id
+                billing_plate_id = item.plate_id
                 queue_auto_off = item.auto_off_after
                 logger.info("Updated queue item %s status to %s", item.id, queue_status)
 
@@ -5409,6 +5454,7 @@ async def on_print_complete(printer_id: int, data: dict):
                     billing_planned_grams, billing_base_cost = _plate_scoped_run_estimate(
                         billing_archive,
                         billing_path,
+                        billing_plate_id if billing_plate_id is not None else _get_start_plate_id(archive_id),
                     )
         except Exception as e:
             logger.warning("[FINANCE] Failed to capture planned usage for archive %s: %s", archive_id, e)
@@ -5650,6 +5696,8 @@ async def on_print_complete(printer_id: int, data: dict):
                 from backend.app.services.finance_billing import apply_print_charge_for_archive
 
                 archive = await db.get(PrintArchive, archive_id)
+                if archive and billing_run_id is None:
+                    billing_run_id = getattr(archive, "billing_run_id", None)
                 if archive and archive.created_by_id is None and _print_user_info:
                     archive.created_by_id = _print_user_info.get("user_id")
                     await db.flush()
@@ -5665,12 +5713,16 @@ async def on_print_complete(printer_id: int, data: dict):
                     usage_results,
                 )
                 filament_usage = (actual_run_grams, billing_planned_grams) if run_status != "completed" else None
-                cost_center_id = _print_cost_center_ids.pop(archive_id, None)
+                in_memory_cost_center_id = _print_cost_center_ids.pop(archive_id, None)
                 charged = await apply_print_charge_for_archive(
                     db,
                     archive_id,
-                    cost_center_id=cost_center_id,
-                    print_run_id=archive.subtask_id if archive else None,
+                    charged_user_id=billing_user_id,
+                    cost_center_id=(
+                        billing_cost_center_id if billing_cost_center_id is not None else in_memory_cost_center_id
+                    ),
+                    print_queue_id=queue_item_id,
+                    print_run_id=billing_run_id,
                     base_cost_override=billing_base_cost,
                     filament_usage=filament_usage,
                 )
@@ -5679,6 +5731,50 @@ async def on_print_complete(printer_id: int, data: dict):
                     logger.info("[FINANCE] Applied print charge for archive %s", archive_id)
     except Exception as e:
         logger.warning("[FINANCE] Failed to apply print charge for archive %s: %s", archive_id, e)
+        printer_info = printer_manager.get_printer(printer_id)
+        billing_printer_name = printer_info.name if printer_info else f"Printer {printer_id}"
+        billing_filename = filename or subtask_name or "Unknown"
+        billing_error = str(e)
+        try:
+            await ws_manager.broadcast(
+                {
+                    "type": "billing_charge_failed",
+                    "printer_id": printer_id,
+                    "printer_name": billing_printer_name,
+                    "filename": billing_filename,
+                    "archive_id": archive_id,
+                }
+            )
+        except Exception as notification_error:
+            logger.error(
+                "[FINANCE] Failed to broadcast billing error for archive %s: %s",
+                archive_id,
+                notification_error,
+            )
+
+        async def _notify_billing_charge_failed() -> None:
+            try:
+                async with async_session() as notification_db:
+                    await notification_service.on_billing_charge_failed(
+                        printer_id,
+                        billing_printer_name,
+                        billing_filename,
+                        archive_id,
+                        billing_error,
+                        notification_db,
+                    )
+            except Exception as provider_error:
+                logger.error(
+                    "[FINANCE] Failed to send provider billing alert for archive %s: %s",
+                    archive_id,
+                    provider_error,
+                    exc_info=True,
+                )
+
+        spawn_background_task(
+            _notify_billing_charge_failed(),
+            name=f"billing-charge-failed-{archive_id}",
+        )
 
     log_timing("Finance charge update")
 

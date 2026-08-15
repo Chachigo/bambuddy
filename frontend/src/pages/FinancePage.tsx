@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { api, type ManualPrintRequest, type TransactionEditRequest, type WalletTransaction } from '../api/client';
 import { Button } from '../components/Button';
 import { Card, CardContent, CardHeader } from '../components/Card';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { getCurrencySymbol } from '../utils/currency';
@@ -159,6 +160,8 @@ export function FinancePage() {
   const [manualPrintAmount, setManualPrintAmount] = useState('');
   const [manualPrintDescription, setManualPrintDescription] = useState('');
   const [manualPrintDate, setManualPrintDate] = useState(formatLocalDateTime(new Date()));
+  const [pendingDeleteCenter, setPendingDeleteCenter] = useState<{ id: number; name: string } | null>(null);
+  const [pendingDeleteTransactionId, setPendingDeleteTransactionId] = useState<number | null>(null);
 
   const hasAdminFinanceControls =
     canReadAllFinance ||
@@ -440,31 +443,27 @@ export function FinancePage() {
     setShowEditCenterModal(true);
   };
 
-  const handleDeleteCenter = async (centerId: number, centerName: string) => {
-    const confirmed = window.confirm(
-      t('finance.confirmDeleteCostCenter', 'Delete cost center "{{name}}"?', { name: centerName })
-    );
-    if (!confirmed) return;
-
+  const confirmDeleteCenter = async () => {
+    if (!pendingDeleteCenter) return;
     try {
-      await deleteCostCenterMutation.mutateAsync(centerId);
+      await deleteCostCenterMutation.mutateAsync(pendingDeleteCenter.id);
       queryClient.invalidateQueries({ queryKey: ['finance'] });
-      if (selectedManageCenterId === centerId) {
+      if (selectedManageCenterId === pendingDeleteCenter.id) {
         setSelectedManageCenterId(null);
       }
       showToast(t('finance.costCenterDeleted', 'Cost center deleted'));
     } catch (error) {
       showToast((error as Error).message || t('finance.costCenterDeleteFailed', 'Failed to delete cost center'), 'error');
+    } finally {
+      setPendingDeleteCenter(null);
     }
   };
 
-  const handleDeleteTransaction = (transactionId: number) => {
-    const confirmed = window.confirm(
-      t('finance.deleteTransactionConfirm', 'Delete this transaction? Balances will be recalculated automatically.')
-    );
-    if (!confirmed) return;
-
-    deleteTransactionMutation.mutate(transactionId);
+  const confirmDeleteTransaction = () => {
+    if (pendingDeleteTransactionId == null) return;
+    deleteTransactionMutation.mutate(pendingDeleteTransactionId, {
+      onSettled: () => setPendingDeleteTransactionId(null),
+    });
   };
 
   const handleEditTransaction = (tx: WalletTransaction) => {
@@ -645,7 +644,7 @@ export function FinancePage() {
   };
 
   const formatBudgetProgress = (center: { budget_available: number | null; budget_limit: number | null }) => {
-    if (center.budget_limit == null || center.budget_available == null) return '-';
+    if (center.budget_limit == null || center.budget_available == null) return t('finance.unlimited', 'Unlimited');
     return `${currencySymbol}${center.budget_available.toFixed(2)}/${currencySymbol}${center.budget_limit.toFixed(2)}`;
   };
 
@@ -677,6 +676,9 @@ export function FinancePage() {
             <h1 className="text-2xl font-bold text-white">{t('finance.title', 'Finance')}</h1>
           </div>
           <p className="text-bambu-gray mt-2 max-w-2xl">{t('finance.subtitle', 'Wallet, personal transactions, and cost centers')}</p>
+          <p className="text-xs text-bambu-gray mt-1 max-w-2xl">
+            {t('finance.budgetPolicyHint', 'Account balances track costs. Printing is limited only by the selected cost center budget; without a budget, printing is unlimited.')}
+          </p>
         </div>
 
         <div className="flex flex-col gap-2 lg:items-end">
@@ -729,7 +731,7 @@ export function FinancePage() {
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <span className="text-sm text-bambu-gray">{t('finance.currentBalance', 'Personal balance')}</span>
+            <span className="text-sm text-bambu-gray">{t('finance.currentBalance', 'Personal account balance')}</span>
             <Wallet className="w-4 h-4 text-bambu-green/90" />
           </CardHeader>
           <CardContent className="pt-1">
@@ -1058,7 +1060,7 @@ export function FinancePage() {
                       <tr className="border-b border-bambu-dark-tertiary bg-bambu-dark text-bambu-gray">
                           <th className={tableHeadCellClass}>{t('common.name', 'Name')}</th>
                           {showCostCenterAccountColumn && <th className={tableHeadCellClass}>{t('finance.owner', 'Owner')}</th>}
-                          <th className={tableHeadCellClass}>{t('finance.balance', 'Balance')}</th>
+                          <th className={tableHeadCellClass}>{t('finance.balance', 'Account balance')}</th>
                           <th className={tableHeadCellClass}>{t('finance.budget', 'Budget')}</th>
                           {showCostCenterAccountColumn && <th className={tableHeadCellClass}>{t('common.actions', 'Actions')}</th>}
                       </tr>
@@ -1103,7 +1105,7 @@ export function FinancePage() {
                                       <Button
                                         size="sm"
                                         variant="ghost"
-                                        onClick={() => handleDeleteCenter(center.id, center.name)}
+                                        onClick={() => setPendingDeleteCenter({ id: center.id, name: center.name })}
                                         disabled={deleteCostCenterMutation.isPending}
                                         title={t('common.delete', 'Delete')}
                                         className="text-red-400 hover:text-red-300 hover:bg-red-500/10 p-1.5 sm:p-2"
@@ -1239,7 +1241,7 @@ export function FinancePage() {
                                   <Button
                                     size="sm"
                                     variant="danger"
-                                    onClick={() => handleDeleteTransaction(tx.id)}
+                                    onClick={() => setPendingDeleteTransactionId(tx.id)}
                                     disabled={deleteTransactionMutation.isPending}
                                   >
                                     <Trash2 className="w-4 h-4" />
@@ -1458,6 +1460,35 @@ export function FinancePage() {
               </div>
             </div>
           </FinanceModal>
+        )}
+
+        {pendingDeleteCenter && (
+          <ConfirmModal
+            title={t('common.delete', 'Delete')}
+            message={t('finance.confirmDeleteCostCenter', 'Delete cost center "{{name}}"?', {
+              name: pendingDeleteCenter.name,
+            })}
+            confirmText={t('common.delete', 'Delete')}
+            variant="danger"
+            isLoading={deleteCostCenterMutation.isPending}
+            onConfirm={confirmDeleteCenter}
+            onCancel={() => setPendingDeleteCenter(null)}
+          />
+        )}
+
+        {pendingDeleteTransactionId != null && (
+          <ConfirmModal
+            title={t('finance.deleteTransaction', 'Delete transaction')}
+            message={t(
+              'finance.deleteTransactionConfirm',
+              'Delete this transaction? Balances will be recalculated automatically.',
+            )}
+            confirmText={t('common.delete', 'Delete')}
+            variant="danger"
+            isLoading={deleteTransactionMutation.isPending}
+            onConfirm={confirmDeleteTransaction}
+            onCancel={() => setPendingDeleteTransactionId(null)}
+          />
         )}
       </div>
     </div>

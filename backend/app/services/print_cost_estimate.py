@@ -99,8 +99,18 @@ async def estimate_queue_source_cost(
 
     if archive is not None:
         archive_path = settings.base_dir / archive.file_path
-        _grams, cost = plate_scoped_run_estimate(archive, archive_path, plate_id)
-        return float(cost) if cost is not None and cost > 0 else None
+        grams, cost = plate_scoped_run_estimate(archive, archive_path, plate_id)
+        if cost is not None and cost > 0:
+            return float(cost)
+        # Older archives and imports can have trustworthy filament usage but
+        # no stored cost. Model-based and multi-printer jobs have no single
+        # spool mapping at enqueue time, so use the server setting rather than
+        # requiring the browser to provide an estimate.
+        if grams is None or grams <= 0:
+            return None
+        default_cost = await _default_cost_per_kg(db)
+        estimated_cost = (grams / 1000.0) * default_cost
+        return max(0.01, round(estimated_cost, 2)) if estimated_cost > 0 else None
 
     if library_file is None:
         return None

@@ -14,6 +14,22 @@ def library_file(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_archive_without_stored_cost_uses_server_default(monkeypatch):
+    archive = SimpleNamespace(
+        id=7,
+        file_path="missing.gcode.3mf",
+        plate_id=None,
+        filament_used_grams=100.0,
+        cost=None,
+    )
+    monkeypatch.setattr(print_cost_estimate, "_default_cost_per_kg", AsyncMock(return_value=20.0))
+
+    cost = await print_cost_estimate.estimate_queue_source_cost(SimpleNamespace(), archive=archive)
+
+    assert cost == 2.0
+
+
+@pytest.mark.asyncio
 async def test_library_estimate_uses_server_default_cost(monkeypatch, library_file):
     monkeypatch.setattr(
         print_cost_estimate.threemf_tools,

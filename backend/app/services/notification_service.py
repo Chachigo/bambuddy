@@ -1353,6 +1353,39 @@ class NotificationService:
             variables=variables,
         )
 
+    async def on_billing_charge_failed(
+        self,
+        printer_id: int,
+        printer_name: str,
+        filename: str,
+        archive_id: int | None,
+        error: str,
+        db: AsyncSession,
+    ) -> None:
+        """Notify providers that a terminal print could not be charged."""
+        providers = await self._get_providers_for_event(db, "on_billing_charge_failed", printer_id)
+        if not providers:
+            return
+
+        variables = {
+            "printer": printer_name,
+            "filename": self._clean_filename(filename),
+            "archive_id": str(archive_id) if archive_id is not None else "Unknown",
+            "error": error,
+        }
+        title, message = await self._build_message_from_template(db, "billing_charge_failed", variables)
+        await self._send_to_providers(
+            providers,
+            title,
+            message,
+            db,
+            "billing_charge_failed",
+            printer_id,
+            printer_name,
+            force_immediate=True,
+            variables=variables,
+        )
+
     async def on_printer_offline(self, printer_id: int, printer_name: str, db: AsyncSession):
         """Handle printer offline event."""
         providers = await self._get_providers_for_event(db, "on_printer_offline", printer_id)

@@ -6,8 +6,9 @@ from sqlalchemy import select
 
 from backend.app.core.auth import get_password_hash
 from backend.app.models.archive import PrintArchive
-from backend.app.models.finance import CostCenter, UserWallet, WalletTransaction
+from backend.app.models.finance import BudgetReservation, CostCenter, UserWallet, WalletTransaction
 from backend.app.models.group import Group
+from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
 from backend.app.services.finance_billing import apply_print_charge_for_archive
@@ -135,6 +136,174 @@ class TestFinanceAPI:
         mine_after_remove = await async_client.get("/api/v1/finance/cost-centers/mine", headers=user_headers)
         assert mine_after_remove.status_code == 200
         assert {center["name"] for center in mine_after_remove.json()} == {"carol"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_private_cost_center_cannot_be_deactivated_but_can_have_zero_budget(
+        self,
+        async_client: AsyncClient,
+        auth_headers: dict[str, str],
+        db_session,
+    ):
+        created_user = await self._create_user_via_api(async_client, auth_headers, "private-budget-user")
+        private_center = await db_session.scalar(
+            select(CostCenter).where(
+                CostCenter.owner_user_id == created_user["id"],
+                CostCenter.is_private.is_(True),
+            )
+        )
+        assert private_center is not None
+
+        deactivate_response = await async_client.patch(
+            f"/api/v1/finance/cost-centers/{private_center.id}",
+            json={"is_active": False},
+            headers=auth_headers,
+        )
+
+        assert deactivate_response.status_code == 400
+        assert "cannot be deactivated" in deactivate_response.json()["detail"]
+        await db_session.refresh(private_center)
+        assert private_center.is_active is True
+
+        budget_response = await async_client.patch(
+            f"/api/v1/finance/cost-centers/{private_center.id}/budgets",
+            json={"total_budget": 0},
+            headers=auth_headers,
+        )
+
+        assert budget_response.status_code == 200
+        assert budget_response.json()["total_budget"] == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_cost_center_available_budget_does_not_double_count_queue_reservation(
+        self,
+        async_client: AsyncClient,
+        auth_headers: dict[str, str],
+        db_session,
+    ):
+        center_response = await async_client.post(
+            "/api/v1/finance/cost-centers",
+            json={"name": "Reserved Once", "total_budget": 10.0},
+            headers=auth_headers,
+        )
+        assert center_response.status_code == 200
+        center_id = center_response.json()["id"]
+
+        reserved_item = PrintQueueItem(
+            cost_center_id=center_id,
+            estimated_cost=3.0,
+            status="pending",
+            position=1,
+        )
+        legacy_unreserved_item = PrintQueueItem(
+            cost_center_id=center_id,
+            estimated_cost=2.0,
+            status="pending",
+            position=2,
+        )
+        db_session.add_all([reserved_item, legacy_unreserved_item])
+        await db_session.flush()
+        db_session.add(
+            BudgetReservation(
+                cost_center_id=center_id,
+                amount=3.0,
+                status="active",
+                source_type="print_queue",
+                source_id=reserved_item.id,
+            )
+        )
+        await db_session.commit()
+
+        response = await async_client.get("/api/v1/finance/cost-centers", headers=auth_headers)
+
+        assert response.status_code == 200
+        center = next(item for item in response.json() if item["id"] == center_id)
+        # 3.00 active reservation + 2.00 legacy queue estimate, not 3 + 3 + 2.
+        assert center["budget_available"] == 5.0
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_cost_center_with_balanced_transactions_cannot_be_deleted(
+        self,
+        async_client: AsyncClient,
+        auth_headers: dict[str, str],
+        admin_user,
+        db_session,
+    ):
+        center_response = await async_client.post(
+            "/api/v1/finance/cost-centers",
+            json={"name": "Balanced History"},
+            headers=auth_headers,
+        )
+        center_id = center_response.json()["id"]
+        db_session.add_all(
+            [
+                WalletTransaction(
+                    user_id=admin_user.id,
+                    cost_center_id=center_id,
+                    transaction_type="deposit",
+                    amount=50.0,
+                    balance_after=50.0,
+                ),
+                WalletTransaction(
+                    user_id=admin_user.id,
+                    cost_center_id=center_id,
+                    transaction_type="withdraw",
+                    amount=-50.0,
+                    balance_after=0.0,
+                ),
+            ]
+        )
+        await db_session.commit()
+
+        response = await async_client.delete(
+            f"/api/v1/finance/cost-centers/{center_id}",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400
+        assert "transactions reference it" in response.json()["detail"]
+        transactions = (
+            (await db_session.execute(select(WalletTransaction).where(WalletTransaction.cost_center_id == center_id)))
+            .scalars()
+            .all()
+        )
+        assert len(transactions) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_cost_center_with_active_reservation_cannot_be_deleted(
+        self,
+        async_client: AsyncClient,
+        auth_headers: dict[str, str],
+        db_session,
+    ):
+        center_response = await async_client.post(
+            "/api/v1/finance/cost-centers",
+            json={"name": "Active Hold"},
+            headers=auth_headers,
+        )
+        center_id = center_response.json()["id"]
+        db_session.add(
+            BudgetReservation(
+                cost_center_id=center_id,
+                amount=3.0,
+                status="active",
+                source_type="direct_print",
+                source_id=123,
+            )
+        )
+        await db_session.commit()
+
+        response = await async_client.delete(
+            f"/api/v1/finance/cost-centers/{center_id}",
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400
+        assert "active budget reservations" in response.json()["detail"]
+        assert await db_session.get(CostCenter, center_id) is not None
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -363,6 +532,7 @@ class TestFinanceAPI:
         created_user = await self._create_user_via_api(async_client, auth_headers, "frank")
         user = await db_session.scalar(select(User).where(User.id == created_user["id"]))
         assert user is not None
+        user_id = user.id
 
         archive = PrintArchive(
             printer_id=None,
@@ -384,13 +554,15 @@ class TestFinanceAPI:
             balance_after=-4.0,
             description="Print charge: print.gcode",
             created_by_user_id=None,
+            print_run_id="deleted-print-run",
             print_archive_id=archive.id,
         )
         db_session.add(tx)
         await db_session.commit()
+        archive_id = archive.id
 
         tx_rows_before = (
-            (await db_session.execute(select(WalletTransaction).where(WalletTransaction.user_id == user.id)))
+            (await db_session.execute(select(WalletTransaction).where(WalletTransaction.user_id == user_id)))
             .scalars()
             .all()
         )
@@ -400,13 +572,43 @@ class TestFinanceAPI:
             f"/api/v1/finance/transactions/{tx_rows_before[0].id}", headers=auth_headers
         )
         assert delete_response.status_code == 200
+        db_session.expire_all()
 
         tx_rows_after = (
-            (await db_session.execute(select(WalletTransaction).where(WalletTransaction.user_id == user.id)))
+            (await db_session.execute(select(WalletTransaction).where(WalletTransaction.user_id == user_id)))
             .scalars()
             .all()
         )
-        assert tx_rows_after == []
+        assert len(tx_rows_after) == 1
+        assert tx_rows_after[0].is_voided is True
+
+        # The voided run remains an idempotency tombstone and cannot be
+        # recreated by a delayed duplicate completion callback.
+        assert (
+            await apply_print_charge_for_archive(
+                db_session,
+                archive_id,
+                print_run_id="deleted-print-run",
+            )
+        ) is False
+
+        # A later reprint of the same archive has a distinct run identity and
+        # must still be charged normally.
+        assert (
+            await apply_print_charge_for_archive(
+                db_session,
+                archive_id,
+                charged_user_id=user_id,
+                print_run_id="later-reprint-run",
+            )
+        ) is True
+        await db_session.commit()
+        visible = await async_client.get(
+            f"/api/v1/finance/users/{user_id}/transactions",
+            headers=auth_headers,
+        )
+        assert visible.status_code == 200
+        assert [row["print_run_id"] for row in visible.json()] == ["later-reprint-run"]
 
     async def test_edit_transaction_updates_ledger(
         self,
@@ -470,6 +672,31 @@ class TestFinanceAPI:
         # Description should have "(Admin edit)" appended
         assert "(Admin edit)" in edited_tx_data["description"]
 
+        # An explicit null moves the transaction back to the personal ledger.
+        clear_response = await async_client.patch(
+            f"/api/v1/finance/transactions/{tx_id}",
+            json={"cost_center_id": None},
+            headers=auth_headers,
+        )
+        assert clear_response.status_code == 200
+        assert clear_response.json()["cost_center_id"] is None
+
+        invalid_user_response = await async_client.patch(
+            f"/api/v1/finance/transactions/{tx_id}",
+            json={"user_id": 2147483647},
+            headers=auth_headers,
+        )
+        assert invalid_user_response.status_code == 404
+        assert invalid_user_response.json()["detail"] == "User not found"
+
+        invalid_center_response = await async_client.patch(
+            f"/api/v1/finance/transactions/{tx_id}",
+            json={"cost_center_id": 2147483647},
+            headers=auth_headers,
+        )
+        assert invalid_center_response.status_code == 404
+        assert invalid_center_response.json()["detail"] == "Cost center not found"
+
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_create_manual_print_and_recalculates_ledger(
@@ -513,6 +740,22 @@ class TestFinanceAPI:
 
         # The response includes the computed running balance for the transaction
         assert resp_json.get("balance_after") == -4.0
+
+        invalid_user_response = await async_client.post(
+            "/api/v1/finance/transactions/manual",
+            json={**payload, "user_id": 2147483647},
+            headers=auth_headers,
+        )
+        assert invalid_user_response.status_code == 404
+        assert invalid_user_response.json()["detail"] == "User not found"
+
+        invalid_center_response = await async_client.post(
+            "/api/v1/finance/transactions/manual",
+            json={**payload, "cost_center_id": 2147483647},
+            headers=auth_headers,
+        )
+        assert invalid_center_response.status_code == 404
+        assert invalid_center_response.json()["detail"] == "Cost center not found"
 
 
 class TestPartialPrintChargesIntegration:

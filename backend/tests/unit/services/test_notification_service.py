@@ -97,6 +97,40 @@ class TestNotificationService:
 
             mock_send.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_billing_charge_failure_uses_provider_event(self, service, mock_provider, mock_db):
+        """A failed charge is routed to providers that enabled the billing event."""
+        with (
+            patch.object(service, "_get_providers_for_event", new_callable=AsyncMock) as mock_get,
+            patch.object(service, "_send_to_providers", new_callable=AsyncMock) as mock_send,
+            patch.object(service, "_build_message_from_template", new_callable=AsyncMock) as mock_build,
+        ):
+            mock_get.return_value = [mock_provider]
+            mock_build.return_value = ("Billing Charge Failed", "The reservation was retained")
+
+            await service.on_billing_charge_failed(
+                printer_id=7,
+                printer_name="Printer B",
+                filename="paid-job.3mf",
+                archive_id=42,
+                error="unique constraint",
+                db=mock_db,
+            )
+
+            mock_get.assert_awaited_once_with(mock_db, "on_billing_charge_failed", 7)
+            mock_build.assert_awaited_once_with(
+                mock_db,
+                "billing_charge_failed",
+                {
+                    "printer": "Printer B",
+                    "filename": "paid-job",
+                    "archive_id": "42",
+                    "error": "unique constraint",
+                },
+            )
+            assert mock_send.await_args.args[4:7] == ("billing_charge_failed", 7, "Printer B")
+            assert mock_send.await_args.kwargs["force_immediate"] is True
+
     # ========================================================================
     # Tests for on_print_complete (status routing)
     # ========================================================================

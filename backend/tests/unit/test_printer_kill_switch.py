@@ -8,6 +8,7 @@ from backend.app import main as main_module
 
 @pytest.fixture(autouse=True)
 def clear_kill_switch_state():
+    main_module._kill_switch_setting_cache = None
     main_module._unauthorized_print_kill_sent.clear()
     main_module._kill_switch_notification_tasks.clear()
     main_module._expected_prints.clear()
@@ -24,6 +25,7 @@ def clear_kill_switch_state():
     main_module._active_prints.clear()
     main_module._expected_print_registered_at.clear()
     main_module._printer_reconciled_since_connect.clear()
+    main_module._kill_switch_setting_cache = None
 
 
 def test_gcode_3mf_status_filename_matches_registered_expected_print():
@@ -51,8 +53,7 @@ async def test_unauthorized_active_print_triggers_stop(monkeypatch):
     async def kill_switch_enabled(_db):
         return True
 
-    async def unauthorized(*_args):
-        return False
+    unauthorized = AsyncMock(return_value=False)
 
     monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
     monkeypatch.setattr(
@@ -92,8 +93,10 @@ async def test_unauthorized_active_print_triggers_stop(monkeypatch):
     )
 
     await main_module.on_printer_status_change(7, state)
+    await main_module.on_printer_status_change(7, state)
 
     assert stop_calls == [7]
+    unauthorized.assert_awaited_once()
     assert 7 in main_module._unauthorized_print_kill_sent
     broadcast.assert_awaited_once_with(
         {
@@ -139,8 +142,7 @@ async def test_bambuddy_authorized_print_is_not_stopped(monkeypatch):
     async def fake_status(*args, **kwargs):
         return None
 
-    async def kill_switch_enabled(_db):
-        return True
+    kill_switch_enabled = AsyncMock(return_value=True)
 
     monkeypatch.setattr(main_module.printer_manager, "get_current_print_user", lambda printer_id: None)
     monkeypatch.setattr(
@@ -179,6 +181,26 @@ async def test_bambuddy_authorized_print_is_not_stopped(monkeypatch):
 
     assert stop_calls == []
     assert 7 not in main_module._unauthorized_print_kill_sent
+    kill_switch_enabled.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_setting_is_cached(monkeypatch):
+    kill_switch_enabled = AsyncMock(return_value=True)
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return SimpleNamespace()
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(main_module, "async_session", FakeSessionContext)
+    monkeypatch.setattr("backend.app.services.finance_budget.is_printer_kill_switch_enabled", kill_switch_enabled)
+
+    assert await main_module._is_printer_kill_switch_enabled_cached() is True
+    assert await main_module._is_printer_kill_switch_enabled_cached() is True
+    kill_switch_enabled.assert_awaited_once()
 
 
 @pytest.mark.asyncio

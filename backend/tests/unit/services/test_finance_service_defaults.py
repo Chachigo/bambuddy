@@ -70,3 +70,23 @@ class TestFinanceDefaults:
 
         idempotent_changed = await ensure_user_finance_defaults(db_session, user)
         assert idempotent_changed is False
+
+    @pytest.mark.asyncio
+    async def test_reactivates_existing_private_center(self, db_session):
+        user = User(username="carol", role="user", is_active=True)
+        db_session.add(user)
+        await db_session.flush()
+        center = CostCenter(
+            name=user.username,
+            is_active=False,
+            is_private=True,
+            owner_user_id=user.id,
+        )
+        db_session.add(center)
+        await db_session.commit()
+
+        changed = await ensure_user_finance_defaults(db_session, user)
+        await db_session.commit()
+
+        assert changed is True
+        assert center.is_active is True

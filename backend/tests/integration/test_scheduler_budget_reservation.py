@@ -14,7 +14,7 @@ import backend.app.models  # noqa: F401 - populate Base.metadata
 import backend.app.services.print_scheduler as scheduler_module
 from backend.app.core.database import Base
 from backend.app.models.archive import PrintArchive
-from backend.app.models.finance import BudgetReservation, CostCenter
+from backend.app.models.finance import BudgetReservation, CostCenter, UserWallet
 from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.printer import Printer
 from backend.app.models.settings import Settings
@@ -153,6 +153,15 @@ async def test_successful_scheduler_dispatch_keeps_one_active_reservation(billin
     assert reservation.print_archive_id == billing_dispatch_case.ids.archive_id
     start_print.assert_called_once()
 
+    async with billing_dispatch_case.session_maker() as db:
+        item = await db.get(PrintQueueItem, billing_dispatch_case.ids.item_id)
+        archive = await db.get(PrintArchive, billing_dispatch_case.ids.archive_id)
+        assert item.billing_run_id is not None
+        assert archive.billing_run_id == item.billing_run_id
+        # The internal UUID is deliberately independent from Bambu's 31-bit
+        # task/subtask identifier.
+        assert len(item.billing_run_id) == 36
+
     # The printing queue row and its persisted reservation represent the same
     # €4 hold. A second €6 job must fit exactly; €6.01 must not.
     async with billing_dispatch_case.session_maker() as db:
@@ -182,6 +191,26 @@ async def test_successful_scheduler_dispatch_keeps_one_active_reservation(billin
                 current_user=user,
                 exclude_queue_item_id=second.id,
             )
+
+
+@pytest.mark.asyncio
+async def test_cost_center_without_budget_is_unlimited_regardless_of_wallet_balance(billing_dispatch_case):
+    """Wallet balance is accounting data; only an explicit cost-center budget gates printing."""
+    async with billing_dispatch_case.session_maker() as db:
+        user = await db.get(User, billing_dispatch_case.ids.user_id)
+        center = await db.get(CostCenter, billing_dispatch_case.ids.cost_center_id)
+        center.monthly_budget = None
+        center.total_budget = None
+        wallet = UserWallet(user_id=user.id, balance=-100.0, currency="EUR")
+        db.add(wallet)
+        await db.commit()
+
+        await validate_print_budget(
+            db,
+            cost_center_id=center.id,
+            estimated_cost=1_000_000.0,
+            current_user=user,
+        )
 
 
 @pytest.mark.asyncio
@@ -244,3 +273,46 @@ async def test_cancel_during_upload_releases_scheduler_reservation(billing_dispa
         )
     assert item.status == "cancelled"
     assert active_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_does_not_rollback_failed_dispatch_status(billing_dispatch_case):
+    scheduler = PrintScheduler()
+
+    async def fail_after_reserving(db, item):
+        db.add(
+            BudgetReservation(
+                cost_center_id=item.cost_center_id,
+                amount=4.0,
+                status="active",
+                source_type="print_queue",
+                source_id=item.id,
+                print_archive_id=item.archive_id,
+            )
+        )
+        await db.commit()
+        scheduler._unconfirmed_budget_reservations.add(item.id)
+        item.status = "failed"
+        item.error_message = "dispatch failed after reservation"
+        raise RuntimeError("simulated dispatch failure")
+
+    with (
+        patch.object(scheduler_module, "async_session", billing_dispatch_case.session_maker),
+        patch.object(scheduler, "_start_print", fail_after_reserving),
+        pytest.raises(RuntimeError, match="simulated dispatch failure"),
+    ):
+        await scheduler._dispatch_one(billing_dispatch_case.ids.item_id)
+
+    async with billing_dispatch_case.session_maker() as db:
+        item = await db.get(PrintQueueItem, billing_dispatch_case.ids.item_id)
+        reservation = await db.scalar(
+            select(BudgetReservation).where(
+                BudgetReservation.source_type == "print_queue",
+                BudgetReservation.source_id == billing_dispatch_case.ids.item_id,
+            )
+        )
+
+    assert item.status == "failed"
+    assert item.error_message == "dispatch failed after reservation"
+    assert item.dispatching_at is None
+    assert reservation.status == "released"

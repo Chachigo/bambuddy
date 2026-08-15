@@ -36,6 +36,9 @@ class PrintQueueItem(Base):
         ForeignKey("cost_centers.id", ondelete="SET NULL"), nullable=True
     )
     estimated_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Bambuddy-owned globally unique identity for one physical dispatch. This
+    # must not reuse the printer protocol's 31-bit subtask_id.
+    billing_run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("print_batches.id", ondelete="SET NULL"), nullable=True)
 

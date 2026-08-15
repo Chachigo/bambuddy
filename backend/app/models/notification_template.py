@@ -62,6 +62,12 @@ DEFAULT_TEMPLATES = [
         "body_template": "{printer}: print started with missing spool assignments\nSlots: {missing_slots}\nExpected profile:\n{missing_slot_details}",
     },
     {
+        "event_type": "billing_charge_failed",
+        "name": "Billing Charge Failed",
+        "title_template": "Billing Charge Failed",
+        "body_template": "{printer}: {filename}\nThe print charge could not be recorded. The budget reservation was retained.\nArchive: {archive_id}",
+    },
+    {
         "event_type": "printer_offline",
         "name": "Printer Offline",
         "title_template": "Printer Offline",

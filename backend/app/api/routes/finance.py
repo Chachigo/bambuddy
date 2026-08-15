@@ -10,7 +10,6 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.auth import RequirePermissionIfAuthEnabled, require_auth_if_enabled
 from backend.app.core.database import get_db
 from backend.app.core.permissions import Permission
-from backend.app.models.archive import PrintArchive
 from backend.app.models.finance import (
     BudgetReservation,
     CostCenter,
@@ -20,7 +19,6 @@ from backend.app.models.finance import (
     WalletTransaction,
     normalize_transaction_type,
 )
-from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
 from backend.app.schemas.finance import (
@@ -44,6 +42,7 @@ from backend.app.services.finance_balance import (
     personal_balance_condition,
     sync_personal_wallet_balance,
 )
+from backend.app.services.finance_budget import get_cost_center_reserved_map
 
 router = APIRouter(prefix="/finance", tags=["finance"])
 
@@ -132,6 +131,7 @@ async def _get_cost_center_usage_maps(
         .where(
             WalletTransaction.cost_center_id.in_(cost_center_ids),
             WalletTransaction.cost_center_id.is_not(None),
+            WalletTransaction.is_voided.is_(False),
         )
         .group_by(WalletTransaction.cost_center_id)
     )
@@ -143,6 +143,7 @@ async def _get_cost_center_usage_maps(
         .where(
             WalletTransaction.cost_center_id.in_(cost_center_ids),
             WalletTransaction.cost_center_id.is_not(None),
+            WalletTransaction.is_voided.is_(False),
             WalletTransaction.created_at >= budget_window_start_utc,
         )
         .group_by(WalletTransaction.cost_center_id)
@@ -165,6 +166,7 @@ async def _get_cost_center_balance_map(
         .where(
             WalletTransaction.cost_center_id.in_(cost_center_ids),
             WalletTransaction.cost_center_id.is_not(None),
+            WalletTransaction.is_voided.is_(False),
         )
         .group_by(WalletTransaction.cost_center_id)
     )
@@ -175,31 +177,7 @@ async def _get_cost_center_reserved_map(
     db: AsyncSession,
     cost_center_ids: list[int],
 ) -> dict[int, float]:
-    if not cost_center_ids:
-        return {}
-
-    budget_rows = await db.execute(
-        select(BudgetReservation.cost_center_id, func.coalesce(func.sum(BudgetReservation.amount), 0.0))
-        .where(
-            BudgetReservation.cost_center_id.in_(cost_center_ids),
-            BudgetReservation.status == "active",
-        )
-        .group_by(BudgetReservation.cost_center_id)
-    )
-    reserved_map = {int(center_id): float(value) for center_id, value in budget_rows.all() if center_id is not None}
-
-    queue_rows = await db.execute(
-        select(PrintQueueItem.cost_center_id, func.coalesce(func.sum(PrintQueueItem.estimated_cost), 0.0))
-        .where(
-            PrintQueueItem.cost_center_id.in_(cost_center_ids),
-            PrintQueueItem.status.in_(("pending", "printing")),
-        )
-        .group_by(PrintQueueItem.cost_center_id)
-    )
-    for center_id, value in queue_rows.all():
-        if center_id is not None:
-            reserved_map[int(center_id)] = reserved_map.get(int(center_id), 0.0) + float(value or 0.0)
-    return reserved_map
+    return await get_cost_center_reserved_map(db, cost_center_ids)
 
 
 def _budget_mode_and_limit(center: CostCenter) -> tuple[str, float | None]:
@@ -306,24 +284,47 @@ def _to_balance_response(wallet: UserWallet) -> WalletBalanceResponse:
     )
 
 
-async def _build_personal_balance_map(db: AsyncSession, user_id: int) -> dict[int, float]:
-    result = await db.execute(
-        select(
-            WalletTransaction.id,
-            WalletTransaction.amount,
-        )
-        .outerjoin(CostCenter, WalletTransaction.cost_center_id == CostCenter.id)
-        .where(WalletTransaction.user_id == user_id, personal_balance_condition(user_id))
-        .order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
+async def _get_wallet_balance_read_only(db: AsyncSession, user_id: int) -> WalletBalanceResponse:
+    """Return a balance without creating a wallet row from a GET request."""
+    wallet = await db.scalar(select(UserWallet).where(UserWallet.user_id == user_id))
+    if wallet is not None:
+        return _to_balance_response(wallet)
+    return WalletBalanceResponse(
+        user_id=user_id,
+        balance=await calculate_personal_balance(db, user_id),
+        currency="EUR",
+        updated_at=None,
     )
 
-    running_balance = 0.0
-    balance_map: dict[int, float] = {}
-    for transaction_id, amount in result.all():
-        running_balance += float(amount)
-        balance_map[int(transaction_id)] = running_balance
 
-    return balance_map
+async def _build_personal_balance_map(
+    db: AsyncSession,
+    user_id: int,
+    transaction_ids: list[int],
+) -> dict[int, float]:
+    """Return running balances only for transactions on the requested page."""
+    if not transaction_ids:
+        return {}
+
+    running = (
+        select(
+            WalletTransaction.id.label("transaction_id"),
+            func.sum(WalletTransaction.amount)
+            .over(order_by=(WalletTransaction.created_at.asc(), WalletTransaction.id.asc()))
+            .label("running_balance"),
+        )
+        .outerjoin(CostCenter, WalletTransaction.cost_center_id == CostCenter.id)
+        .where(
+            WalletTransaction.user_id == user_id,
+            WalletTransaction.is_voided.is_(False),
+            personal_balance_condition(user_id),
+        )
+        .subquery()
+    )
+    result = await db.execute(
+        select(running.c.transaction_id, running.c.running_balance).where(running.c.transaction_id.in_(transaction_ids))
+    )
+    return {int(transaction_id): round(float(balance), 2) for transaction_id, balance in result.all()}
 
 
 async def _create_wallet_adjustment(
@@ -356,6 +357,7 @@ async def _create_wallet_adjustment(
         result = await db.execute(
             select(func.coalesce(func.sum(WalletTransaction.amount), 0.0)).where(
                 WalletTransaction.cost_center_id == cost_center_id,
+                WalletTransaction.is_voided.is_(False),
             )
         )
         current_cc_balance = float(result.scalar() or 0.0)
@@ -423,19 +425,22 @@ async def get_my_transactions(
     user = await _require_authenticated_user(current_user)
 
     total_result = await db.execute(
-        select(func.count(WalletTransaction.id)).where(WalletTransaction.user_id == user.id)
+        select(func.count(WalletTransaction.id)).where(
+            WalletTransaction.user_id == user.id,
+            WalletTransaction.is_voided.is_(False),
+        )
     )
     total = int(total_result.scalar_one() or 0)
 
     result = await db.execute(
         select(WalletTransaction)
-        .where(WalletTransaction.user_id == user.id)
+        .where(WalletTransaction.user_id == user.id, WalletTransaction.is_voided.is_(False))
         .order_by(WalletTransaction.created_at.desc(), WalletTransaction.id.desc())
         .limit(limit)
         .offset(offset)
     )
     transactions = result.scalars().all()
-    personal_balance_map = await _build_personal_balance_map(db, user.id)
+    personal_balance_map = await _build_personal_balance_map(db, user.id, [tx.id for tx in transactions])
     return WalletTransactionListResponse(
         items=[
             _serialize_wallet_transaction(tx).model_copy(
@@ -460,7 +465,7 @@ async def get_all_transactions(
     """Return wallet ledger entries across users for admin finance view."""
     await _require_authenticated_user(current_user)
 
-    conditions = []
+    conditions = [WalletTransaction.is_voided.is_(False)]
     if user_id is not None:
         await _get_user_or_404(db, user_id)
         conditions.append(WalletTransaction.user_id == user_id)
@@ -500,21 +505,23 @@ async def delete_transaction(
     """Delete a wallet transaction and rebuild the user's ledger to keep balances consistent."""
     await _require_authenticated_user(current_user)
 
-    result = await db.execute(select(WalletTransaction).where(WalletTransaction.id == transaction_id))
+    result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.id == transaction_id,
+            WalletTransaction.is_voided.is_(False),
+        )
+    )
     tx = result.scalar_one_or_none()
     if tx is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     user_id = tx.user_id
 
-    if tx.transaction_type == "print_charge" and tx.print_archive_id is not None:
-        archive_result = await db.execute(select(PrintArchive).where(PrintArchive.id == tx.print_archive_id))
-        archive = archive_result.scalar_one_or_none()
-        if archive is not None:
-            archive.wallet_charge_skipped = True
-            db.add(archive)
-
-    await db.delete(tx)
+    # Keep a hidden, zero-effect tombstone for the billing_run_id. A delayed
+    # duplicate completion therefore cannot recreate this deliberately removed
+    # charge, while a later reprint of the same archive has its own run ID and
+    # remains billable.
+    tx.is_voided = True
     await db.flush()
 
     await _rebuild_wallet_ledger_for_user(db, user_id)
@@ -532,16 +539,24 @@ async def edit_transaction(
     """Edit a wallet transaction (user_id, cost_center_id, amount, description) and rebuild ledger."""
     await _require_authenticated_user(current_user)
 
-    result = await db.execute(select(WalletTransaction).where(WalletTransaction.id == transaction_id))
+    result = await db.execute(
+        select(WalletTransaction).where(
+            WalletTransaction.id == transaction_id,
+            WalletTransaction.is_voided.is_(False),
+        )
+    )
     tx = result.scalar_one_or_none()
     if tx is None:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     # Apply edits
     if request.user_id is not None:
+        await _get_user_or_404(db, request.user_id)
         tx.user_id = request.user_id
 
-    if request.cost_center_id is not None:
+    if "cost_center_id" in request.model_fields_set:
+        if request.cost_center_id is not None:
+            await _get_cost_center_or_404(db, request.cost_center_id)
         tx.cost_center_id = request.cost_center_id
 
     if request.amount is not None:
@@ -573,6 +588,8 @@ async def create_manual_print(
 ):
     """Create a manual print charge transaction (for admin purposes)."""
     await _require_authenticated_user(current_user)
+    await _get_user_or_404(db, request.user_id)
+    await _get_cost_center_or_404(db, request.cost_center_id)
 
     from datetime import timezone
 
@@ -680,7 +697,7 @@ async def get_user_transactions(
 
     result = await db.execute(
         select(WalletTransaction)
-        .where(WalletTransaction.user_id == user_id)
+        .where(WalletTransaction.user_id == user_id, WalletTransaction.is_voided.is_(False))
         .order_by(WalletTransaction.created_at.desc(), WalletTransaction.id.desc())
         .limit(limit)
         .offset(offset)
@@ -857,6 +874,12 @@ async def update_cost_center(
     await _require_authenticated_user(current_user)
     center = await _get_cost_center_or_404(db, cost_center_id)
 
+    if center.is_private and body.is_active is False:
+        raise HTTPException(
+            status_code=400,
+            detail="Private cost centers cannot be deactivated; set their budget to 0 to prevent printing",
+        )
+
     if body.name is not None:
         center.name = body.name.strip()
     if body.is_active is not None:
@@ -959,18 +982,35 @@ async def delete_cost_center(
     if center.is_private:
         raise HTTPException(status_code=400, detail="Private cost centers cannot be deleted")
 
-    balance_map = await _get_cost_center_balance_map(db, [center.id])
-    total_balance = balance_map.get(center.id, 0.0)
-    if abs(total_balance) > 1e-9:
-        raise HTTPException(status_code=400, detail="Cost center can only be deleted when balance is 0")
+    transaction_id = await db.scalar(
+        select(WalletTransaction.id)
+        .where(
+            WalletTransaction.cost_center_id == center.id,
+            WalletTransaction.is_voided.is_(False),
+        )
+        .limit(1)
+    )
+    if transaction_id is not None:
+        # ON DELETE SET NULL would turn these shared-center entries into
+        # personal transactions and silently rewrite the affected wallets.
+        raise HTTPException(status_code=400, detail="Cost center cannot be deleted while transactions reference it")
+
+    active_reservation_id = await db.scalar(
+        select(BudgetReservation.id)
+        .where(
+            BudgetReservation.cost_center_id == center.id,
+            BudgetReservation.status == "active",
+        )
+        .limit(1)
+    )
+    if active_reservation_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Cost center cannot be deleted while active budget reservations reference it",
+        )
 
     await db.delete(center)
     await db.flush()
-    # ON DELETE SET NULL reclassifies the former shared-center entries as
-    # personal transactions, so synchronize affected wallets immediately.
-    from backend.app.core.database import repair_wallet_ledger_internal
-
-    await repair_wallet_ledger_internal(db)
     await db.commit()
     return {"status": "success"}
 

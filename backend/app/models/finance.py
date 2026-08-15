@@ -147,6 +147,11 @@ class WalletTransaction(Base):
     print_queue_id: Mapped[int | None] = mapped_column(
         ForeignKey("print_queue.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Voided ledger rows stay persisted as run-scoped idempotency tombstones.
+    # They are excluded from balances and API listings, but their print_run_id
+    # prevents a delayed duplicate completion callback from recreating a charge
+    # that an administrator deliberately removed.
+    is_voided: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 

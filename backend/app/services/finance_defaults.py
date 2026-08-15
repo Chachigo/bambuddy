@@ -49,9 +49,16 @@ async def ensure_user_finance_defaults(db: AsyncSession, user: User) -> bool:
         db.add(private_center)
         await db.flush()
         changed = True
-    elif private_center.name != user.username:
-        private_center.name = user.username
-        changed = True
+    else:
+        # A private center is the billing fallback for its owner and therefore
+        # must remain active. A zero budget is the supported way to prevent
+        # printing from it.
+        if not private_center.is_active:
+            private_center.is_active = True
+            changed = True
+        if private_center.name != user.username:
+            private_center.name = user.username
+            changed = True
 
     membership = (
         await db.execute(

@@ -15,6 +15,7 @@ export function CostCenterSelect({
   const { t } = useTranslation();
 
   if (costCenters.length === 0) return null;
+  const selectedCostCenter = costCenters.find((center) => center.id === selectedCostCenterId);
 
   return (
     <div className="space-y-1">
@@ -33,6 +34,11 @@ export function CostCenterSelect({
           </option>
         ))}
       </select>
+      {selectedCostCenter?.budget_mode === 'none' && (
+        <p className="text-xs text-bambu-gray">
+          {t('printModal.unlimitedNoBudget', 'Unlimited – no budget limit is set.')}
+        </p>
+      )}
     </div>
   );
 }

@@ -3207,7 +3207,10 @@ class BambuMQTTClient:
         if "subtask_id" in data:
             self.state.subtask_id = data["subtask_id"]
         if "mc_percent" in data:
-            # Save last non-zero progress for usage tracking (firmware resets to 0 on cancel)
+            # Billing: retain this frame's latest positive value immediately.
+            # A display-side abort may be the very next frame (and may omit
+            # mc_percent entirely), so retaining only the previous frame can
+            # lose the only usable estimate for proportional charging.
             previous_progress = self.state.progress
             new_progress = float(data["mc_percent"])
             if new_progress > 0:

@@ -66,6 +66,7 @@ class NotificationProvider(Base):
     on_print_stopped = Column(Boolean, default=True)  # User cancelled/stopped print
     on_print_progress = Column(Boolean, default=False)  # 25%, 50%, 75% milestones
     on_print_missing_spool_assignment = Column(Boolean, default=False)  # Print started with unassigned required tray(s)
+    on_billing_charge_failed = Column(Boolean, default=True)  # A completed/stopped print could not be charged
 
     # Event triggers - printer status
     on_printer_offline = Column(Boolean, default=False)

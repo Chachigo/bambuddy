@@ -1097,6 +1097,7 @@ async def _migrate_create_finance_tables(conn) -> None:
                 print_run_id VARCHAR(100),
                 print_archive_id INTEGER REFERENCES print_archives(id) ON DELETE SET NULL,
                 print_queue_id INTEGER REFERENCES print_queue(id) ON DELETE SET NULL,
+                is_voided BOOLEAN NOT NULL DEFAULT 0,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT ck_wallet_transactions_transaction_type CHECK (
                     transaction_type IN ('print_charge', 'deposit', 'withdraw', 'manual_adjustment')
@@ -1177,6 +1178,7 @@ async def _migrate_create_finance_tables(conn) -> None:
                 print_run_id VARCHAR(100),
                 print_archive_id INTEGER REFERENCES print_archives(id) ON DELETE SET NULL,
                 print_queue_id INTEGER REFERENCES print_queue(id) ON DELETE SET NULL,
+                is_voided BOOLEAN NOT NULL DEFAULT FALSE,
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT ck_wallet_transactions_transaction_type CHECK (
                     transaction_type IN ('print_charge', 'deposit', 'withdraw', 'manual_adjustment')
@@ -2969,6 +2971,30 @@ async def run_migrations(conn):
 
     # Migration: Store estimated print cost for budget checks before queued jobs start
     await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN estimated_cost FLOAT")
+    await _safe_execute(conn, "ALTER TABLE print_queue ADD COLUMN billing_run_id VARCHAR(36)")
+    await _safe_execute(conn, "ALTER TABLE print_archives ADD COLUMN billing_run_id VARCHAR(36)")
+    if is_sqlite():
+        await _safe_execute(conn, "ALTER TABLE wallet_transactions ADD COLUMN is_voided BOOLEAN DEFAULT 0 NOT NULL")
+    else:
+        await _safe_execute(conn, "ALTER TABLE wallet_transactions ADD COLUMN is_voided BOOLEAN DEFAULT FALSE NOT NULL")
+    await _safe_execute(
+        conn,
+        "CREATE INDEX IF NOT EXISTS ix_wallet_transactions_is_voided ON wallet_transactions (is_voided)",
+    )
+    await _safe_execute(
+        conn,
+        "ALTER TABLE notification_providers ADD COLUMN on_billing_charge_failed BOOLEAN DEFAULT 1",
+    )
+
+    # Reprints reuse their source archive, so archive uniqueness must only be
+    # the legacy fallback for rows without a per-run UUID. The globally unique
+    # print_run_id is the idempotency key for all new charges.
+    await _safe_execute(conn, "DROP INDEX IF EXISTS uq_wallet_transactions_archive")
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_wallet_transactions_archive"
+        " ON wallet_transactions (transaction_type, print_archive_id) WHERE print_run_id IS NULL",
+    )
 
     # Migration: Persist active budget reservations for accepted background dispatch jobs.
     if is_sqlite():
@@ -4919,38 +4945,15 @@ async def seed_color_catalog():
         logger.info("Seeded %d default color catalog entries", len(DEFAULT_COLOR_CATALOG))
 
 
-async def repair_wallet_ledger():
-    """Repair wallet ledger balance_after values.
-
-    This is called during database initialization to ensure all balance_after
-    values are correct after code changes. Fixes old balance_after values to:
-    - Personal transactions: unassigned plus the user's own private cost center
-    - Cost-center transactions: global running balance for the entire cost center
-    Also updates UserWallet.balance to the canonical personal ledger sum.
-    """
-    async with async_session() as session:
-        updated_count = await repair_wallet_ledger_internal(session)
-        await session.commit()
-
-        if updated_count > 0:
-            logger.info("Repaired wallet ledger: updated %d transactions/wallets", updated_count)
-
-
 async def repair_wallet_ledger_internal(session: AsyncSession):
     """Internal helper that repairs wallet ledger using an existing session.
 
     Used by API endpoints that need to rebuild the ledger within their own transaction.
     """
-    from sqlalchemy import select
+    from sqlalchemy import bindparam, select
 
     from backend.app.models.finance import CostCenter, UserWallet, WalletTransaction
     from backend.app.services.finance_balance import transaction_affects_personal_balance
-
-    # Get ALL transactions sorted by timestamp
-    result = await session.execute(
-        select(WalletTransaction).order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
-    )
-    all_transactions = result.scalars().all()
 
     center_rows = await session.execute(select(CostCenter.id, CostCenter.is_private, CostCenter.owner_user_id))
     centers = {
@@ -4961,41 +4964,62 @@ async def repair_wallet_ledger_internal(session: AsyncSession):
     cc_running_balances: dict[int, float] = {}  # cost_center_id -> running balance
     user_personal_balances: dict[int, float] = {}  # user_id -> personal running balance
 
-    tx_updates: list[tuple[WalletTransaction, float]] = []
-
-    for tx in all_transactions:
-        center_is_private, center_owner_user_id = centers.get(tx.cost_center_id, (False, None))
-        affects_personal = transaction_affects_personal_balance(
-            tx.user_id,
-            tx.cost_center_id,
-            is_private=center_is_private,
-            owner_user_id=center_owner_user_id,
-        )
-        if tx.cost_center_id is None:
-            # Personal transaction: per-user running balance
-            current = user_personal_balances.get(tx.user_id, 0.0)
-            new_balance = current + float(tx.amount)
-            user_personal_balances[tx.user_id] = new_balance
-            tx_updates.append((tx, new_balance))
-        else:
-            # Cost-center transaction: global running balance for this cost center
-            current = cc_running_balances.get(tx.cost_center_id, 0.0)
-            new_balance = current + float(tx.amount)
-            cc_running_balances[tx.cost_center_id] = new_balance
-            tx_updates.append((tx, new_balance))
-
-            # The owner's private cost center is also part of that user's
-            # personal wallet. Shared centers never enter this sum.
-            if affects_personal:
-                user_personal_balances[tx.user_id] = user_personal_balances.get(tx.user_id, 0.0) + float(tx.amount)
-
-    # Update all transactions with the new balance_after values
     updated_count = 0
-    for tx, new_balance in tx_updates:
-        if tx.balance_after != new_balance:
-            tx.balance_after = new_balance
-            session.add(tx)
-            updated_count += 1
+    batch_size = 1000
+    batch_offset = 0
+    while True:
+        rows = (
+            await session.execute(
+                select(
+                    WalletTransaction.id,
+                    WalletTransaction.user_id,
+                    WalletTransaction.cost_center_id,
+                    WalletTransaction.amount,
+                    WalletTransaction.balance_after,
+                )
+                .where(WalletTransaction.is_voided.is_(False))
+                .order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
+                .offset(batch_offset)
+                .limit(batch_size)
+            )
+        ).all()
+        if not rows:
+            break
+
+        updates: list[dict[str, object]] = []
+        for transaction_id, user_id, cost_center_id, amount, balance_after in rows:
+            amount_value = float(amount)
+            center_is_private, center_owner_user_id = centers.get(cost_center_id, (False, None))
+            affects_personal = transaction_affects_personal_balance(
+                user_id,
+                cost_center_id,
+                is_private=center_is_private,
+                owner_user_id=center_owner_user_id,
+            )
+            if cost_center_id is None:
+                new_balance = round(user_personal_balances.get(user_id, 0.0) + amount_value, 2)
+                user_personal_balances[user_id] = new_balance
+            else:
+                new_balance = round(cc_running_balances.get(cost_center_id, 0.0) + amount_value, 2)
+                cc_running_balances[cost_center_id] = new_balance
+                if affects_personal:
+                    user_personal_balances[user_id] = round(
+                        user_personal_balances.get(user_id, 0.0) + amount_value,
+                        2,
+                    )
+
+            if balance_after is None or round(float(balance_after), 2) != new_balance:
+                updates.append({"_transaction_id": transaction_id, "_balance_after": new_balance})
+
+        if updates:
+            statement = (
+                WalletTransaction.__table__.update()
+                .where(WalletTransaction.__table__.c.id == bindparam("_transaction_id"))
+                .values(balance_after=bindparam("_balance_after"))
+            )
+            await session.execute(statement, updates)
+            updated_count += len(updates)
+        batch_offset += len(rows)
 
     # Update every wallet, including stale wallets whose canonical balance is
     # now zero because their last personal transaction was deleted.

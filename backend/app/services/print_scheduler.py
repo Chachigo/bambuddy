@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1297,7 +1298,7 @@ class PrintScheduler:
                 # reservation survives only after start_print() accepted the
                 # command. Failure, cancellation, deferral, and exceptions all
                 # release it here.
-                await asyncio.shield(self._release_unconfirmed_budget_reservation(item_db, item_id))
+                await asyncio.shield(self._release_unconfirmed_budget_reservation(item_id))
                 # Release the claim on every exit. Once dispatch has finished the
                 # row's status carries the lock (printing/failed/cancelled are all
                 # != pending), so the token is only needed for the duration of the
@@ -1329,37 +1330,37 @@ class PrintScheduler:
                 exc_info=True,
             )
 
-    async def _release_unconfirmed_budget_reservation(self, db: AsyncSession, item_id: int) -> None:
-        """Release a queue reservation when dispatch ended before MQTT send."""
+    async def _release_unconfirmed_budget_reservation(self, item_id: int) -> None:
+        """Release a queue reservation without touching the dispatch session."""
         if item_id not in self._unconfirmed_budget_reservations:
             return
 
         for attempt in range(1, 4):
-            try:
-                await db.rollback()
-                await release_budget_reservation(
-                    db,
-                    source_type="print_queue",
-                    source_id=item_id,
-                    status="released",
-                )
-                await db.commit()
-                self._unconfirmed_budget_reservations.discard(item_id)
-                return
-            except Exception as exc:
+            async with async_session() as cleanup_db:
                 try:
-                    await db.rollback()
-                except Exception:
-                    pass
-                if attempt == 3:
-                    logger.error(
-                        "Queue item %s: failed to release budget reservation after %d attempts: %s",
-                        item_id,
-                        attempt,
-                        exc,
+                    await release_budget_reservation(
+                        cleanup_db,
+                        source_type="print_queue",
+                        source_id=item_id,
+                        status="released",
                     )
+                    await cleanup_db.commit()
+                    self._unconfirmed_budget_reservations.discard(item_id)
                     return
-                await asyncio.sleep(0.5 * attempt)
+                except Exception as exc:
+                    try:
+                        await cleanup_db.rollback()
+                    except Exception:
+                        pass
+                    if attempt == 3:
+                        logger.error(
+                            "Queue item %s: failed to release budget reservation after %d attempts: %s",
+                            item_id,
+                            attempt,
+                            exc,
+                        )
+                        return
+                    await asyncio.sleep(0.5 * attempt)
 
     async def _claim_for_dispatch(self, db: AsyncSession, item_id: int) -> bool:
         """Atomically stamp ``dispatching_at`` on a still-pending, unclaimed row.
@@ -4203,11 +4204,12 @@ class PrintScheduler:
         # rowcount==0 means the user won the race; bail out, best-effort delete
         # the file we just uploaded, do NOT send start_print.
         now_utc = datetime.now(timezone.utc)
+        billing_run_id = str(uuid.uuid4())
         cas = await db.execute(
             update(PrintQueueItem)
             .where(PrintQueueItem.id == item.id)
             .where(PrintQueueItem.status == "pending")
-            .values(status="printing", started_at=now_utc)
+            .values(status="printing", started_at=now_utc, billing_run_id=billing_run_id)
         )
         await db.commit()
         if cas.rowcount == 0:
@@ -4244,6 +4246,16 @@ class PrintScheduler:
         # item.started_at sees the values we just persisted.
         item.status = "printing"
         item.started_at = now_utc
+        item.billing_run_id = billing_run_id
+        if archive is not None:
+            archive.billing_run_id = billing_run_id
+            # Legacy transaction deletion used an archive-wide skip flag.
+            # A newly dispatched run has its own UUID/tombstone, so it must be
+            # billable independently of any older deleted run on this archive.
+            archive.wallet_charge_skipped = False
+            # Persist before MQTT send so completion and restart recovery can
+            # always recover the internal billing identity.
+            await db.commit()
 
         for cleanup_path in cleanup_disk_paths:
             try:

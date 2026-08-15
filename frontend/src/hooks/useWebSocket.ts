@@ -346,6 +346,13 @@ export function useWebSocket() {
         break;
       }
 
+      case 'billing_charge_failed': {
+        const printer = message.printer_name || `Printer ${message.printer_id ?? '?'}`;
+        const filename = message.filename || t('common.unknown');
+        showToast(t('printers.toast.billingChargeFailed', { printer, filename }), 'error');
+        break;
+      }
+
       case 'archive_created':
         debouncedInvalidate('archives');
         debouncedInvalidate('archiveStats');

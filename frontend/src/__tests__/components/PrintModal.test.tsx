@@ -150,6 +150,33 @@ describe('PrintModal', () => {
       expect(submitButton).toBeInTheDocument();
     });
 
+    it('explains and blocks printing when billing has no printable cost center', async () => {
+      server.use(
+        http.get('/api/v1/settings/', () => HttpResponse.json({
+          billing_enabled: true,
+          default_filament_cost: 25,
+          currency: 'USD',
+        })),
+        http.get('/api/v1/finance/cost-centers/mine', () => HttpResponse.json([])),
+      );
+
+      render(
+        <PrintModal
+          mode="create"
+          archiveId={1}
+          archiveName="Benchy"
+          initialSelectedPrinterIds={[1]}
+          onClose={mockOnClose}
+          onSuccess={mockOnSuccess}
+        />
+      );
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'No active cost center is available for printing. Ask an administrator to grant you print access.',
+      );
+      expect(screen.getByRole('button', { name: /^print$/i })).toBeDisabled();
+    });
+
     it('has cancel button', () => {
       render(
         <PrintModal

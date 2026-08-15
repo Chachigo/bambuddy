@@ -76,6 +76,7 @@ async def _cost_center_spend(db: AsyncSession, cost_center_id: int, *, monthly: 
     conditions = [
         WalletTransaction.cost_center_id == cost_center_id,
         WalletTransaction.cost_center_id.is_not(None),
+        WalletTransaction.is_voided.is_(False),
     ]
     if monthly:
         conditions.append(WalletTransaction.created_at >= await _get_budget_window_start_utc(db))
@@ -84,12 +85,24 @@ async def _cost_center_spend(db: AsyncSession, cost_center_id: int, *, monthly: 
     return float(result.scalar() or 0.0)
 
 
-async def _cost_center_open_queue_reservations(
+async def get_cost_center_reserved_map(
     db: AsyncSession,
-    cost_center_id: int,
+    cost_center_ids: list[int],
     *,
     exclude_queue_item_id: int | None = None,
-) -> float:
+    exclude_reservation_source_type: str | None = None,
+    exclude_reservation_source_id: int | None = None,
+) -> dict[int, float]:
+    """Return active holds plus unreserved open queue estimates per cost center.
+
+    Queue items that already have an active ``print_queue`` reservation are
+    excluded from the queue sum because the reservation is their replacement,
+    not an additional hold.
+    """
+
+    if not cost_center_ids:
+        return {}
+
     active_queue_reservation = (
         select(BudgetReservation.id)
         .where(
@@ -99,38 +112,41 @@ async def _cost_center_open_queue_reservations(
         )
         .exists()
     )
-    conditions = [
-        PrintQueueItem.cost_center_id == cost_center_id,
+    queue_conditions = [
+        PrintQueueItem.cost_center_id.in_(cost_center_ids),
         PrintQueueItem.status.in_(("pending", "printing")),
         ~active_queue_reservation,
     ]
     if exclude_queue_item_id is not None:
-        conditions.append(PrintQueueItem.id != exclude_queue_item_id)
+        queue_conditions.append(PrintQueueItem.id != exclude_queue_item_id)
 
-    result = await db.execute(select(func.coalesce(func.sum(PrintQueueItem.estimated_cost), 0.0)).where(*conditions))
-    return float(result.scalar() or 0.0)
+    queue_rows = await db.execute(
+        select(PrintQueueItem.cost_center_id, func.coalesce(func.sum(PrintQueueItem.estimated_cost), 0.0))
+        .where(*queue_conditions)
+        .group_by(PrintQueueItem.cost_center_id)
+    )
+    reserved_map = {int(center_id): float(value) for center_id, value in queue_rows.all() if center_id is not None}
 
-
-async def _cost_center_active_budget_reservations(
-    db: AsyncSession,
-    cost_center_id: int,
-    *,
-    exclude_source_type: str | None = None,
-    exclude_source_id: int | None = None,
-) -> float:
-    conditions = [
-        BudgetReservation.cost_center_id == cost_center_id,
+    reservation_conditions = [
+        BudgetReservation.cost_center_id.in_(cost_center_ids),
         BudgetReservation.status == "active",
     ]
-    if exclude_source_type is not None and exclude_source_id is not None:
-        conditions.append(
+    if exclude_reservation_source_type is not None and exclude_reservation_source_id is not None:
+        reservation_conditions.append(
             ~(
-                (BudgetReservation.source_type == exclude_source_type)
-                & (BudgetReservation.source_id == exclude_source_id)
+                (BudgetReservation.source_type == exclude_reservation_source_type)
+                & (BudgetReservation.source_id == exclude_reservation_source_id)
             )
         )
-    result = await db.execute(select(func.coalesce(func.sum(BudgetReservation.amount), 0.0)).where(*conditions))
-    return float(result.scalar() or 0.0)
+    reservation_rows = await db.execute(
+        select(BudgetReservation.cost_center_id, func.coalesce(func.sum(BudgetReservation.amount), 0.0))
+        .where(*reservation_conditions)
+        .group_by(BudgetReservation.cost_center_id)
+    )
+    for center_id, value in reservation_rows.all():
+        if center_id is not None:
+            reserved_map[int(center_id)] = reserved_map.get(int(center_id), 0.0) + float(value or 0.0)
+    return reserved_map
 
 
 async def validate_print_budget(
@@ -179,17 +195,14 @@ async def validate_print_budget(
         return
 
     used = await _cost_center_spend(db, cost_center_id, monthly=center.monthly_budget is not None)
-    reserved = await _cost_center_open_queue_reservations(
+    reserved_map = await get_cost_center_reserved_map(
         db,
-        cost_center_id,
+        [cost_center_id],
         exclude_queue_item_id=exclude_queue_item_id,
+        exclude_reservation_source_type=exclude_reservation_source_type,
+        exclude_reservation_source_id=exclude_reservation_source_id,
     )
-    reserved += await _cost_center_active_budget_reservations(
-        db,
-        cost_center_id,
-        exclude_source_type=exclude_reservation_source_type,
-        exclude_source_id=exclude_reservation_source_id,
-    )
+    reserved = reserved_map.get(cost_center_id, 0.0)
     requested = estimated_cost * max(1, quantity)
     available = float(budget_limit) - used - reserved
     if requested > available:

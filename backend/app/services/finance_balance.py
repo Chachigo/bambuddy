@@ -36,7 +36,11 @@ async def calculate_personal_balance(db: AsyncSession, user_id: int) -> float:
         select(func.coalesce(func.sum(WalletTransaction.amount), 0.0))
         .select_from(WalletTransaction)
         .outerjoin(CostCenter, WalletTransaction.cost_center_id == CostCenter.id)
-        .where(WalletTransaction.user_id == user_id, personal_balance_condition(user_id))
+        .where(
+            WalletTransaction.user_id == user_id,
+            WalletTransaction.is_voided.is_(False),
+            personal_balance_condition(user_id),
+        )
     )
     return round(float(result.scalar_one() or 0.0), 2)
 

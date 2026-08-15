@@ -132,6 +132,9 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
             {provider.on_print_stopped && (
               <span className="px-2 py-0.5 bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 text-xs rounded">{t('notifications.stopped')}</span>
             )}
+            {provider.on_billing_charge_failed && (
+              <span className="px-2 py-0.5 bg-red-100 dark:bg-red-600/20 text-red-700 dark:text-red-300 text-xs rounded">{t('notifications.billingChargeFailedLabel')}</span>
+            )}
             {provider.on_print_progress && (
               <span className="px-2 py-0.5 bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 text-xs rounded">{t('notifications.progress')}</span>
             )}
@@ -351,6 +354,17 @@ export function NotificationProviderCard({ provider, onEdit }: NotificationProvi
                   <Toggle
                     checked={provider.on_print_stopped}
                     onChange={(checked) => updateMutation.mutate({ on_print_stopped: checked })}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-white">{t('notifications.billingChargeFailedLabel')}</p>
+                    <p className="text-xs text-bambu-gray">{t('notifications.billingChargeFailedDescription')}</p>
+                  </div>
+                  <Toggle
+                    checked={provider.on_billing_charge_failed ?? true}
+                    onChange={(checked) => updateMutation.mutate({ on_billing_charge_failed: checked })}
                   />
                 </div>
 

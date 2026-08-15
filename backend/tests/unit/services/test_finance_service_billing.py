@@ -1,13 +1,17 @@
 """Unit tests for billing charges applied to print archives."""
 
+from unittest.mock import AsyncMock
+
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from backend.app.models.archive import PrintArchive
 from backend.app.models.finance import BudgetReservation, CostCenter, UserWallet, WalletTransaction
+from backend.app.models.print_queue import PrintQueueItem
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
-from backend.app.services.finance_billing import apply_print_charge_for_archive
+from backend.app.services.finance_billing import BillingRunIdCollisionError, apply_print_charge_for_archive
 
 
 async def enable_billing(db_session):
@@ -20,6 +24,187 @@ async def enable_billing(db_session):
 
 
 class TestFinanceBilling:
+    @pytest.mark.asyncio
+    async def test_run_context_charges_initiator_and_consumes_only_its_reservation(self, db_session):
+        """Concurrent reprints of one archive keep owner, center and hold run-scoped."""
+        await enable_billing(db_session)
+        archive_owner = User(username="archive_owner", role="user", is_active=True)
+        first_user = User(username="first_reprinter", role="user", is_active=True)
+        second_user = User(username="second_reprinter", role="user", is_active=True)
+        first_center = CostCenter(name="First run CC", is_active=True, is_private=False)
+        second_center = CostCenter(name="Second run CC", is_active=True, is_private=False)
+        db_session.add_all([archive_owner, first_user, second_user, first_center, second_center])
+        await db_session.flush()
+        archive = PrintArchive(
+            filename="shared-source.3mf",
+            file_path="archives/test/shared-source.3mf",
+            file_size=123,
+            content_hash="shared-source-runs",
+            status="completed",
+            cost=4.0,
+            created_by_id=archive_owner.id,
+        )
+        db_session.add(archive)
+        await db_session.flush()
+        first_item = PrintQueueItem(
+            archive_id=archive.id,
+            cost_center_id=first_center.id,
+            estimated_cost=4.0,
+            position=1,
+            status="printing",
+            created_by_id=first_user.id,
+            billing_run_id="first-reprint-run",
+            plate_id=1,
+        )
+        second_item = PrintQueueItem(
+            archive_id=archive.id,
+            cost_center_id=second_center.id,
+            estimated_cost=4.0,
+            position=1,
+            status="printing",
+            created_by_id=second_user.id,
+            billing_run_id="second-reprint-run",
+            plate_id=2,
+        )
+        db_session.add_all([first_item, second_item])
+        await db_session.flush()
+        first_reservation = BudgetReservation(
+            cost_center_id=first_center.id,
+            amount=4.0,
+            status="active",
+            source_type="print_queue",
+            source_id=first_item.id,
+            print_archive_id=archive.id,
+        )
+        second_reservation = BudgetReservation(
+            cost_center_id=second_center.id,
+            amount=4.0,
+            status="active",
+            source_type="print_queue",
+            source_id=second_item.id,
+            print_archive_id=archive.id,
+        )
+        db_session.add_all([first_reservation, second_reservation])
+        await db_session.commit()
+
+        changed = await apply_print_charge_for_archive(
+            db_session,
+            archive.id,
+            charged_user_id=first_user.id,
+            cost_center_id=first_center.id,
+            print_queue_id=first_item.id,
+            print_run_id=first_item.billing_run_id,
+        )
+        await db_session.commit()
+
+        assert changed is True
+        tx = await db_session.scalar(
+            select(WalletTransaction).where(WalletTransaction.print_run_id == first_item.billing_run_id)
+        )
+        assert tx is not None
+        assert tx.user_id == first_user.id
+        assert tx.user_id != archive_owner.id
+        assert tx.cost_center_id == first_center.id
+        assert tx.print_queue_id == first_item.id
+        await db_session.refresh(first_reservation)
+        await db_session.refresh(second_reservation)
+        assert first_reservation.status == "consumed"
+        assert second_reservation.status == "active"
+
+    @pytest.mark.asyncio
+    async def test_run_id_collision_with_another_archive_is_loud(self, db_session):
+        await enable_billing(db_session)
+        user = User(username="collision", role="user", is_active=True)
+        db_session.add(user)
+        await db_session.flush()
+        first = PrintArchive(
+            filename="first.3mf",
+            file_path="archives/test/first.3mf",
+            file_size=123,
+            content_hash="collision-first",
+            status="completed",
+            cost=2.0,
+            created_by_id=user.id,
+            billing_run_id="same-run-id",
+        )
+        second = PrintArchive(
+            filename="second.3mf",
+            file_path="archives/test/second.3mf",
+            file_size=123,
+            content_hash="collision-second",
+            status="completed",
+            cost=3.0,
+            created_by_id=user.id,
+            billing_run_id="same-run-id",
+        )
+        db_session.add_all([first, second])
+        await db_session.commit()
+
+        assert await apply_print_charge_for_archive(db_session, first.id, print_run_id="same-run-id") is True
+        await db_session.commit()
+
+        with pytest.raises(BillingRunIdCollisionError, match="already assigned to another archive"):
+            await apply_print_charge_for_archive(db_session, second.id, print_run_id="same-run-id")
+
+        transactions = (
+            (await db_session.execute(select(WalletTransaction).where(WalletTransaction.print_run_id == "same-run-id")))
+            .scalars()
+            .all()
+        )
+        assert len(transactions) == 1
+        assert transactions[0].print_archive_id == first.id
+
+    @pytest.mark.asyncio
+    async def test_concurrent_charge_conflict_preserves_callers_pending_changes(self, db_session, monkeypatch):
+        await enable_billing(db_session)
+        user = User(username="concurrent_charge", role="user", is_active=True)
+        archive = PrintArchive(
+            filename="concurrent.3mf",
+            file_path="archives/test/concurrent.3mf",
+            file_size=123,
+            content_hash="concurrent-charge",
+            status="completed",
+            cost=2.0,
+            created_by_id=None,
+        )
+        db_session.add_all([user, archive])
+        await db_session.commit()
+        archive_id = archive.id
+        user_id = user.id
+
+        # Mirrors on_print_complete's owner backfill immediately before it
+        # hands the still-open session to the billing service.
+        archive.created_by_id = user_id
+        original_flush = db_session.flush
+        original_rollback = db_session.rollback
+
+        async def conflict_on_transaction_flush(objects=None):
+            if any(isinstance(obj, WalletTransaction) for obj in db_session.new):
+                raise IntegrityError("duplicate print charge", {}, Exception("unique violation"))
+            return await original_flush(objects)
+
+        rollback = AsyncMock()
+        monkeypatch.setattr(db_session, "flush", conflict_on_transaction_flush)
+        monkeypatch.setattr(db_session, "rollback", rollback)
+
+        with pytest.raises(IntegrityError, match="unique violation"):
+            await apply_print_charge_for_archive(db_session, archive_id, print_run_id="concurrent-run")
+
+        rollback.assert_not_awaited()
+
+        # Restore normal session methods so the caller can commit its own work.
+        monkeypatch.setattr(db_session, "flush", original_flush)
+        monkeypatch.setattr(db_session, "rollback", original_rollback)
+        await db_session.commit()
+        db_session.expire_all()
+
+        persisted_archive = await db_session.get(PrintArchive, archive_id)
+        assert persisted_archive.created_by_id == user_id
+        assert (
+            await db_session.scalar(select(WalletTransaction).where(WalletTransaction.print_run_id == "concurrent-run"))
+            is None
+        )
+
     @pytest.mark.asyncio
     async def test_apply_print_charge_uses_print_run_id_and_cost_center_override(self, db_session):
         await enable_billing(db_session)

@@ -6765,6 +6765,30 @@ class TestNoLastLayerFinishPhotoTrigger:
         assert events == []
 
 
+class TestBillingProgressTracking:
+    """The latest positive MQTT progress is the fallback for partial billing."""
+
+    @pytest.fixture
+    def mqtt_client(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        return BambuMQTTClient(
+            ip_address="192.168.1.100",
+            serial_number="TEST123",
+            access_code="12345678",
+        )
+
+    def test_current_frame_is_retained_and_zero_reset_does_not_overwrite_it(self, mqtt_client):
+        """Even the first positive frame must survive an immediate printer abort."""
+        mqtt_client._process_message({"print": {"mc_percent": 25}})
+
+        assert mqtt_client._last_valid_progress == 25
+
+        mqtt_client._process_message({"print": {"mc_percent": 0}})
+
+        assert mqtt_client._last_valid_progress == 25
+
+
 class TestPrintProgressCallback:
     """#2547: `on_print_progress` keeps the finish-photo frame bank fresh.
 

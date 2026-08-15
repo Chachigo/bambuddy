@@ -18,7 +18,6 @@ EXPECTED_TABLES = {
     "wallet_transactions",
     "budget_reservations",
     "cost_center_members",
-    "cost_center_invitations",
     "user_wallets",
 }
 
@@ -38,11 +37,22 @@ async def test_finance_tables_are_created_idempotently_on_sqlite():
                     "SELECT name FROM sqlite_master "
                     "WHERE type = 'table' AND name IN "
                     "('cost_centers', 'wallet_transactions', 'budget_reservations', "
-                    "'cost_center_members', 'cost_center_invitations', 'user_wallets')"
+                    "'cost_center_members', 'user_wallets')"
                 )
             )
+            invitation_table = await conn.scalar(
+                text("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cost_center_invitations'")
+            )
+            wallet_columns = await conn.execute(text("PRAGMA table_info(user_wallets)"))
+            transaction_columns = await conn.execute(text("PRAGMA table_info(wallet_transactions)"))
 
         assert {row[0] for row in rows} == EXPECTED_TABLES
+        assert invitation_table is None
+        assert {row[1]: row[2] for row in wallet_columns}["balance"] == "NUMERIC(14,2)"
+        transaction_types = {row[1]: row[2] for row in transaction_columns}
+        assert transaction_types["amount"] == "NUMERIC(14,2)"
+        assert transaction_types["balance_after"] == "NUMERIC(14,2)"
+        assert transaction_types["is_voided"] == "BOOLEAN"
     finally:
         await engine.dispose()
 
@@ -114,6 +124,8 @@ async def test_postgres_finance_ddl_uses_postgres_types():
     assert all("DATETIME" not in sql for sql in create_statements)
     assert all("id SERIAL PRIMARY KEY" in sql for sql in create_statements)
     assert "TIMESTAMP" in "\n".join(create_statements)
+    assert "NUMERIC(14,2)" in "\n".join(create_statements)
+    assert "is_voided BOOLEAN NOT NULL DEFAULT FALSE" in "\n".join(create_statements)
 
     created_tables = {
         sql.split("CREATE TABLE IF NOT EXISTS", 1)[1].split("(", 1)[0].strip() for sql in create_statements

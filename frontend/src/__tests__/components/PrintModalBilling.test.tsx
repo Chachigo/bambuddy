@@ -192,4 +192,41 @@ describe('PrintModal billing payloads', () => {
       expect(mockShowToast).toHaveBeenCalled();
     });
   });
+
+  it('labels a cost center without a budget as unlimited', async () => {
+    server.use(
+      http.get('/api/v1/finance/cost-centers/mine', () => {
+        return HttpResponse.json([
+          {
+            id: 42,
+            name: 'Unlimited Lab',
+            is_private: false,
+            owner_user_id: null,
+            is_active: true,
+            total_balance: -25,
+            total_budget: null,
+            monthly_budget: null,
+            budget_mode: 'none',
+            budget_limit: null,
+            budget_used: null,
+            budget_available: null,
+            can_print: true,
+          },
+        ]);
+      }),
+    );
+
+    renderWithProviders(
+      <PrintModal
+        mode="edit-queue-item"
+        archiveId={1}
+        archiveName="Billing Print"
+        queueItem={mockQueueItem as never}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText('Unlimited – no budget limit is set.')).not.toBeNull();
+  });
 });

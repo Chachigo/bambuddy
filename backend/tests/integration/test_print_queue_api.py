@@ -201,6 +201,33 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_add_model_based_queue_item_derives_cost_without_client_estimate(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """Model dispatch has no printer-side estimate but remains billable."""
+        await enable_billing(db_session)
+        await printer_factory(model="X1C")
+        archive = await archive_factory(cost=1.25, filament_used_grams=50.0, sliced_for_model="X1C")
+        cost_center = CostCenter(name="Model Budget CC", is_active=True, is_private=False, monthly_budget=10.0)
+        db_session.add(cost_center)
+        await db_session.commit()
+        await db_session.refresh(cost_center)
+
+        response = await async_client.post(
+            "/api/v1/queue/",
+            json={
+                "target_model": "X1C",
+                "archive_id": archive.id,
+                "cost_center_id": cost_center.id,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["printer_id"] is None
+        assert response.json()["estimated_cost"] == 1.25
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_add_to_queue_rejects_tampered_client_cost_when_server_cost_exceeds_budget(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):

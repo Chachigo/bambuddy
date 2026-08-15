@@ -315,7 +315,7 @@ export function PrintModal({
     queryFn: api.getPrinters,
   });
 
-  const { data: myCostCenters } = useQuery({
+  const { data: myCostCenters, isLoading: loadingCostCenters } = useQuery({
     queryKey: ['finance', 'cost-centers', 'mine'],
     queryFn: api.getMyCostCenters,
     enabled: !!user && billingEnabled,
@@ -824,6 +824,11 @@ export function PrintModal({
   const handleSubmit = async (e?: React.FormEvent, options?: { skipFilamentCheck?: boolean }) => {
     e?.preventDefault();
 
+    if (billingEnabled && selectedCostCenter == null) {
+      showToast(t('printModal.noPrintableCostCenters'), 'error');
+      return;
+    }
+
     if (
       !options?.skipFilamentCheck &&
       !settings?.disable_filament_warnings &&
@@ -1277,6 +1282,11 @@ export function PrintModal({
   const canSubmit = useMemo(() => {
     if (isPending) return false;
 
+    // Billing requires a server-authorized cost center. Wait for the query and
+    // keep submission disabled when the user has no printable center, rather
+    // than letting the API fail with an unexplained 400.
+    if (billingEnabled && (loadingCostCenters || selectedCostCenter == null)) return false;
+
     // Need valid printer/model selection
     if (assignmentMode === 'printer' && selectedPrinters.length === 0) return false;
     // Both are about the single-model case. A cross-model job has no one target
@@ -1313,6 +1323,9 @@ export function PrintModal({
     perPlateReqsFailed,
     printerStatusLoading,
     isCrossModel,
+    billingEnabled,
+    loadingCostCenters,
+    selectedCostCenter,
   ]);
 
   // Quantity only applies for single-printer or model-based assignment (not multi-printer)
@@ -1713,6 +1726,15 @@ export function PrintModal({
                 selectedCostCenterId={selectedCostCenterId}
                 onChange={setSelectedCostCenterId}
               />
+            )}
+            {billingEnabled && !loadingCostCenters && printableCostCenters.length === 0 && (
+              <div
+                role="alert"
+                className="p-3 bg-yellow-100 dark:bg-yellow-500/20 border border-yellow-500/50 rounded-lg text-sm text-yellow-800 dark:text-yellow-300 flex items-start gap-2"
+              >
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                {t('printModal.noPrintableCostCenters')}
+              </div>
             )}
 
             {/* Quantity — create multiple copies (batch). Hidden for multi-printer

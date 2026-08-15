@@ -16,6 +16,7 @@ class EventType(StrEnum):
     PRINT_STOPPED = "print_stopped"
     PRINT_PROGRESS = "print_progress"
     PRINT_MISSING_SPOOL_ASSIGNMENT = "print_missing_spool_assignment"
+    BILLING_CHARGE_FAILED = "billing_charge_failed"
     PRINTER_OFFLINE = "printer_offline"
     PRINTER_ERROR = "printer_error"
     FILAMENT_LOW = "filament_low"
@@ -71,6 +72,7 @@ EVENT_VARIABLES: dict[str, list[str]] = {
         "timestamp",
         "app_name",
     ],
+    "billing_charge_failed": ["printer", "filename", "archive_id", "error", "timestamp", "app_name"],
     "printer_offline": ["printer", "timestamp", "app_name"],
     "printer_error": ["printer", "error_type", "error_detail", "timestamp", "app_name"],
     "filament_low": ["printer", "slot", "remaining_percent", "color", "timestamp", "app_name"],
@@ -155,6 +157,14 @@ SAMPLE_DATA: dict[str, dict[str, str]] = {
         "missing_slots": "A1, A3",
         "missing_slot_details": "- A1: PLA Basic\n- A3: PETG HF",
         "timestamp": "2024-01-15 14:30",
+        "app_name": "Bambuddy",
+    },
+    "billing_charge_failed": {
+        "printer": "Bambu X1C",
+        "filename": "Benchy.3mf",
+        "archive_id": "123",
+        "error": "The transaction could not be persisted",
+        "timestamp": "2024-01-15 15:48",
         "app_name": "Bambuddy",
     },
     "printer_offline": {
