@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
+  AlertTriangle,
   Archive,
   CheckCircle2,
   Info,
@@ -147,13 +148,20 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
     onSuccess: (data) => {
       setShowConfirm(false);
       // The endpoint answers 200 for a refused or failed restore too, with
-      // `success: false` and an empty `results` — and two of those are ordinary
-      // conditions, not errors: another restore already running, and a backup
-      // being mid-flight. Rendering the result panel for them showed a green
-      // tick, no tally at all and a "reload so the restored data appears" hint
-      // above a message saying nothing had been restored. Only a real success
-      // gets the panel; a failure keeps the form and shows the red block below.
-      if (data.success) {
+      // `success: false` — and two of those are ordinary conditions, not
+      // errors: another restore already running, and a backup being mid-flight.
+      // Nothing was written for either, so they keep the form and show the red
+      // block below; rendering the result panel for them put a green tick, no
+      // tally at all and a "reload so the restored data appears" hint above a
+      // message saying nothing had been restored.
+      //
+      // A failure that got as far as writing is the opposite case. Categories
+      // commit as each one finishes, so a non-empty `results` names the ones
+      // that are on disk — and the form over the top of them would be the same
+      // "nothing was restored" misreading, this time with the data actually in.
+      // So the panel is what wrote, not what succeeded.
+      const wroteSomething = Object.keys(data.results ?? {}).length > 0;
+      if (data.success || wroteSomething) {
         setResult(data);
         // A restore rewrites rows these caches hold. ['settings'] is one of
         // them: until #2716 was fixed on dev, invalidating it made
@@ -280,10 +288,22 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
             {result ? (
               /* Result summary */
               <div className="p-4 space-y-3 max-h-[400px] overflow-y-auto">
+                {/* A partial restore reaches this panel too — categories commit
+                    as they finish, so the tallies below are on disk even though
+                    the run did not get through them all. It must not read as a
+                    success: the message is the failure, and what follows is what
+                    survived it rather than what was asked for. */}
                 <div className="flex items-start gap-2 text-sm">
-                  <CheckCircle2 className="w-4 h-4 text-bambu-green mt-0.5 flex-shrink-0" />
+                  {result.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-bambu-green mt-0.5 flex-shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                  )}
                   <span className="text-white">{result.message}</span>
                 </div>
+                {!result.success && (
+                  <p className="text-xs text-bambu-gray">{t('backup.restoreFromGit.partialHint')}</p>
+                )}
                 {Object.entries(result.results).map(([name, tally]) => (
                   <div key={name} className="p-3 rounded-lg bg-bambu-dark border border-bambu-dark-tertiary">
                     <div className="flex items-center justify-between">

@@ -4992,6 +4992,7 @@ export default {
       kprofilesOverwriteCaveat: "Les profils K sont l'exception : écrire un emplacement remplace toujours la calibration sur l'imprimante.",
       tally: '{{restored}} restaurés, {{skipped}} ignorés, {{failed}} en échec',
       reloadHint: 'Rechargez Bambuddy pour que les données restaurées apparaissent partout.',
+      partialHint: "Les catégories listées ci-dessus sont terminées et enregistrées. Celles qui manquent n'ont pas été exécutées.",
       failed: 'Échec de la restauration.',
       loadFailed: 'Impossible de lire le dépôt de sauvegarde.',
       details: {

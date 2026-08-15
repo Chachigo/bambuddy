@@ -5003,6 +5003,7 @@ export default {
       kprofilesOverwriteCaveat: 'K-Profile sind die Ausnahme: Das Schreiben eines Slots ersetzt immer die Kalibrierung auf dem Drucker.',
       tally: '{{restored}} wiederhergestellt, {{skipped}} übersprungen, {{failed}} fehlgeschlagen',
       reloadHint: 'Bambuddy neu laden, damit die wiederhergestellten Daten überall erscheinen.',
+      partialHint: 'Die oben aufgeführten Kategorien wurden abgeschlossen und sind gespeichert. Fehlende Kategorien wurden nicht ausgeführt.',
       failed: 'Wiederherstellung fehlgeschlagen.',
       loadFailed: 'Das Backup-Repository konnte nicht gelesen werden.',
       details: {

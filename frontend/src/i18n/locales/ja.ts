@@ -5003,6 +5003,7 @@ export default {
       kprofilesOverwriteCaveat: 'Kプロファイルは例外です。スロットへの書き込みは、プリンター上のキャリブレーションを常に置き換えます。',
       tally: '復元 {{restored}} 件、スキップ {{skipped}} 件、失敗 {{failed}} 件',
       reloadHint: '復元したデータを全体に反映するには Bambuddy を再読み込みしてください。',
+      partialHint: '上に表示されたカテゴリーは完了し、保存されています。表示されていないカテゴリーは実行されていません。',
       failed: '復元に失敗しました。',
       loadFailed: 'バックアップリポジトリを読み取れませんでした。',
       details: {

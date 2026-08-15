@@ -4980,6 +4980,7 @@ export default {
       kprofilesOverwriteCaveat: 'K profilleri istisnadır: bir yuvaya yazmak yazıcıdaki kalibrasyonu her zaman değiştirir.',
       tally: '{{restored}} geri yüklendi, {{skipped}} atlandı, {{failed}} başarısız',
       reloadHint: 'Geri yüklenen verilerin her yerde görünmesi için Bambuddy\'yi yeniden yükleyin.',
+      partialHint: 'Yukarıda listelenen kategoriler tamamlandı ve kaydedildi. Eksik olanlar hiç çalıştırılmadı.',
       failed: 'Geri yükleme başarısız oldu.',
       loadFailed: 'Yedek deposu okunamadı.',
       details: {

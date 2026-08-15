@@ -5010,6 +5010,7 @@ export default {
       kprofilesOverwriteCaveat: 'Los perfiles K son la excepción: escribir una ranura siempre reemplaza la calibración en la impresora.',
       tally: '{{restored}} restaurados, {{skipped}} omitidos, {{failed}} fallidos',
       reloadHint: 'Recarga Bambuddy para que los datos restaurados aparezcan en todas partes.',
+      partialHint: 'Las categorías indicadas arriba se completaron y están guardadas. Las que faltan no llegaron a ejecutarse.',
       failed: 'La restauración ha fallado.',
       loadFailed: 'No se pudo leer el repositorio de copias de seguridad.',
       details: {

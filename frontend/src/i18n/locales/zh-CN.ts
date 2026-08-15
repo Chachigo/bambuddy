@@ -4991,6 +4991,7 @@ export default {
       kprofilesOverwriteCaveat: 'K 值配置是例外：写入插槽总会替换打印机上的校准数据。',
       tally: '已恢复 {{restored}} 项，跳过 {{skipped}} 项，失败 {{failed}} 项',
       reloadHint: '请重新加载 Bambuddy，以便恢复的数据在各处生效。',
+      partialHint: '上面列出的类别已完成并已保存。未列出的类别没有执行。',
       failed: '恢复失败。',
       loadFailed: '无法读取备份仓库。',
       details: {

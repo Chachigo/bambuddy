@@ -4766,6 +4766,7 @@ export default {
       kprofilesOverwriteCaveat: 'K 프로파일은 예외입니다. 슬롯에 쓰면 프린터의 캘리브레이션이 항상 교체됩니다.',
       tally: '복원 {{restored}}개, 건너뜀 {{skipped}}개, 실패 {{failed}}개',
       reloadHint: '복원된 데이터가 모든 화면에 반영되도록 Bambuddy를 새로 고치세요.',
+      partialHint: '위에 표시된 카테고리는 완료되어 저장되었습니다. 표시되지 않은 카테고리는 실행되지 않았습니다.',
       failed: '복원에 실패했습니다.',
       loadFailed: '백업 저장소를 읽을 수 없습니다.',
       details: {

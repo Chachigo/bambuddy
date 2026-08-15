@@ -432,11 +432,14 @@ describe('GitHubRestoreModal', () => {
     });
   });
 
-  // A refused restore answers 200 with `success: false`, and two of the five
-  // refusals are ordinary conditions rather than errors — a restore already
-  // running, and a backup mid-flight. Rendering the result panel for those put a
-  // green tick and "reload so the restored data appears" above a message saying
-  // nothing had been restored, i.e. a failure that read as a success.
+  // A refused restore answers 200 with `success: false` and an empty `results`,
+  // and two of the five refusals are ordinary conditions rather than errors — a
+  // restore already running, and a backup mid-flight. Rendering the result panel
+  // for those put a green tick and "reload so the restored data appears" above a
+  // message saying nothing had been restored, i.e. a failure that read as a
+  // success. Empty `results` is the load-bearing half: a failure that did write
+  // carries its committed categories and does get the panel — see the partial
+  // test below.
   it('reports a backend refusal such as the backup/restore mutex', async () => {
     server.use(
       http.post('/api/v1/github-backup/restore', () =>
@@ -488,12 +491,70 @@ describe('GitHubRestoreModal', () => {
     await waitFor(() => screen.getByText('A restore is already running'));
 
     const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
-    // Nothing was written, so nothing to re-read...
+    // This refusal never reached a category, so `results` is empty and there is
+    // nothing to re-read. A failure that committed one does invalidate — the
+    // partial test below covers that side...
     expect(keys).not.toContain(JSON.stringify(['spools']));
     expect(keys).not.toContain(JSON.stringify(['archives']));
     // ...but a failure past the commit resolve writes a "failed" log row, so the
     // history is refreshed whatever the outcome.
     expect(keys).toContain(JSON.stringify(['github-backup-logs']));
+    invalidate.mockRestore();
+  });
+
+  // Categories commit as each one finishes, so a run that fails part-way leaves
+  // the earlier ones on disk and reports them. The modal used to gate the whole
+  // result panel — and the cache invalidation with it — on `success`, so those
+  // rows were written, never shown, and never re-read: the app carried on
+  // displaying pre-restore settings while the database held the restored ones.
+  const partialRestore = {
+    success: false,
+    message: 'database is locked',
+    log_id: 7,
+    ref: 'a'.repeat(40),
+    results: {
+      archives: { restored: 12, skipped: 0, failed: 0, notes: [] },
+      settings: { restored: 4, skipped: 1, failed: 0, notes: [] },
+    },
+  };
+
+  const runRestore = async () => {
+    const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
+    await userEvent.click(checkboxes[1]);
+    await userEvent.click(screen.getByRole('button', { name: /Restore$/ }));
+    await waitFor(() => screen.getByText('Restore from backup?'));
+    const confirmButtons = screen.getAllByRole('button', { name: /Restore$/ });
+    await userEvent.click(confirmButtons[confirmButtons.length - 1]);
+  };
+
+  it('reports the categories a part-way failure already committed', async () => {
+    server.use(http.post('/api/v1/github-backup/restore', () => HttpResponse.json(partialRestore)));
+    render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+    await runRestore();
+
+    // The tallies are the point: they name what is on disk.
+    await waitFor(() => expect(screen.getByText('database is locked')).toBeInTheDocument());
+    expect(screen.getByText(/12 restored/)).toBeInTheDocument();
+    expect(screen.getByText(/4 restored/)).toBeInTheDocument();
+    expect(screen.getByText(/The categories listed above finished and are on disk/)).toBeInTheDocument();
+    // And it must not read as a success — the run did not finish, so the
+    // warning icon stands in for the green tick.
+    expect(document.querySelector('svg.text-yellow-500')).toBeInTheDocument();
+    expect(document.querySelector('svg.text-bambu-green')).not.toBeInTheDocument();
+  });
+
+  it('refreshes the data caches for a part-way failure, because rows landed', async () => {
+    server.use(http.post('/api/v1/github-backup/restore', () => HttpResponse.json(partialRestore)));
+    const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+    await runRestore();
+    await waitFor(() => screen.getByText('database is locked'));
+
+    const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['archives']));
+    expect(keys).toContain(JSON.stringify(['settings']));
     invalidate.mockRestore();
   });
 

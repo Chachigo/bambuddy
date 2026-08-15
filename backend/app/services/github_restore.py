@@ -1105,6 +1105,16 @@ class GitHubRestoreService:
             # column was added to fix) and silently un-delete a row the user
             # deleted. So only carry a column the backup actually knows about;
             # on insert, an absent key just takes the model default.
+            # An owner the backup names but this instance cannot resolve is the
+            # same epistemic state as an absent key — we do not know who owns
+            # this archive — so it takes the same action: the column is left out
+            # of ``fields`` entirely rather than set to None. Writing NULL there
+            # would take the owner away from a local archive that has a perfectly
+            # good one, which is the 404-for-its-own-owner failure this column is
+            # carried across to fix, and it would do it on the overwrite path
+            # where there is a local answer to keep. On insert there is nothing
+            # to keep, so the row takes the model default and lands ownerless,
+            # which is what the note says.
             owner_cleared = False
             backup_username = entry.get("created_by_username")
             if isinstance(backup_username, str) and backup_username:
@@ -1112,35 +1122,42 @@ class GitHubRestoreService:
                 # since the backup, and there is nothing else to resolve on: the
                 # id alongside it is from the source instance's numbering, so
                 # trusting it is exactly the misattribution the name is here to
-                # prevent. Cleared rather than failing the row — the archive is
-                # still worth having, and an admin can reassign it — but said out
-                # loud, because a cleared owner is not silent-safe.
+                # prevent. Not a reason to fail the row — the archive is still
+                # worth having, and an admin can reassign it — but said out loud
+                # on insert, because an ownerless archive is not silent-safe.
                 created_by_id = users_by_name.get(backup_username)
                 if created_by_id is None:
-                    tally.note(
-                        "archivesOwnerUnmatched",
-                        "Some archives name an owner this instance does not have — owner cleared rather than "
-                        "guessed from the backup's user id, so they are visible only to users with the "
-                        "archives:read_all permission until an admin reassigns them",
-                    )
-                    owner_cleared = True
-                fields["created_by_id"] = created_by_id
+                    if existing is None:
+                        tally.note(
+                            "archivesOwnerUnmatched",
+                            "Some archives name an owner this instance does not have — owner cleared rather than "
+                            "guessed from the backup's user id, so they are visible only to users with the "
+                            "archives:read_all permission until an admin reassigns them",
+                        )
+                        owner_cleared = True
+                else:
+                    fields["created_by_id"] = created_by_id
             elif "created_by_id" in entry:
                 # Fallback for a commit taken before the collector recorded the
-                # username. Validated rather than trusted, so a *stale* id clears
-                # instead of pointing somewhere wrong; a live id belonging to a
-                # different person on a rebuilt instance is the case this path
-                # cannot see, and is why the branch above exists.
+                # username. Validated rather than trusted, so a *stale* id is
+                # dropped instead of pointing somewhere wrong; a live id
+                # belonging to a different person on a rebuilt instance is the
+                # case this path cannot see, and is why the branch above exists.
+                # An explicit null is not a miss — the backup is saying the
+                # archive had no owner — so it is written, and overwrite keeps
+                # meaning "make the local row match the backup".
                 created_by_id = entry.get("created_by_id")
                 if created_by_id is not None and created_by_id not in valid_users:
-                    tally.note(
-                        "archivesOwnerCleared",
-                        "Some archives referenced users that no longer exist — owner cleared, so they are "
-                        "visible only to users with the archives:read_all permission until an admin reassigns them",
-                    )
-                    created_by_id = None
-                    owner_cleared = True
-                fields["created_by_id"] = created_by_id
+                    if existing is None:
+                        tally.note(
+                            "archivesOwnerCleared",
+                            "Some archives referenced users that no longer exist — owner cleared, so they are "
+                            "visible only to users with the archives:read_all permission until an admin "
+                            "reassigns them",
+                        )
+                        owner_cleared = True
+                else:
+                    fields["created_by_id"] = created_by_id
             if "deleted_at" in entry:
                 # A soft-deleted archive is still in the backup (its row is kept
                 # so stats keep counting it), so carry the flag across or the
@@ -1175,16 +1192,17 @@ class GitHubRestoreService:
                 )
                 warned_files = True
 
-            # Insert-only, and the mirror of the "absent is not null" rule above:
-            # on overwrite an unknown owner correctly leaves the local one alone,
-            # but there is no local row here to fall back on, so the archive
-            # lands ownerless — a 404 for everyone without archives:read_all.
-            # Two ways to get here: a commit taken before the collector recorded
-            # the column (every pre-#2656 backup), or an archive that genuinely
-            # had no owner on the source instance. Both restore fine and both
+            # Insert-only, and the mirror of the rule above: an owner the backup
+            # cannot tell us is never written, so on overwrite the local one
+            # survives — but there is no local row here to fall back on, so the
+            # archive lands ownerless, a 404 for everyone without
+            # archives:read_all. Three ways to get here: a commit taken before
+            # the collector recorded the column (every pre-#2656 backup), an
+            # archive that genuinely had no owner on the source instance, or one
+            # whose owner this instance cannot resolve. All restore fine and all
             # were silent, so the tally said "N archives restored" while the user
-            # who asked for them saw none. The stale-id case above already said
-            # its piece; don't say it twice for the same row.
+            # who asked for them saw none. The unresolved cases above already
+            # said their piece; don't say it twice for the same row.
             if fields.get("created_by_id") is None and not owner_cleared:
                 tally.note(
                     "archivesOwnerUnknown",
@@ -1729,6 +1747,14 @@ class GitHubRestoreService:
                         # counts it outstanding — leaving the tally here was the
                         # one place a profile could vanish from
                         # restored + skipped + failed entirely.
+                        #
+                        # failed here against skipped there is not a
+                        # disagreement about the entry. The three counters say
+                        # what happened to an item on this run, not whether it
+                        # was ever usable: an offline printer skips everything it
+                        # holds, well-formed or not, because nothing was
+                        # attempted, while here the entry was reached and could
+                        # not be used.
                         tally.failed += 1
                         continue
                     match = self._match_kprofile(p, current, claimed)

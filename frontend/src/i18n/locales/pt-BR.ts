@@ -4991,6 +4991,7 @@ export default {
       kprofilesOverwriteCaveat: 'Os perfis K são a exceção: gravar um slot sempre substitui a calibração na impressora.',
       tally: '{{restored}} restaurados, {{skipped}} ignorados, {{failed}} com falha',
       reloadHint: 'Recarregue o Bambuddy para que os dados restaurados apareçam em todos os lugares.',
+      partialHint: 'As categorias listadas acima foram concluídas e estão salvas. As que faltam não chegaram a ser executadas.',
       failed: 'Falha na restauração.',
       loadFailed: 'Não foi possível ler o repositório de backup.',
       details: {

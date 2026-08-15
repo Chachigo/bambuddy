@@ -4991,6 +4991,7 @@ export default {
       kprofilesOverwriteCaveat: 'K 值設定檔是例外：寫入插槽一定會取代印表機上的校準資料。',
       tally: '已還原 {{restored}} 筆、略過 {{skipped}} 筆、失敗 {{failed}} 筆',
       reloadHint: '請重新載入 Bambuddy，讓還原的資料在各處生效。',
+      partialHint: '上方列出的類別已完成並已儲存。未列出的類別沒有執行。',
       failed: '還原失敗。',
       loadFailed: '無法讀取備份儲存庫。',
       details: {

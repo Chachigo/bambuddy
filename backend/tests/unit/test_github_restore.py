@@ -2408,6 +2408,96 @@ class TestRestoredArchiveOwnership:
         assert row.created_by_id == alice.id
 
     @pytest.mark.asyncio
+    async def test_overwrite_leaves_the_owner_alone_when_the_backup_names_someone_unknown(self, db_session):
+        """A name this instance cannot resolve is not an instruction to clear.
+
+        Same epistemic state as the absent key below -- the backup has not told
+        us who owns this archive -- so it takes the same action. Writing NULL
+        instead inflicted the 404-for-its-own-owner failure on a local row that
+        was fine, and on a rebuilt instance every user renamed since the backup
+        took a whole archive history with them.
+        """
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+
+        tally = _CategoryTally()
+        await _service()._restore_archives(
+            db_session,
+            {"archives": [self._entry(created_by_id=4242, created_by_username="carol")]},
+            True,
+            tally,
+            {},
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == bob.id, "an owner we cannot resolve must not displace one we can"
+        assert tally.restored == 1
+        # Nothing was taken away, so there is nothing to warn about -- the same
+        # rule the absent-key case follows.
+        assert not any("owner cleared" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_overwrite_leaves_the_owner_alone_when_the_backups_id_is_stale(self, db_session):
+        """The pre-username fallback takes the rule too."""
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+
+        tally = _CategoryTally()
+        await _service()._restore_archives(db_session, {"archives": [self._entry(created_by_id=4242)]}, True, tally, {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == bob.id
+        assert not any("owner cleared" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_an_unresolvable_name_still_lands_ownerless_on_insert(self, db_session):
+        """Control for the two above: with no local row there is nothing to keep.
+
+        The archive is still restored -- it is worth having -- but it is
+        invisible to everyone without archives:read_all, so it is said out loud.
+        """
+        await self._user(db_session, "alice")
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session,
+            {"archives": [self._entry(created_by_id=4242, created_by_username="carol")]},
+            False,
+            tally,
+            {},
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id is None
+        assert tally.restored == 1 and tally.failed == 0
+        assert any("does not have" in note and "archives:read_all" in note for note in _messages(tally))
+        # One cause, one note -- the ownerless-insert note must not pile on.
+        assert not any("does not record one" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
     async def test_overwrite_leaves_the_owner_alone_when_the_backup_predates_the_key(self, db_session):
         """A pre-#2656 commit must not blank the owner of a row that was fine.
 

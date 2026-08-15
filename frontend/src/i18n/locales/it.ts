@@ -4991,6 +4991,7 @@ export default {
       kprofilesOverwriteCaveat: "I profili K sono l'eccezione: scrivere uno slot sostituisce sempre la calibrazione sulla stampante.",
       tally: '{{restored}} ripristinati, {{skipped}} saltati, {{failed}} non riusciti',
       reloadHint: 'Ricarica Bambuddy per vedere i dati ripristinati in tutte le sezioni.',
+      partialHint: 'Le categorie elencate sopra sono state completate e salvate. Quelle mancanti non sono state eseguite.',
       failed: 'Ripristino non riuscito.',
       loadFailed: 'Impossibile leggere il repository di backup.',
       details: {

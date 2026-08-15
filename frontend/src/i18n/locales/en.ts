@@ -5046,6 +5046,7 @@ export default {
       kprofilesOverwriteCaveat: 'K-profiles are the exception: writing a slot always replaces the calibration on the printer.',
       tally: '{{restored}} restored, {{skipped}} skipped, {{failed}} failed',
       reloadHint: 'Reload Bambuddy so the restored data appears everywhere.',
+      partialHint: 'The categories listed above finished and are on disk. Any that are missing did not run.',
       failed: 'Restore failed.',
       loadFailed: 'Could not read the backup repository.',
       // Preview caveats. The server sends detail_code + detail_params and the
