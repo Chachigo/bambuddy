@@ -5319,10 +5319,8 @@ export default {
     openInSlicerFailed: "Не удалось открыть в слайсере",
     tabs: {
       model: "3D-модель",
-      gcode: "Предпросмотр G-code",
     },
     notAvailable: "недоступно",
-    notSliced: "не нарезано",
     plates: "Пластины",
     allPlates: "Все пластины",
     plateNumber: "Пластина {{number}}",

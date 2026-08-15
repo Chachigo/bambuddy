@@ -5331,10 +5331,8 @@ export default {
     openInSlicerFailed: '슬라이서에서 열 수 없습니다',
     tabs: {
       model: '3D 모델',
-      gcode: 'G-code 미리보기'
     },
     notAvailable: '사용 불가',
-    notSliced: '슬라이싱되지 않음',
     plates: '플레이트',
     allPlates: '모든 플레이트',
     plateNumber: '플레이트 {{number}}',

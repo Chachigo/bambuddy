@@ -55,8 +55,15 @@ export function GcodeViewer({
       // Pass full color array - library uses index as tool number
       extrusionColor: hasMultiColor ? filamentColors : primaryColor,
       disableGradient: true,
+      // Volumetric extrusions rather than lines. `lineWidth: 2` drew each move
+      // as a 2px screen-space line, which is why the surface came out stringy,
+      // aliased, and banded where layers overlapped -- a line has no thickness
+      // in the scene, so it cannot occlude the layer behind it. Tubes are built
+      // from the real extrusion width and height, so the print reads as a solid
+      // object the way it does in a desktop slicer.
+      renderTubes: true,
+      extrusionWidth: 0.42,
       lineHeight: 0.2,
-      lineWidth: 2,
       renderTravel: false,
       renderExtrusion: true,
     });

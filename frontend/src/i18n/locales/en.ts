@@ -5646,10 +5646,8 @@ export default {
     openInSlicerFailed: 'Could not open in slicer',
     tabs: {
       model: '3D Model',
-      gcode: 'G-code Preview',
     },
     notAvailable: 'not available',
-    notSliced: 'not sliced',
     plates: 'Plates',
     allPlates: 'All Plates',
     plateNumber: 'Plate {{number}}',

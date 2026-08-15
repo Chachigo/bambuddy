@@ -5586,10 +5586,8 @@ export default {
     openInSlicerFailed: 'Impossibile aprire nello slicer',
     tabs: {
       model: 'Modello 3D',
-      gcode: 'Anteprima G-code',
     },
     notAvailable: 'non disponibile',
-    notSliced: 'non sezionato',
     plates: 'Piatti',
     allPlates: 'Tutti i piatti',
     plateNumber: 'Piatto {{number}}',

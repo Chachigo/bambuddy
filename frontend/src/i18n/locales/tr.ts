@@ -5561,10 +5561,8 @@ export default {
     openInSlicerFailed: 'Dilimleyicide açılamadı',
     tabs: {
       model: '3B Model',
-      gcode: 'G-kod Önizleme',
     },
     notAvailable: 'mevcut değil',
-    notSliced: 'dilimlenmemiş',
     plates: 'Plakalar',
     allPlates: 'Tüm Plakalar',
     plateNumber: 'Plaka {{number}}',

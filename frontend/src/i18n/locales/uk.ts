@@ -5640,10 +5640,8 @@ export default {
     openInSlicerFailed: "Не вдалося відкрити у слайсері",
     tabs: {
       model: "3D-модель",
-      gcode: "Попередній перегляд G-коду",
     },
     notAvailable: "недоступно",
-    notSliced: "не нарізано",
     plates: "Пластини",
     allPlates: "Усі пластини",
     plateNumber: "Пластина {{number}}",

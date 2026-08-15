@@ -5586,10 +5586,8 @@ export default {
     openInSlicerFailed: 'Não foi possível abrir no fatiador',
     tabs: {
       model: 'Modelo 3D',
-      gcode: 'Pré-visualização G-code',
     },
     notAvailable: 'Não disponível',
-    notSliced: 'Não fatiado',
     plates: 'Placas',
     allPlates: 'Todas as Placas',
     plateNumber: 'Placa {{number}}',

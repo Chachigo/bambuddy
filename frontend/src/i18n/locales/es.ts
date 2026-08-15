@@ -5605,10 +5605,8 @@ export default {
     openInSlicerFailed: 'No se pudo abrir en el laminador',
     tabs: {
       model: 'Modelo 3D',
-      gcode: 'Vista previa de G-code',
     },
     notAvailable: 'no disponible',
-    notSliced: 'no laminado',
     plates: 'Camas',
     allPlates: 'Todas las camas',
     plateNumber: 'Cama {{number}}',

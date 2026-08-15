@@ -1,16 +1,16 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { X, ExternalLink, Box, Code2, Cog, Loader2, Layers, Check, Maximize2, Minimize2, ChevronDown } from 'lucide-react';
+import { X, ExternalLink, Box, Cog, Loader2, Layers, Check, Maximize2, Minimize2, ChevronDown } from 'lucide-react';
 import { ModelViewer } from './ModelViewer';
-import { GcodeViewer } from './GcodeViewer';
 import { Button } from './Button';
 import { api, withStreamToken } from '../api/client';
 import { useToast } from '../contexts/ToastContext';
 import { isSliceableFileType, openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import type { ArchivePlatesResponse, LibraryFilePlatesResponse, PlateMetadata } from '../types/plates';
 
-type ViewTab = '3d' | 'gcode';
+// The modal shows the model only; G-code has its own full-page viewer.
+type ViewTab = '3d';
 
 interface ModelViewerModalProps {
   archiveId?: number;
@@ -27,7 +27,6 @@ interface ModelViewerModalProps {
 
 interface Capabilities {
   has_model: boolean;
-  has_gcode: boolean;
   has_source: boolean;
   build_volume: { x: number; y: number; z: number };
   filament_colors: string[];
@@ -173,15 +172,13 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
       // the 3D-tab + g-code-tab gating (#1543).
       const isThreeMfFamily = normalizedType === '3mf' || normalizedType === 'gcode.3mf';
       const hasModel = isThreeMfFamily || normalizedType === 'stl';
-      const hasGcode = isThreeMfFamily || normalizedType === 'gcode';
       setCapabilities({
         has_model: hasModel,
-        has_gcode: hasGcode,
         has_source: false,
         build_volume: { x: 256, y: 256, z: 256 },
         filament_colors: [],
       });
-      setActiveTab(hasModel ? '3d' : hasGcode ? 'gcode' : null);
+      setActiveTab(hasModel ? '3d' : null);
       setLoading(false);
       return;
     }
@@ -199,14 +196,12 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
         // Auto-select the first available tab
         if (caps.has_model) {
           setActiveTab('3d');
-        } else if (caps.has_gcode) {
-          setActiveTab('gcode');
         }
         setLoading(false);
       })
       .catch(() => {
         // Fallback to 3D model tab if capabilities check fails
-        setCapabilities({ has_model: true, has_gcode: false, has_source: false, build_volume: { x: 256, y: 256, z: 256 }, filament_colors: [] });
+        setCapabilities({ has_model: true, has_source: false, build_volume: { x: 256, y: 256, z: 256 }, filament_colors: [] });
         setActiveTab('3d');
         setLoading(false);
       });
@@ -505,21 +500,6 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
               {t('modelViewer.tabs.model')}
               {!capabilities.has_model && <span className="text-xs">({t('modelViewer.notAvailable')})</span>}
             </button>
-            <button
-              onClick={() => capabilities.has_gcode && setActiveTab('gcode')}
-              disabled={!capabilities.has_gcode}
-              className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors ${
-                activeTab === 'gcode'
-                  ? 'text-bambu-green border-b-2 border-bambu-green'
-                  : capabilities.has_gcode
-                    ? 'text-bambu-gray hover:text-white'
-                    : 'text-bambu-gray/30 cursor-not-allowed'
-              }`}
-            >
-              <Code2 className="w-4 h-4" />
-              {t('modelViewer.tabs.gcode')}
-              {!capabilities.has_gcode && <span className="text-xs">({t('modelViewer.notSliced')})</span>}
-            </button>
           </div>
         )}
 
@@ -761,12 +741,6 @@ export function ModelViewerModal({ archiveId, libraryFileId, title, fileType, on
                   />
               </div>
             </div>
-          ) : activeTab === 'gcode' && capabilities ? (
-            <GcodeViewer
-              gcodeUrl={isLibrary ? api.getLibraryFileGcodeUrl(libraryFileId!) : api.getArchiveGcode(archiveId!)}
-              filamentColors={capabilities.filament_colors}
-              className="w-full h-full"
-            />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-bambu-gray">
               {t('modelViewer.noPreview')}

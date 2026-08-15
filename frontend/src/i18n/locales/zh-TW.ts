@@ -5586,10 +5586,8 @@ export default {
     openInSlicerFailed: '無法在切片軟體中開啟',
     tabs: {
       model: '3D 模型',
-      gcode: 'G-code 預覽',
     },
     notAvailable: '不可用',
-    notSliced: '未切片',
     plates: '板',
     allPlates: '所有板',
     plateNumber: '板 {{number}}',

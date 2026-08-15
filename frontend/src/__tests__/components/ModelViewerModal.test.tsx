@@ -155,7 +155,8 @@ describe('ModelViewerModal', () => {
   });
 
   describe('tabs', () => {
-    it('renders 3D Model and G-code tabs', async () => {
+    it('renders the 3D Model tab and no G-code tab', async () => {
+      // G-code has its own full-page viewer; the modal is model-only.
       render(
         <ModelViewerModal
           archiveId={1}
@@ -166,8 +167,8 @@ describe('ModelViewerModal', () => {
 
       await waitFor(() => {
         expect(screen.getByText('3D Model')).toBeInTheDocument();
-        expect(screen.getByText('G-code Preview')).toBeInTheDocument();
       });
+      expect(screen.queryByText('G-code Preview')).not.toBeInTheDocument();
     });
 
     it('shows not available label when model is not available', async () => {
@@ -193,52 +194,6 @@ describe('ModelViewerModal', () => {
       });
     });
 
-    it('shows not sliced label when gcode is not available', async () => {
-      server.use(
-        http.get('/api/v1/archives/:id/capabilities', () => {
-          return HttpResponse.json({
-            ...mockCapabilities,
-            has_gcode: false,
-          });
-        })
-      );
-
-      render(
-        <ModelViewerModal
-          archiveId={1}
-          title="Test Model"
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('(not sliced)')).toBeInTheDocument();
-      });
-    });
-
-    it('disables tab when capability is not available', async () => {
-      server.use(
-        http.get('/api/v1/archives/:id/capabilities', () => {
-          return HttpResponse.json({
-            ...mockCapabilities,
-            has_gcode: false,
-          });
-        })
-      );
-
-      render(
-        <ModelViewerModal
-          archiveId={1}
-          title="Test Model"
-          onClose={mockOnClose}
-        />
-      );
-
-      await waitFor(() => {
-        const gcodeTab = screen.getByText('G-code Preview').closest('button');
-        expect(gcodeTab).toBeDisabled();
-      });
-    });
   });
 
   describe('fullscreen', () => {

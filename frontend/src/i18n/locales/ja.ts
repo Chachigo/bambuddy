@@ -5598,10 +5598,8 @@ export default {
     openInSlicerFailed: 'スライサーで開けませんでした',
     tabs: {
       model: '3Dモデル',
-      gcode: 'G-codeプレビュー',
     },
     notAvailable: '利用不可',
-    notSliced: '未スライス',
     plates: 'プレート',
     allPlates: '全プレート',
     plateNumber: 'プレート {{number}}',
