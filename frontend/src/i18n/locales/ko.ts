@@ -1704,6 +1704,11 @@ export default {
     configureSettings: '유지보수 유형 및 간격 설정'
   },
   settings: {
+    sliceEngine: '슬라이스 엔진',
+    sliceEngineSidecar: '서버 사이드카',
+    sliceEngineSidecarHint: '슬라이싱이 서버의 슬라이서 사이드카 컨테이너에서 실행됩니다.',
+    sliceEngineBrowser: '브라우저에서',
+    sliceEngineBrowserHint: '슬라이싱이 서버 없이 이 기기에서 실행됩니다.',
     title: '설정',
     general: '일반',
     tabs: {
@@ -4064,7 +4069,23 @@ export default {
       },
     },
   },
+  slicerSettings: {
+    loading: '슬라이서 설정을 불러오는 중…',
+    mode: {
+      simple: '간단',
+      advanced: '고급',
+      expert: '전문가',
+    },
+    searchPlaceholder: '설정 검색',
+    resetAll: '{{count}}개 초기화',
+    resetOption: '기본값으로 되돌리기',
+    noMatches: '검색과 일치하는 설정이 없습니다.',
+  },
   slice: {
+    processSettings: '프로세스 설정',
+    processSettingsHint: '이 슬라이스에 사용할 프리셋을 조정합니다. 건드리지 않은 항목은 프리셋 정의를 그대로 따릅니다.',
+    processSettingsChanged: '{{count}}개 변경됨',
+    processSettingsUnchanged: '프리셋 기본값',
     title: '모델 슬라이싱',
     action: '슬라이싱',
     slicing: '슬라이싱 중…',

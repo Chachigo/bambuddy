@@ -1789,6 +1789,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'スライスエンジン',
+    sliceEngineSidecar: 'サーバーサイドカー',
+    sliceEngineSidecarHint: 'スライスはサーバー上のスライサーサイドカーコンテナーで実行されます。',
+    sliceEngineBrowser: 'ブラウザー内',
+    sliceEngineBrowserHint: 'スライスはサーバーを介さず、このデバイス上で実行されます。',
     title: '設定',
     general: '一般',
     // Tab names
@@ -4273,7 +4278,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'スライサー設定を読み込んでいます…',
+    mode: {
+      simple: 'シンプル',
+      advanced: '詳細',
+      expert: 'エキスパート',
+    },
+    searchPlaceholder: '設定を検索',
+    resetAll: '{{count}} 件をリセット',
+    resetOption: '既定値に戻す',
+    noMatches: 'この検索に一致する設定はありません。',
+  },
   slice: {
+    processSettings: 'プロセス設定',
+    processSettingsHint: 'このスライス用に選択したプリセットを調整します。変更しない項目はプリセットの定義のままです。',
+    processSettingsChanged: '{{count}} 件変更',
+    processSettingsUnchanged: 'プリセットの既定値',
     title: 'モデルをスライス',
     action: 'スライス',
     actionAll: '{{count}} プレートすべてをスライス',

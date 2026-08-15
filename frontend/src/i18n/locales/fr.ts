@@ -1790,6 +1790,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Moteur de découpage',
+    sliceEngineSidecar: 'Sidecar serveur',
+    sliceEngineSidecarHint: "Le découpage s'exécute sur le serveur, dans le conteneur sidecar du trancheur.",
+    sliceEngineBrowser: 'Dans le navigateur',
+    sliceEngineBrowserHint: "Le découpage s'exécute sur cet appareil, sans serveur.",
     title: 'Paramètres',
     general: 'Général',
     // Tab names
@@ -4262,7 +4267,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Chargement des paramètres du trancheur…',
+    mode: {
+      simple: 'Simple',
+      advanced: 'Avancé',
+      expert: 'Expert',
+    },
+    searchPlaceholder: 'Rechercher un paramètre',
+    resetAll: 'Réinitialiser {{count}}',
+    resetOption: 'Réinitialiser à la valeur par défaut',
+    noMatches: 'Aucun paramètre ne correspond à cette recherche.',
+  },
   slice: {
+    processSettings: 'Paramètres de process',
+    processSettingsHint: 'Ajustez le profil choisi pour ce découpage. Tout ce que vous ne modifiez pas reste tel que défini par le profil.',
+    processSettingsChanged: '{{count}} modifiés',
+    processSettingsUnchanged: 'Valeurs du profil',
     title: 'Slicer le modèle',
     action: 'Slicer',
     actionAll: 'Slicer les {{count}} plateaux',

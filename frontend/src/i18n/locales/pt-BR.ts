@@ -1790,6 +1790,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Motor de fatiamento',
+    sliceEngineSidecar: 'Sidecar do servidor',
+    sliceEngineSidecarHint: 'O fatiamento roda no servidor, no contêiner sidecar do fatiador.',
+    sliceEngineBrowser: 'No navegador',
+    sliceEngineBrowserHint: 'O fatiamento roda neste dispositivo, sem envolver o servidor.',
     title: 'Configurações',
     general: 'Geral',
     // Tab names
@@ -4261,7 +4266,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Carregando configurações do fatiador…',
+    mode: {
+      simple: 'Simples',
+      advanced: 'Avançado',
+      expert: 'Especialista',
+    },
+    searchPlaceholder: 'Buscar configurações',
+    resetAll: 'Redefinir {{count}}',
+    resetOption: 'Redefinir para o padrão',
+    noMatches: 'Nenhuma configuração corresponde a esta busca.',
+  },
   slice: {
+    processSettings: 'Configurações de processo',
+    processSettingsHint: 'Ajuste o perfil escolhido para este fatiamento. Tudo o que você não alterar permanece como o perfil define.',
+    processSettingsChanged: '{{count}} alterados',
+    processSettingsUnchanged: 'Padrões do perfil',
     title: 'Fatiar modelo',
     action: 'Fatiar',
     actionAll: 'Fatiar todas as {{count}} bandejas',

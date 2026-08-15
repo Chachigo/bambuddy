@@ -1790,6 +1790,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: '切片引擎',
+    sliceEngineSidecar: '服务器 sidecar',
+    sliceEngineSidecarHint: '切片在服务器上的切片 sidecar 容器中运行。',
+    sliceEngineBrowser: '在浏览器中',
+    sliceEngineBrowserHint: '切片在本设备上运行，不经过服务器。',
     title: '设置',
     general: '通用',
     // Tab names
@@ -4261,7 +4266,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: '正在加载切片设置…',
+    mode: {
+      simple: '简单',
+      advanced: '高级',
+      expert: '专家',
+    },
+    searchPlaceholder: '搜索设置',
+    resetAll: '重置 {{count}} 项',
+    resetOption: '恢复默认值',
+    noMatches: '没有与搜索匹配的设置。',
+  },
   slice: {
+    processSettings: '工艺设置',
+    processSettingsHint: '为本次切片调整所选预设。未改动的项目仍按预设定义。',
+    processSettingsChanged: '已更改 {{count}} 项',
+    processSettingsUnchanged: '预设默认值',
     title: '切片模型',
     action: '切片',
     actionAll: '切片全部 {{count}} 个盘面',

@@ -54,6 +54,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Gauge, Palette } from 'lucide-react';
 import { registerSettingsSearch, getSettingsSearchEntries } from '../lib/settingsSearch';
 import type { UsersSubTab } from '../lib/settingsSearch';
+import { availableEngines, hasEngineChoice, resolveEngine, type SliceEngineId } from '../lib/sliceEngines';
 
 const validTabs = ['general', 'plugs', 'notifications', 'queue', 'filament', 'network', 'apikeys', 'virtual-printer', 'spoolbuddy', 'failure-detection', 'users', 'backup'] as const;
 type TabType = typeof validTabs[number];
@@ -1067,6 +1068,7 @@ export function SettingsPage() {
       Number(baseline.library_disk_warning_gb ?? 5) !== Number(localSettings.library_disk_warning_gb ?? 5) ||
       (baseline.camera_view_mode ?? 'window') !== (localSettings.camera_view_mode ?? 'window') ||
       (baseline.preferred_slicer ?? 'bambu_studio') !== (localSettings.preferred_slicer ?? 'bambu_studio') ||
+      resolveEngine(baseline.slice_engine) !== resolveEngine(localSettings.slice_engine) ||
       (baseline.open_in_slicer ?? null) !== (localSettings.open_in_slicer ?? null) ||
       (baseline.use_slicer_api ?? false) !== (localSettings.use_slicer_api ?? false) ||
       (baseline.orcaslicer_api_url ?? '') !== (localSettings.orcaslicer_api_url ?? '') ||
@@ -1175,6 +1177,7 @@ export function SettingsPage() {
         library_disk_warning_gb: localSettings.library_disk_warning_gb,
         camera_view_mode: localSettings.camera_view_mode,
         preferred_slicer: localSettings.preferred_slicer,
+        slice_engine: localSettings.slice_engine,
         open_in_slicer: localSettings.open_in_slicer,
         use_slicer_api: localSettings.use_slicer_api,
         orcaslicer_api_url: localSettings.orcaslicer_api_url,
@@ -5118,6 +5121,38 @@ export function SettingsPage() {
               </h3>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* Where slicing runs. Rendered only once more than one engine
+                  is actually usable — while the sidecar is the only one, a
+                  picker with a single entry is noise, and an entry the user
+                  can see but never select reads as a broken feature. Adding a
+                  browser engine to lib/sliceEngines.ts makes this appear. */}
+              {hasEngineChoice() && (
+                <div>
+                  <label className="block text-sm text-bambu-gray mb-1">
+                    {t('settings.sliceEngine')}
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={resolveEngine(localSettings.slice_engine)}
+                      onChange={(e) => updateSetting('slice_engine', e.target.value as SliceEngineId)}
+                      className="w-full px-3 py-2 pr-10 bg-bambu-dark border border-bambu-dark-tertiary rounded-lg text-white focus:border-bambu-green focus:outline-none appearance-none cursor-pointer"
+                    >
+                      {availableEngines().map((engine) => (
+                        <option key={engine.id} value={engine.id}>
+                          {t(engine.labelKey)}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-bambu-gray pointer-events-none" />
+                  </div>
+                  <p className="text-xs text-bambu-gray mt-1">
+                    {t(
+                      availableEngines().find((e) => e.id === resolveEngine(localSettings.slice_engine))?.descriptionKey
+                        ?? 'settings.sliceEngineSidecarHint',
+                    )}
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm text-bambu-gray mb-1">
                   {t('settings.preferredSlicer')}

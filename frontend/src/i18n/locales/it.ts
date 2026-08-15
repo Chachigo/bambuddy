@@ -1790,6 +1790,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Motore di slicing',
+    sliceEngineSidecar: 'Sidecar del server',
+    sliceEngineSidecarHint: 'Lo slicing viene eseguito sul server, nel container sidecar dello slicer.',
+    sliceEngineBrowser: 'Nel browser',
+    sliceEngineBrowserHint: 'Lo slicing viene eseguito su questo dispositivo, senza server.',
     title: 'Impostazioni',
     general: 'Generale',
     // Tab names
@@ -4261,7 +4266,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Caricamento impostazioni dello slicer…',
+    mode: {
+      simple: 'Semplice',
+      advanced: 'Avanzato',
+      expert: 'Esperto',
+    },
+    searchPlaceholder: 'Cerca impostazioni',
+    resetAll: 'Ripristina {{count}}',
+    resetOption: 'Ripristina il valore predefinito',
+    noMatches: 'Nessuna impostazione corrisponde a questa ricerca.',
+  },
   slice: {
+    processSettings: 'Impostazioni di processo',
+    processSettingsHint: 'Regola il profilo scelto per questo slice. Tutto ciò che non tocchi resta come definito dal profilo.',
+    processSettingsChanged: '{{count}} modificate',
+    processSettingsUnchanged: 'Valori del profilo',
     title: 'Slicing modello',
     action: 'Slice',
     actionAll: 'Slicia tutti i {{count}} piatti',

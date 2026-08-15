@@ -70,6 +70,7 @@ from backend.app.services.design_settings import (
     overrides_from_config,
 )
 from backend.app.services.plate_thumbnail import inject_plate_thumbnails_if_missing
+from backend.app.services.process_overrides import apply_process_overrides
 from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_stl_thumbnail
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 from backend.app.utils.threemf_tools import (
@@ -3733,6 +3734,14 @@ async def _run_slicer_with_fallback(
                 extract_design_process_overrides(primary_bytes),
                 request.design_overrides,
             )
+
+    # The user's own edits from the slice modal's settings panel. Applied last
+    # and for every model type (not just 3MF): unlike the two patches above this
+    # doesn't read anything out of the source file, it is what the user typed.
+    # Last write wins, so an explicit choice beats both the carried support
+    # config (#1881) and the designer's tweaks (#2622).
+    if request.process_overrides:
+        presets["process"] = apply_process_overrides(presets["process"], request.process_overrides)
 
     used_embedded_settings = False
     # "Slice as designed" (#2611): honour the file's embedded

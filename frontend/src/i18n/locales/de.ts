@@ -1790,6 +1790,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Slice-Engine',
+    sliceEngineSidecar: 'Server-Sidecar',
+    sliceEngineSidecarHint: 'Das Slicing läuft auf dem Server im Slicer-Sidecar-Container.',
+    sliceEngineBrowser: 'Im Browser',
+    sliceEngineBrowserHint: 'Das Slicing läuft auf diesem Gerät, ohne Server.',
     title: 'Einstellungen',
     general: 'Allgemein',
     // Tab names
@@ -4273,7 +4278,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Slicer-Einstellungen werden geladen…',
+    mode: {
+      simple: 'Einfach',
+      advanced: 'Erweitert',
+      expert: 'Experte',
+    },
+    searchPlaceholder: 'Einstellungen suchen',
+    resetAll: '{{count}} zurücksetzen',
+    resetOption: 'Auf Standard zurücksetzen',
+    noMatches: 'Keine Einstellungen passen zu dieser Suche.',
+  },
   slice: {
+    processSettings: 'Prozesseinstellungen',
+    processSettingsHint: 'Passen Sie das gewählte Profil für diesen Slice an. Alles, was Sie nicht ändern, bleibt wie im Profil definiert.',
+    processSettingsChanged: '{{count}} geändert',
+    processSettingsUnchanged: 'Profilstandard',
     title: 'Modell slicen',
     action: 'Slicen',
     actionAll: 'Alle {{count}} Plates slicen',

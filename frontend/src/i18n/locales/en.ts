@@ -1807,6 +1807,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Slice engine',
+    sliceEngineSidecar: 'Server sidecar',
+    sliceEngineSidecarHint: 'Slicing runs on the server, in the slicer sidecar container.',
+    sliceEngineBrowser: 'In browser',
+    sliceEngineBrowserHint: 'Slicing runs on this device, with no server involved.',
     title: 'Settings',
     general: 'General',
     // Tab names
@@ -4307,7 +4312,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Loading slicer settings…',
+    mode: {
+      simple: 'Simple',
+      advanced: 'Advanced',
+      expert: 'Expert',
+    },
+    searchPlaceholder: 'Search settings',
+    resetAll: 'Reset {{count}}',
+    resetOption: 'Reset to default',
+    noMatches: 'No settings match this search.',
+  },
   slice: {
+    processSettings: 'Process settings',
+    processSettingsHint: "Adjust the picked preset for this slice. Anything you don't touch stays as the preset defines it.",
+    processSettingsChanged: '{{count}} changed',
+    processSettingsUnchanged: 'Preset defaults',
     title: 'Slice model',
     action: 'Slice',
     actionAll: 'Slice all {{count}} plates',

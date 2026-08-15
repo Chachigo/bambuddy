@@ -1701,6 +1701,11 @@ export default {
     configureSettings: "Настроить виды обслуживания и интервалы",
   },
   settings: {
+    sliceEngine: 'Движок нарезки',
+    sliceEngineSidecar: 'Серверный sidecar',
+    sliceEngineSidecarHint: 'Нарезка выполняется на сервере, в контейнере sidecar слайсера.',
+    sliceEngineBrowser: 'В браузере',
+    sliceEngineBrowserHint: 'Нарезка выполняется на этом устройстве, без участия сервера.',
     title: "Настройки",
     general: "Общие",
     tabs: {
@@ -4056,7 +4061,23 @@ export default {
       },
     },
   },
+  slicerSettings: {
+    loading: 'Загрузка настроек слайсера…',
+    mode: {
+      simple: 'Простой',
+      advanced: 'Расширенный',
+      expert: 'Эксперт',
+    },
+    searchPlaceholder: 'Поиск параметров',
+    resetAll: 'Сбросить: {{count}}',
+    resetOption: 'Сбросить к значению по умолчанию',
+    noMatches: 'Нет параметров, соответствующих запросу.',
+  },
   slice: {
+    processSettings: 'Параметры процесса',
+    processSettingsHint: 'Настройте выбранный профиль для этой нарезки. Всё, что вы не измените, останется как задано в профиле.',
+    processSettingsChanged: 'изменено: {{count}}',
+    processSettingsUnchanged: 'Значения профиля',
     title: "Нарезка модели",
     action: "Нарезать",
     actionAll: "Нарезать все пластины ({{count}})",

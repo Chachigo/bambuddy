@@ -1792,6 +1792,11 @@ export default {
 
   // Ayarlar sayfası
   settings: {
+    sliceEngine: 'Dilimleme motoru',
+    sliceEngineSidecar: 'Sunucu sidecar',
+    sliceEngineSidecarHint: 'Dilimleme sunucuda, dilimleyici sidecar konteynerinde çalışır.',
+    sliceEngineBrowser: 'Tarayıcıda',
+    sliceEngineBrowserHint: 'Dilimleme sunucu olmadan bu cihazda çalışır.',
     title: 'Ayarlar',
     general: 'Genel',
     // Sekme adları
@@ -4262,7 +4267,23 @@ export default {
   },
 
   // Dilimle (SliceModal ile slicer-API entegrasyonu)
+  slicerSettings: {
+    loading: 'Dilimleyici ayarları yükleniyor…',
+    mode: {
+      simple: 'Basit',
+      advanced: 'Gelişmiş',
+      expert: 'Uzman',
+    },
+    searchPlaceholder: 'Ayarlarda ara',
+    resetAll: '{{count}} ayarı sıfırla',
+    resetOption: 'Varsayılana sıfırla',
+    noMatches: 'Bu aramayla eşleşen ayar yok.',
+  },
   slice: {
+    processSettings: 'İşlem ayarları',
+    processSettingsHint: 'Seçilen ön ayarı bu dilimleme için düzenleyin. Dokunmadığınız her şey ön ayardaki gibi kalır.',
+    processSettingsChanged: '{{count}} değişti',
+    processSettingsUnchanged: 'Ön ayar varsayılanları',
     title: 'Modeli dilimle',
     action: 'Dilimle',
     actionAll: 'Tüm {{count}} plakayı dilimle',

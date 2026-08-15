@@ -1807,6 +1807,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Рушій нарізання',
+    sliceEngineSidecar: 'Серверний sidecar',
+    sliceEngineSidecarHint: 'Нарізання виконується на сервері, у контейнері sidecar слайсера.',
+    sliceEngineBrowser: 'У браузері',
+    sliceEngineBrowserHint: 'Нарізання виконується на цьому пристрої, без сервера.',
     title: "Налаштування",
     general: "Загальні",
     // Tab names
@@ -4306,7 +4311,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Завантаження налаштувань слайсера…',
+    mode: {
+      simple: 'Простий',
+      advanced: 'Розширений',
+      expert: 'Експерт',
+    },
+    searchPlaceholder: 'Пошук параметрів',
+    resetAll: 'Скинути: {{count}}',
+    resetOption: 'Скинути до типового значення',
+    noMatches: 'Немає параметрів, що відповідають запиту.',
+  },
   slice: {
+    processSettings: 'Параметри процесу',
+    processSettingsHint: 'Налаштуйте вибраний профіль для цього нарізання. Усе, чого ви не змінили, лишається як визначено профілем.',
+    processSettingsChanged: 'змінено: {{count}}',
+    processSettingsUnchanged: 'Значення профілю',
     title: "Нарізання моделі",
     action: "Нарізати",
     actionAll: "Нарізати всі пластини ({{count}})",

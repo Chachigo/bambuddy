@@ -16,7 +16,9 @@ import {
 import { useSliceJobTracker } from '../contexts/SliceJobTrackerContext';
 import { useToast } from '../contexts/ToastContext';
 import { PlatePickerModal } from './PlatePickerModal';
+import SlicerSettingsPanel from './SlicerSettingsPanel';
 import type { DesignOverride, PlateFilament } from '../types/plates';
+import type { SettingValue } from '../types/slicerSettings';
 import {
   presetCompatibility,
   buildCompatibilityIndex,
@@ -254,6 +256,14 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
   // were tuned for the designer's printer and can be plain wrong on another.
   const [designKeys, setDesignKeys] = useState<Set<string>>(new Set());
   const [designExpanded, setDesignExpanded] = useState(false);
+
+  // Process settings the user edited by hand in the settings panel. Two shapes
+  // are kept: the panel's editing values, and the same set serialised into the
+  // string forms a process preset stores. The panel owns the option schema, so
+  // it hands back both rather than making this component re-derive the second.
+  const [processOverrides, setProcessOverrides] = useState<Record<string, SettingValue>>({});
+  const [serializedProcessOverrides, setSerializedProcessOverrides] = useState<Record<string, string | string[]>>({});
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
 
   // Slicer Pipelines (#1425) — apply a saved preset bundle to all four slots
   // with one pick, or save the current selection as a new pipeline.
@@ -553,6 +563,12 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
       // which the embedded-settings path never sends — so they are mutually
       // exclusive by construction (#2622).
       ...(!useEmbedded && designKeys.size > 0 ? { design_overrides: [...designKeys] } : {}),
+      // The user's own edits from the settings panel. Like design_overrides
+      // these patch the resolved process JSON, so the embedded-settings path
+      // (which sends no process JSON at all) cannot carry them.
+      ...(!useEmbedded && Object.keys(processOverrides).length > 0
+        ? { process_overrides: serializedProcessOverrides }
+        : {}),
       // Sent only when on. The backend defaults both to false, so omitting
       // them keeps the request identical to what older clients send.
       ...(autoOrient ? { auto_orient: true } : {}),
@@ -885,6 +901,47 @@ export function SliceModal({ source, onClose }: SliceModalProps) {
                           </span>
                         </label>
                       ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Process settings, mirroring OrcaSlicer's own Print Settings
+                  tabs. Collapsed by default: the common case is slicing with a
+                  preset as-is, and 348 options unfolded would bury the preset
+                  pickers above. Hidden entirely in embedded mode, where no
+                  process JSON is sent for these to patch. */}
+              {!useEmbedded && (
+                <div className="rounded border border-bambu-dark-tertiary p-3">
+                  <button
+                    type="button"
+                    onClick={() => setSettingsExpanded((v) => !v)}
+                    className="flex w-full items-center justify-between gap-2 text-left"
+                  >
+                    <span className="text-sm text-white">
+                      {t('slice.processSettings', 'Process settings')}
+                      <span className="block text-xs text-bambu-gray/70">
+                        {t('slice.processSettingsHint', "Adjust the picked preset for this slice. Anything you don't touch stays as the preset defines it.")}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs text-bambu-gray">
+                      {Object.keys(serializedProcessOverrides).length > 0
+                        ? t('slice.processSettingsChanged', '{{count}} changed', {
+                            count: Object.keys(serializedProcessOverrides).length,
+                          })
+                        : t('slice.processSettingsUnchanged', 'Preset defaults')}
+                    </span>
+                  </button>
+                  {settingsExpanded && (
+                    <div className="mt-3 border-t border-bambu-dark-tertiary pt-3">
+                      <SlicerSettingsPanel
+                        values={processOverrides}
+                        onChange={(values, serialized) => {
+                          setProcessOverrides(values);
+                          setSerializedProcessOverrides(serialized);
+                        }}
+                        disabled={isEnqueuing}
+                      />
                     </div>
                   )}
                 </div>

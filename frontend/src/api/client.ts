@@ -1298,6 +1298,9 @@ export interface AppSettings {
   // Desktop "Open in Slicer" override (#1329). Null inherits from
   // preferred_slicer so existing installs behave identically.
   open_in_slicer: 'bambu_studio' | 'orcaslicer' | null;
+  // Where slicing runs, independent of which slicer binary the sidecar drives.
+  // Only 'sidecar' is implemented today; see lib/sliceEngines.ts.
+  slice_engine: 'sidecar' | 'browser';
   // Use the slicer-API sidecar for slicing (in-app modal) vs desktop URI scheme
   use_slicer_api: boolean;
   // Per-install sidecar URLs. Empty string falls back to the env defaults.
@@ -1636,6 +1639,15 @@ export interface SliceRequest {
   // instead of the picked profile triplet. The preset refs above are still
   // required by the backend validator but go unused on this path.
   use_embedded_settings?: boolean;
+  // Process settings the user edited in the slice modal's settings panel,
+  // already serialised into the string forms a process preset stores ("1" for
+  // a bool, "20%" for a percent, a list for the per-extruder vectors). Patched
+  // onto the resolved process JSON after the designer's carried tweaks, so an
+  // explicit choice here wins. Omitted when the panel is untouched.
+  process_overrides?: Record<string, string | string[]>;
+  // Design settings carried from the source 3MF (#2622) — a list of keys the
+  // file flags as changed from the system preset, not values.
+  design_overrides?: string[];
   // Layout passes the slicer runs before slicing (#2548), both off by
   // default because they move or rotate the objects the user laid out.
   // Unlike the fields above these are CLI actions rather than profile

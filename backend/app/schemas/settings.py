@@ -286,6 +286,19 @@ class AppSettings(BaseModel):
         ),
     )
 
+    # Where slicing runs. Orthogonal to ``preferred_slicer``, which only says
+    # *which slicer binary* the sidecar drives: a browser engine is a different
+    # execution site, not a different binary choice. Kept as its own key so the
+    # two never have to encode impossible combinations.
+    #
+    # Only "sidecar" is implemented today; the slice modal offers a per-job
+    # choice when more than one engine is available, and hides the control
+    # entirely while there is only one.
+    slice_engine: str = Field(
+        default="sidecar",
+        description="Default execution site for slicing: 'sidecar' (server-side API) or 'browser'",
+    )
+
     # Slicer dispatch mode: when True, "Slice" actions open the in-app
     # SliceModal and call the slicer-API sidecar. When False (default), they
     # hand off to the user's local desktop slicer via URI scheme — preserving
@@ -638,6 +651,7 @@ class AppSettingsUpdate(BaseModel):
     camera_view_mode: str | None = None
     preferred_slicer: str | None = None
     open_in_slicer: str | None = None
+    slice_engine: str | None = None
     use_slicer_api: bool | None = None
     orcaslicer_api_url: str | None = None
     bambu_studio_api_url: str | None = None

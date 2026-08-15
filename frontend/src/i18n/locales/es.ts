@@ -1791,6 +1791,11 @@ export default {
 
   // Settings page
   settings: {
+    sliceEngine: 'Motor de laminado',
+    sliceEngineSidecar: 'Sidecar del servidor',
+    sliceEngineSidecarHint: 'El laminado se ejecuta en el servidor, en el contenedor sidecar del laminador.',
+    sliceEngineBrowser: 'En el navegador',
+    sliceEngineBrowserHint: 'El laminado se ejecuta en este dispositivo, sin servidor.',
     title: 'Ajustes',
     general: 'General',
     // Tab names
@@ -4275,7 +4280,23 @@ export default {
   },
 
   // Slice (slicer-API integration via SliceModal)
+  slicerSettings: {
+    loading: 'Cargando ajustes del laminador…',
+    mode: {
+      simple: 'Simple',
+      advanced: 'Avanzado',
+      expert: 'Experto',
+    },
+    searchPlaceholder: 'Buscar ajustes',
+    resetAll: 'Restablecer {{count}}',
+    resetOption: 'Restablecer al valor predeterminado',
+    noMatches: 'Ningún ajuste coincide con esta búsqueda.',
+  },
   slice: {
+    processSettings: 'Ajustes de proceso',
+    processSettingsHint: 'Ajusta el perfil seleccionado para este corte. Todo lo que no toques se mantiene como lo define el perfil.',
+    processSettingsChanged: '{{count}} cambiados',
+    processSettingsUnchanged: 'Valores del perfil',
     title: 'Laminar modelo',
     action: 'Laminar',
     actionAll: 'Laminar las {{count}} bandejas',
