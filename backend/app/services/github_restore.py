@@ -48,6 +48,7 @@ from backend.app.models.project import Project
 from backend.app.models.settings import Settings
 from backend.app.models.spool import Spool
 from backend.app.models.spool_usage_history import SpoolUsageHistory
+from backend.app.models.user import User
 from backend.app.schemas.github_backup import RestoreCategory
 from backend.app.services.git_providers.factory import get_provider_backend
 from backend.app.services.printer_manager import printer_manager
@@ -760,6 +761,19 @@ class GitHubRestoreService:
 
         valid_printers = set((await db.execute(select(Printer.id))).scalars().all())
         valid_projects = set((await db.execute(select(Project.id))).scalars().all())
+        # Ownership decides visibility, not just attribution: an archive with a
+        # NULL created_by_id is a 404 to every caller without archives:read_all
+        # (_ensure_archive_visible fails closed on it) and never appears in the
+        # ownership-scoped list queries. Hoisted like the two above.
+        #
+        # Note this is the one place a raw backup id is reused, against the
+        # module's own rule at the top of the file. Users have no natural key the
+        # backup carries today, and the id is validated rather than trusted, so a
+        # *stale* id clears instead of pointing somewhere wrong. What it cannot
+        # catch is a live id belonging to a different person on a different
+        # instance. Collecting username and resolving on that would close it;
+        # raised with the maintainer rather than decided here.
+        valid_users = set((await db.execute(select(User.id))).scalars().all())
 
         # Only metadata is backed up, never the 3MF/thumbnail bytes, and
         # print_archives.file_path is NOT NULL — so inserted rows get an empty
@@ -817,8 +831,20 @@ class GitHubRestoreService:
             if project_id is not None and project_id not in valid_projects:
                 tally.note("Some archives referenced projects that no longer exist — link cleared")
                 project_id = None
+            created_by_id = entry.get("created_by_id")
+            if created_by_id is not None and created_by_id not in valid_users:
+                # Coerced rather than failing the row: the archive is still worth
+                # having, and an admin can reassign it. Said out loud because a
+                # cleared owner is not silent-safe — the archive becomes visible
+                # only to archives:read_all until someone does.
+                tally.note(
+                    "Some archives referenced users that no longer exist — owner cleared, so they are "
+                    "visible only to users with the archives:read_all permission until an admin reassigns them"
+                )
+                created_by_id = None
             fields["printer_id"] = printer_id
             fields["project_id"] = project_id
+            fields["created_by_id"] = created_by_id
 
             if existing is not None:
                 if old_id is not None:

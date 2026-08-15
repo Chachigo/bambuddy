@@ -869,6 +869,13 @@ class GitHubBackupService:
                 # deleted_at is what lets a restore put them back the way they
                 # were instead of resurrecting them as visible archives.
                 "deleted_at": str(a.deleted_at) if a.deleted_at else None,
+                # Who owns the archive, for the same reason deleted_at is here:
+                # it is not decoration, it is what the access check runs on.
+                # _ensure_archive_visible (api/routes/archives.py) fails closed on
+                # a NULL created_by_id and the list paths filter on it, so a
+                # restored row without it is invisible to everyone but an admin —
+                # while the restore reports it restored.
+                "created_by_id": a.created_by_id,
             }
             archive_list.append(archive_data)
 

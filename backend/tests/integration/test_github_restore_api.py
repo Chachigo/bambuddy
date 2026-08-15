@@ -4,6 +4,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+
+from backend.tests.integration.test_ownership_permissions import TestOwnershipPermissionsSetup
 
 
 @pytest.fixture(autouse=True)
@@ -274,6 +277,83 @@ class TestStatusExposesRestoreState:
         response = await async_client.get("/api/v1/github-backup/status")
         assert response.status_code == 200
         assert response.json()["restore_running"] is False
+
+
+class TestRestoredArchivesAreVisibleToTheirOwner(TestOwnershipPermissionsSetup):
+    """The archive-ownership blocker, proved through the route that enforces it.
+
+    ``_ensure_archive_visible`` fails closed on a NULL ``created_by_id`` — 404 for
+    any caller without ``archives:read_all`` — so before the collector and the
+    restore carried the column across, a multi-user instance got archives the
+    tally called restored and their owner could not open.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_owning_non_admin_can_open_a_restored_archive(
+        self, async_client: AsyncClient, auth_setup, db_session
+    ):
+        from backend.app.models.archive import PrintArchive
+        from backend.app.services.github_restore import _CategoryTally, github_restore_service
+
+        owner_id = auth_setup["operator_user"]["id"]
+        payload = {
+            "archives": [
+                {
+                    "id": 77,
+                    "filename": "benchy.3mf",
+                    "file_size": 2048,
+                    "content_hash": "abc123",
+                    "print_name": "Benchy",
+                    "started_at": "2026-03-01 10:00:00",
+                    "created_at": "2026-03-01 10:00:00",
+                    "created_by_id": owner_id,
+                }
+            ]
+        }
+        await github_restore_service._restore_archives(db_session, payload, False, _CategoryTally(), {})
+        await db_session.commit()
+
+        restored = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert restored.id != 77, "the backup's primary key must not be reused"
+
+        response = await async_client.get(
+            f"/api/v1/archives/{restored.id}",
+            headers={"Authorization": f"Bearer {auth_setup['operator_token']}"},
+        )
+
+        assert response.status_code == 200, "the owner cannot see their own restored archive"
+        assert response.json()["print_name"] == "Benchy"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_different_operator_still_cannot(self, async_client: AsyncClient, auth_setup, db_session):
+        """Control: carrying the owner across must not widen who can read it."""
+        from backend.app.models.archive import PrintArchive
+        from backend.app.services.github_restore import _CategoryTally, github_restore_service
+
+        payload = {
+            "archives": [
+                {
+                    "id": 77,
+                    "filename": "benchy.3mf",
+                    "file_size": 2048,
+                    "content_hash": "abc123",
+                    "started_at": "2026-03-01 10:00:00",
+                    "created_by_id": auth_setup["operator_user"]["id"],
+                }
+            ]
+        }
+        await github_restore_service._restore_archives(db_session, payload, False, _CategoryTally(), {})
+        await db_session.commit()
+
+        restored = (await db_session.execute(select(PrintArchive))).scalar_one()
+        response = await async_client.get(
+            f"/api/v1/archives/{restored.id}",
+            headers={"Authorization": f"Bearer {auth_setup['operator2_token']}"},
+        )
+
+        assert response.status_code == 404
 
 
 class TestRestoreDoesNotOpenTheMetricsEndpoint:

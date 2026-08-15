@@ -17,6 +17,7 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.settings import Settings
 from backend.app.models.spool import Spool
 from backend.app.models.spool_usage_history import SpoolUsageHistory
+from backend.app.models.user import User
 from backend.app.schemas.github_backup import GitHubRestoreRequest, RestoreCategory
 from backend.app.services.github_restore import (
     _COMPANION_CREDENTIAL_ENV,
@@ -1300,6 +1301,149 @@ class TestSoftDeletedArchiveRoundTrip:
 
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.deleted_at == deleted_at, "a deleted archive must not come back visible"
+
+
+class TestRestoredArchiveOwnership:
+    """A restored archive without an owner is invisible to the person who owns it.
+
+    ``created_by_id`` is not attribution, it is the column the access check runs
+    on: ``_ensure_archive_visible`` fails closed on NULL (404 for any caller
+    without ``archives:read_all``) and the list paths filter
+    ``created_by_id == user.id``. So on a multi-user instance the tally reported
+    archives restored while their owner could neither list nor open them.
+    """
+
+    def _entry(self, **overrides):
+        entry = {
+            "id": 77,
+            "filename": "benchy.3mf",
+            "file_size": 2048,
+            "content_hash": "abc123",
+            "started_at": "2026-03-01 10:00:00",
+            "created_at": "2026-03-01 10:00:00",
+        }
+        entry.update(overrides)
+        return entry
+
+    async def _user(self, db, username="alice"):
+        user = User(username=username, role="operator")
+        db.add(user)
+        await db.flush()
+        return user
+
+    @pytest.mark.asyncio
+    async def test_owner_is_carried_across(self, db_session):
+        user = await self._user(db_session)
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=user.id)]}, False, tally, {}
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == user.id
+        assert not any("owner cleared" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_owner_is_cleared_with_a_note_not_failed(self, db_session):
+        """The archive is still worth having; an admin can reassign it."""
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=4242)]}, False, tally, {}
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id is None
+        assert tally.restored == 1 and tally.failed == 0
+        assert any("owner cleared" in note and "archives:read_all" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_the_owner_note_is_emitted_once_for_many_rows(self, db_session):
+        tally = _CategoryTally()
+        archives = [
+            self._entry(id=1, content_hash="h1", filename="a.3mf", created_by_id=4242),
+            self._entry(id=2, content_hash="h2", filename="b.3mf", created_by_id=4243),
+        ]
+
+        await _service()._restore_archives(db_session, {"archives": archives}, False, tally, {})
+        await db_session.commit()
+
+        assert sum(1 for note in tally.notes if "owner cleared" in note) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_backup_without_the_key_still_restores(self, db_session):
+        """Backups taken before the collector recorded it just can't know the owner."""
+        tally = _CategoryTally()
+
+        await _service()._restore_archives(db_session, {"archives": [self._entry()]}, False, tally, {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id is None
+        assert not any("owner cleared" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_overwrite_makes_the_local_owner_match_the_backup(self, db_session):
+        alice = await self._user(db_session, "alice")
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=alice.id)]}, True, _CategoryTally(), {}
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == alice.id
+
+    @pytest.mark.asyncio
+    async def test_owner_survives_collect_then_restore(self, db_session):
+        """Both halves, because each looks harmless alone.
+
+        The collector never wrote the key, so there was nothing for the restore
+        to carry across even once it wanted to.
+        """
+        from backend.app.services.github_backup import github_backup_service
+
+        user = await self._user(db_session)
+        db_session.add(
+            PrintArchive(
+                filename="owned.3mf",
+                file_path="",
+                file_size=1024,
+                content_hash="hash-owned",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=user.id,
+            )
+        )
+        await db_session.commit()
+
+        files: dict = {}
+        await github_backup_service._collect_archives(db_session, files)
+        payload = files[ARCHIVES_PATH]
+        assert payload["archives"][0]["created_by_id"] == user.id
+
+        await db_session.execute(PrintArchive.__table__.delete())
+        await db_session.commit()
+
+        await _service()._restore_archives(db_session, payload, False, _CategoryTally(), {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == user.id, "a restored archive its owner cannot see is not restored"
 
 
 class TestCategoryPathMapping:
