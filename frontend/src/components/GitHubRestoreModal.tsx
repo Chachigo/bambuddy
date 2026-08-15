@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -81,10 +81,6 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
   const [overwriteExisting, setOverwriteExisting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [result, setResult] = useState<GitHubRestoreResponse | null>(null);
-  // The ['settings'] cache entry as it stood when the restore returned — i.e.
-  // the copy SettingsPage's form state was built from. Used to pin the cache
-  // while a settings restore result is on screen; see the effect below.
-  const pinnedSettings = useRef<unknown>(undefined);
 
   const commitsQuery = useQuery({
     queryKey: ['github-backup-commits'],
@@ -158,32 +154,33 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
       // above a message saying nothing had been restored. Only a real success
       // gets the panel; a failure keeps the form and shows the red block below.
       if (data.success) {
-        pinnedSettings.current = queryClient.getQueryData(['settings']);
         setResult(data);
-        // A restore rewrites rows these caches hold.
+        // A restore rewrites rows these caches hold. ['settings'] is one of
+        // them: until #2716 was fixed on dev, invalidating it made
+        // SettingsPage's debounced auto-save write the pre-restore form state
+        // straight back over the restore, so this modal skipped it and pinned
+        // the cache instead. That page now reconciles a moved server snapshot
+        // field by field, so the restore no longer needs an exception.
         queryClient.invalidateQueries({ queryKey: ['spools'] });
         queryClient.invalidateQueries({ queryKey: ['archives'] });
+        queryClient.invalidateQueries({ queryKey: ['settings'] });
       }
       // A failure that got as far as resolving the commit still writes a log row
       // (status "failed"), so refresh the history and status either way.
       queryClient.invalidateQueries({ queryKey: ['github-backup-logs'] });
       queryClient.invalidateQueries({ queryKey: ['github-backup-status'] });
-      // ['settings'] is deliberately NOT invalidated. SettingsPage — which
-      // renders this modal — keeps a `localSettings` copy of the form state and
-      // a debounced effect that PATCHes it back whenever the server copy
-      // differs. Refetching here makes that effect write the pre-restore values
-      // over everything we just restored, 500 ms later and silently: 75 of the
-      // ~80 keys in a backup are in its save payload. A reload is the only safe
-      // resync, so `closeModal` below forces one instead.
     },
     onError: () => setShowConfirm(false),
   });
 
   const isRestoring = restoreMutation.isPending;
 
-  // Leaving this modal mounted after a settings restore lets SettingsPage
-  // overwrite what was restored (see the onSuccess comment), so every exit path
-  // reloads rather than just closing.
+  // A settings restore rewrites rows the whole app reads, and not all of them
+  // through a query this modal can invalidate. The interface language is applied
+  // by i18n.changeLanguage, called only from the SettingsPage dropdown and the
+  // appliance-locale bootstrap; the auth state comes from AuthProvider's
+  // mount-time getAuthStatus, not from ['settings'] at all. So every exit path
+  // after a settings restore reloads rather than just closing.
   const settingsRestored = Boolean(result && 'settings' in result.results);
   const closeModal = useCallback(() => {
     if (settingsRestored) {
@@ -192,37 +189,6 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
     }
     onClose();
   }, [settingsRestored, onClose]);
-
-  // Not invalidating ['settings'] above keeps the page from reverting a restore
-  // *we* triggered a refetch for, but it is not enough on its own: the query
-  // still refetches on window focus and on reconnect (both default to true, and
-  // ['settings'] has other always-mounted observers that trigger it), and any
-  // such refetch lands the restored values in the cache while SettingsPage's
-  // `localSettings` still holds the pre-restore ones — which is exactly the
-  // state its debounced effect PATCHes back. Tabbing away from the result panel
-  // for a minute and back was enough to lose the restore.
-  //
-  // The refetch cannot be prevented from here, so pin the cache instead: while
-  // the result panel is up, any fresh ['settings'] payload is written straight
-  // back to the copy the page already agrees with, so `hasChanges` stays false
-  // and nothing is saved over the restore. Every exit path reloads (above), and
-  // that reload is what resyncs the page for real.
-  useEffect(() => {
-    if (!settingsRestored) return;
-    const pinned = pinnedSettings.current;
-    if (pinned === undefined) return;
-    // Compared by value, not identity: react-query's structural sharing stores a
-    // copy rather than the object handed to setQueryData, so an identity check
-    // would never match its own write and would recurse until the stack blew.
-    const pinnedJson = JSON.stringify(pinned);
-    return queryClient.getQueryCache().subscribe((event) => {
-      if (event.type !== 'updated' || event.action.type !== 'success') return;
-      const key = event.query.queryKey;
-      if (!Array.isArray(key) || key.length !== 1 || key[0] !== 'settings') return;
-      if (JSON.stringify(event.query.state.data) === pinnedJson) return;
-      queryClient.setQueryData(['settings'], pinned);
-    });
-  }, [settingsRestored, queryClient]);
 
   // Close on Escape, except while a restore is in flight.
   useEffect(() => {

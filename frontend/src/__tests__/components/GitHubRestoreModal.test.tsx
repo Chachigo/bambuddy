@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
-import { QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { render } from '../utils';
 import { server } from '../mocks/server';
 import { GitHubRestoreModal } from '../../components/GitHubRestoreModal';
@@ -538,14 +538,13 @@ describe('GitHubRestoreModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  // Regression guard for the settings clobber found in manual testing (#2656).
-  // SettingsPage — which renders this modal — holds a `localSettings` copy of the
-  // form state and a debounced effect that PATCHes it back whenever the server
-  // copy differs. Refetching ['settings'] here therefore made the page overwrite
-  // the restore with the pre-restore values, silently, ~500 ms later. 75 of the
-  // ~80 keys in a real backup sit in that save payload, so a restore reported as
-  // "77 restored, 0 failed" left almost nothing behind.
-  describe('settings restore must not be undone by SettingsPage', () => {
+  // A settings restore has to reach the rest of the app. It used to be the
+  // opposite problem: SettingsPage's debounced auto-save wrote its pre-restore
+  // form state back over the restore whenever ['settings'] refetched, so this
+  // modal skipped that invalidation and pinned the cache instead. #2716 fixed
+  // the page — it now reconciles a moved server snapshot field by field — and
+  // the workaround came out with this commit.
+  describe('a settings restore reaches the rest of the app', () => {
     /** Runs a restore returning `results`, leaving the modal on its summary. */
     async function restoreWith(results: Record<string, unknown>, onClose = vi.fn()) {
       server.use(
@@ -586,29 +585,13 @@ describe('GitHubRestoreModal', () => {
       };
     }
 
-    /**
-     * Stands in for SettingsPage: hands the test the provider's QueryClient and
-     * keeps an observer on ['settings'] for as long as the modal is mounted, so
-     * the entry survives the test client's `gcTime: 0`. Disabled, because these
-     * tests write the cache directly rather than fetching it.
-     */
-    function makeSettingsProbe(capture: (client: QueryClient) => void) {
-      return function SettingsProbe() {
-        capture(useQueryClient());
-        useQuery({ queryKey: ['settings'], queryFn: async () => null, enabled: false });
-        return null;
-      };
-    }
-
-    it('never invalidates the settings query', async () => {
+    it('invalidates the settings query alongside the other rewritten caches', async () => {
       const invalidate = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
       await restoreWith({ settings: { restored: 77, skipped: 3, failed: 0, notes: [] } });
 
       const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
-      // The caches this restore genuinely rewrites are still refreshed...
       expect(keys).toContain(JSON.stringify(['spools']));
-      // ...but ['settings'] must not be, or the page writes the old values back.
-      expect(keys).not.toContain(JSON.stringify(['settings']));
+      expect(keys).toContain(JSON.stringify(['settings']));
       invalidate.mockRestore();
     });
 
@@ -623,99 +606,13 @@ describe('GitHubRestoreModal', () => {
         await userEvent.click(closeButtons[closeButtons.length - 1]);
 
         expect(loc.reload).toHaveBeenCalled();
-        // Closing in place would leave SettingsPage mounted and armed.
+        // Invalidating ['settings'] only resyncs what reads that query. The
+        // interface language and the auth state do not, so closing in place
+        // would leave both showing their pre-restore values.
         expect(onClose).not.toHaveBeenCalled();
       } finally {
         loc.restore();
       }
-    });
-
-    // Not invalidating ['settings'] only closes the refetch *this* modal caused.
-    // The query still refetches on window focus and on reconnect — both default
-    // to true, and ['settings'] has other always-mounted observers — and a
-    // refetch landing while the result panel is up puts the restored values in
-    // the cache next to SettingsPage's pre-restore `localSettings`, which is
-    // precisely the state its debounced effect writes back. So the cache is
-    // pinned to the copy the page already agrees with until the exit reload.
-    it('pins the settings cache against a background refetch landing under the result panel', async () => {
-      const preRestore = { currency: 'EUR' };
-      let client: QueryClient | null = null;
-      const Probe = makeSettingsProbe((c) => {
-        client = c;
-      });
-
-      server.use(
-        http.post('/api/v1/github-backup/restore', () =>
-          HttpResponse.json({
-            success: true,
-            message: 'Restored 77 item(s) from aaa1111',
-            log_id: 7,
-            ref: mockPreview.ref,
-            results: { settings: { restored: 77, skipped: 3, failed: 0, notes: [] } },
-          })
-        )
-      );
-      render(
-        <>
-          <Probe />
-          <GitHubRestoreModal onClose={vi.fn()} />
-        </>
-      );
-      // The copy SettingsPage's form state was built from.
-      client!.setQueryData(['settings'], preRestore);
-
-      const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
-      await userEvent.click(checkboxes[2]);
-      await userEvent.click(screen.getByRole('button', { name: /Restore$/ }));
-      await waitFor(() => screen.getByText('Restore from backup?'));
-      const confirmButtons = screen.getAllByRole('button', { name: /Restore$/ });
-      await userEvent.click(confirmButtons[confirmButtons.length - 1]);
-      await waitFor(() => screen.getByText('Restored 77 item(s) from aaa1111'));
-
-      // A focus/reconnect refetch lands the restored server values.
-      client!.setQueryData(['settings'], { currency: 'USD' });
-
-      // Pinned back, so SettingsPage sees no divergence and saves nothing.
-      expect(client!.getQueryData(['settings'])).toEqual(preRestore);
-    });
-
-    it('leaves the settings cache alone when settings were not restored', async () => {
-      let client: QueryClient | null = null;
-      const Probe = makeSettingsProbe((c) => {
-        client = c;
-      });
-      server.use(
-        http.post('/api/v1/github-backup/restore', () =>
-          HttpResponse.json({
-            success: true,
-            message: 'Restored 4 item(s) from aaa1111',
-            log_id: 8,
-            ref: mockPreview.ref,
-            results: { spools: { restored: 4, skipped: 0, failed: 0, notes: [] } },
-          })
-        )
-      );
-      render(
-        <>
-          <Probe />
-          <GitHubRestoreModal onClose={vi.fn()} />
-        </>
-      );
-      client!.setQueryData(['settings'], { currency: 'EUR' });
-
-      const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
-      await userEvent.click(checkboxes[1]);
-      await userEvent.click(screen.getByRole('button', { name: /Restore$/ }));
-      await waitFor(() => screen.getByText('Restore from backup?'));
-      const confirmButtons = screen.getAllByRole('button', { name: /Restore$/ });
-      await userEvent.click(confirmButtons[confirmButtons.length - 1]);
-      await waitFor(() => screen.getByText('Restored 4 item(s) from aaa1111'));
-
-      const fresh = { currency: 'USD' };
-      client!.setQueryData(['settings'], fresh);
-      // No settings were touched, so there is nothing to protect and normal
-      // refetching must keep working.
-      expect(client!.getQueryData(['settings'])).toEqual(fresh);
     });
 
     it('closes normally when settings were not part of the restore', async () => {
