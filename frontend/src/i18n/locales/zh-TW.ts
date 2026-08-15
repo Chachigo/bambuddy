@@ -4889,6 +4889,7 @@ export default {
         settingsNoPayload: '資料中沒有設定',
         settingsCredentialsWillSkip: '將略過 {{count}} 個疑似憑證的鍵',
         settingsCompanionWillSkip: '將略過 {{count}} 個疑似憑證的鍵，依賴它們的 {{companion}} 個開關會維持關閉',
+        settingsCompanionOnlyWillSkip: '{{companion}} 個開關會維持關閉 - 每個開關所需的憑證無法從備份還原',
         spoolsUsageCount: '另有 {{count}} 筆使用紀錄',
         archivesMetadataOnly: '僅中繼資料 - 3MF 檔案與縮圖不在 Git 備份中',
         kprofilesPrinterCount: '涵蓋 {{count}} 台印表機',

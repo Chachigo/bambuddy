@@ -415,6 +415,40 @@ class TestRestoreDoesNotOpenTheMetricsEndpoint:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"prometheus_enabled": "true", "currency": "EUR"},
+            {"prometheus_enabled": "true", "prometheus_token": "", "currency": "EUR"},
+        ],
+        ids=["token-key-absent", "token-blank"],
+    )
+    async def test_a_token_less_backup_leaves_the_endpoint_shut_too(
+        self, async_client: AsyncClient, db_session, payload
+    ):
+        """The route the test above does not cover, and the likelier one.
+
+        ``prometheus_token`` is optional, so an instance can enable Prometheus
+        without ever setting it. Such a backup carries the toggle and no usable
+        token — and because the companion rule's second condition asks whether
+        the *backup* had a credential, that payload used to sail straight past
+        the refusal and open the endpoint the case above proves shut.
+        """
+        from backend.app.services.github_restore import _CategoryTally, github_restore_service
+
+        assert (await async_client.get("/api/v1/metrics")).status_code == 404
+
+        tally = _CategoryTally()
+        await github_restore_service._restore_settings(db_session, {"settings": payload}, overwrite=False, tally=tally)
+        await db_session.commit()
+
+        response = await async_client.get("/api/v1/metrics")
+        assert response.status_code == 404, "a token-less Prometheus backup opened the metrics endpoint"
+        assert "bambuddy_build_info" not in response.text
+        assert any(note["code"] == "settingsCompanionSkipped" for note in tally.notes)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_an_instance_with_its_own_token_still_gets_the_toggle_back(
         self, async_client: AsyncClient, db_session
     ):

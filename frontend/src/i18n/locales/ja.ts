@@ -4901,6 +4901,7 @@ export default {
         settingsNoPayload: 'データに設定が含まれていません',
         settingsCredentialsWillSkip: '認証情報のようなキー {{count}} 件はスキップされます',
         settingsCompanionWillSkip: '認証情報のようなキー {{count}} 件はスキップされ、それらに依存するスイッチ {{companion}} 件はオフのままになります',
+        settingsCompanionOnlyWillSkip: 'スイッチ {{companion}} 件はオフのままになります - それぞれに必要な認証情報はバックアップから復元できません',
         spoolsUsageCount: '使用履歴 {{count}} 件を含む',
         archivesMetadataOnly: 'メタデータのみ - 3MF ファイルとサムネイルは Git バックアップに含まれません',
         kprofilesPrinterCount: 'プリンター {{count}} 台分',

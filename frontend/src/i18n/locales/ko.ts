@@ -4666,6 +4666,7 @@ export default {
         settingsNoPayload: '데이터에 설정이 없습니다',
         settingsCredentialsWillSkip: '자격 증명처럼 보이는 키 {{count}}개를 건너뜁니다',
         settingsCompanionWillSkip: '자격 증명처럼 보이는 키 {{count}}개를 건너뛰고, 이에 의존하는 스위치 {{companion}}개는 꺼진 상태로 둡니다',
+        settingsCompanionOnlyWillSkip: '스위치 {{companion}}개는 꺼진 상태로 둡니다 - 각각에 필요한 자격 증명은 백업에서 복원할 수 없습니다',
         spoolsUsageCount: '사용 기록 {{count}}건 포함',
         archivesMetadataOnly: '메타데이터만 - 3MF 파일과 썸네일은 Git 백업에 포함되지 않습니다',
         kprofilesPrinterCount: '프린터 {{count}}대 분량',

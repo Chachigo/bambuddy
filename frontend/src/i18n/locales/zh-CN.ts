@@ -4889,6 +4889,7 @@ export default {
         settingsNoPayload: '数据中没有设置',
         settingsCredentialsWillSkip: '将跳过 {{count}} 个疑似凭据的键',
         settingsCompanionWillSkip: '将跳过 {{count}} 个疑似凭据的键，依赖它们的 {{companion}} 个开关将保持关闭',
+        settingsCompanionOnlyWillSkip: '{{companion}} 个开关将保持关闭 - 每个开关所需的凭据无法从备份中恢复',
         spoolsUsageCount: '另有 {{count}} 条使用记录',
         archivesMetadataOnly: '仅元数据 - 3MF 文件和缩略图不在 Git 备份中',
         kprofilesPrinterCount: '涉及 {{count}} 台打印机',

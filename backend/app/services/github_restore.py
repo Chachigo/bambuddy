@@ -179,6 +179,25 @@ _COMPANION_CREDENTIALS = {
 # both set, so an env-configured instance has a usable credential and no row.
 _COMPANION_CREDENTIAL_ENV = {"ha_token": "HA_TOKEN"}
 
+# The pairs above divide into two classes, because "did the *backup* carry a
+# usable credential?" does not mean the same thing for both.
+#
+# For the availability pairs it is the condition that stops the rule
+# over-refusing. An anonymous MQTT broker and an anonymous LDAP bind are working
+# configs, so a backup with an empty credential is describing something that
+# works, and refusing its toggle would be a false positive. Those pairs only
+# matter when the restore would produce a config weaker than *both* the backup
+# and the local instance.
+#
+# For the exposure pair it does not transfer. An empty prometheus_token removes
+# /api/v1/metrics' only gate (the route is on PUBLIC_API_ROUTES and its own
+# check is ``if token:``), so the exposure is a property of the toggle itself,
+# not of a downgrade relative to the backup: a backup taken on an instance that
+# enabled Prometheus *without* a token — the field is optional and defaults to
+# "" — is the more likely source of one, not the less. So an exposure toggle
+# skips this condition and is judged on local state alone.
+_COMPANION_EXPOSURE_TOGGLES = frozenset({"prometheus_enabled"})
+
 
 def _setting_value_is_true(value: object) -> bool:
     """True if a settings *payload* value would be stored as "on".
@@ -422,12 +441,14 @@ class GitHubRestoreService:
             # the restore is willing to write travels with its toggle.
             if not _is_blocked_setting_key(credential):
                 continue
-            # The backup itself carried no credential here. An anonymous MQTT
-            # broker and an anonymous LDAP bind are both legitimate configs
-            # (mqtt_relay.py and ldap_service.py pass empty credentials straight
-            # through), so refusing this toggle would be a false positive — the
-            # restore is not producing anything weaker than the backup.
-            if not _is_usable_credential(values.get(credential)):
+            # The backup itself carried no credential here. For an availability
+            # pair that describes a working config — an anonymous MQTT broker and
+            # an anonymous LDAP bind both are (mqtt_relay.py and ldap_service.py
+            # pass empty credentials straight through) — so refusing the toggle
+            # would be a false positive. For an exposure pair a blank credential
+            # is the hole itself, so the condition is skipped and only local
+            # state decides. See _COMPANION_EXPOSURE_TOGGLES.
+            if key not in _COMPANION_EXPOSURE_TOGGLES and not _is_usable_credential(values.get(credential)):
                 continue
             candidates[key] = credential
 
@@ -568,7 +589,18 @@ class GitHubRestoreService:
             # policy keys stay unmentioned on purpose.
             plan = await self._plan_settings(db, values)
             detail = None
-            if plan.companion:
+            if plan.companion and not plan.blocked:
+                # An exposure toggle becomes a candidate whether or not the
+                # backup carried its credential, so this commit can refuse a
+                # switch without having a single credential-like key to skip —
+                # "0 credential-like key(s) will be skipped" would read as noise.
+                detail = _Detail(
+                    "settingsCompanionOnlyWillSkip",
+                    f"{len(plan.companion)} switch(es) will be left off — the credential each one needs "
+                    "cannot be restored from a backup",
+                    {"companion": len(plan.companion)},
+                )
+            elif plan.companion:
                 detail = _Detail(
                     "settingsCompanionWillSkip",
                     f"{len(plan.blocked)} credential-like key(s) will be skipped, and "

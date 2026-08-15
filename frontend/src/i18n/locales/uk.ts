@@ -4944,6 +4944,7 @@ export default {
         settingsNoPayload: "У даних немає налаштувань",
         settingsCredentialsWillSkip: "Ключів, схожих на облікові дані, буде пропущено: {{count}}",
         settingsCompanionWillSkip: "Ключів, схожих на облікові дані, буде пропущено: {{count}}, а залежні від них перемикачі ({{companion}}) залишаться вимкненими",
+        settingsCompanionOnlyWillSkip: 'Перемикачі ({{companion}}) залишаться вимкненими - облікові дані, потрібні кожному з них, не можна відновити з резервної копії',
         spoolsUsageCount: "плюс записів використання: {{count}}",
         archivesMetadataOnly: "Лише метадані - файли 3MF і мініатюри не входять до резервної копії Git",
         kprofilesPrinterCount: "по {{count}} принтерах",

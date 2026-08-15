@@ -4889,6 +4889,7 @@ export default {
         settingsNoPayload: 'Nenhuma configuração nos dados',
         settingsCredentialsWillSkip: '{{count}} chaves parecidas com credenciais serão ignoradas',
         settingsCompanionWillSkip: '{{count}} chaves parecidas com credenciais serão ignoradas, e {{companion}} chaves que dependem delas ficarão desligadas',
+        settingsCompanionOnlyWillSkip: '{{companion}} chaves ficarão desligadas - a credencial que cada uma precisa não pode ser restaurada de um backup',
         spoolsUsageCount: 'mais {{count}} registros de consumo',
         archivesMetadataOnly: 'Somente metadados - arquivos 3MF e miniaturas não ficam em um backup Git',
         kprofilesPrinterCount: 'em {{count}} impressoras',

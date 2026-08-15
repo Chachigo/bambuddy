@@ -22,6 +22,7 @@ from backend.app.schemas.github_backup import GitHubRestoreRequest, RestoreCateg
 from backend.app.services.github_restore import (
     _COMPANION_CREDENTIAL_ENV,
     _COMPANION_CREDENTIALS,
+    _COMPANION_EXPOSURE_TOGGLES,
     ARCHIVES_PATH,
     SETTINGS_PATH,
     SPOOL_USAGE_PATH,
@@ -421,6 +422,64 @@ class TestCompanionCredentials:
         # credential caveat.
         assert allowed_detail.code == "settingsCredentialsWillSkip"
 
+    # --- The exposure class: a blank backup credential is the hole ----------
+    #
+    # The rule's second condition — "the backup carried a usable credential" —
+    # is what stops it refusing an anonymous MQTT broker. It does not transfer to
+    # Prometheus: a backup taken on an instance that enabled Prometheus without a
+    # token (the field is optional and defaults to "") carries the toggle and no
+    # usable token, and writing it opens /api/v1/metrics just as wide. That is
+    # the *more* likely source of the exposure, not the less.
+
+    @pytest.mark.asyncio
+    async def test_prometheus_is_refused_when_the_backup_has_no_token_key_at_all(self, db_session):
+        tally = await self._restore(db_session, currency="EUR", prometheus_enabled="true")
+
+        rows = await self._rows(db_session)
+        assert rows == {"currency": "EUR"}
+        assert any("prometheus_enabled" in note and "switched off" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("token", ["", "   "])
+    async def test_prometheus_is_refused_when_the_backup_token_is_blank(self, db_session, token):
+        tally = await self._restore(db_session, prometheus_enabled="true", prometheus_token=token)
+
+        assert "prometheus_enabled" not in await self._rows(db_session)
+        assert "settingsCompanionSkipped" in _codes(tally)
+
+    @pytest.mark.asyncio
+    async def test_the_preview_says_so_with_no_credential_key_to_skip(self, db_session):
+        """The wording has to survive ``blocked`` being empty.
+
+        The shared caveat counts credential-like keys *and* switches; on this
+        payload there are no credential-like keys, so "0 credential-like key(s)
+        will be skipped" would be noise.
+        """
+        parsed = {SETTINGS_PATH: {"settings": {"currency": "EUR", "prometheus_enabled": "true"}}}
+
+        count, detail = await _service()._count_items(db_session, RestoreCategory.SETTINGS, parsed)
+
+        assert count == 1
+        assert detail.code == "settingsCompanionOnlyWillSkip"
+        assert detail.params == {"companion": 1}
+
+    @pytest.mark.asyncio
+    async def test_the_availability_class_keeps_the_backup_credential_condition(self, db_session):
+        """The other half of the same change: only Prometheus loses condition 2.
+
+        Absent is treated like blank here — an anonymous broker or bind is a
+        working config, so refusing it would be a false positive.
+        """
+        await self._restore(db_session, mqtt_enabled="true", ldap_enabled="true", virtual_printer_enabled="true")
+
+        rows = await self._rows(db_session)
+        assert rows["mqtt_enabled"] == "true"
+        assert rows["ldap_enabled"] == "true"
+        assert rows["virtual_printer_enabled"] == "true"
+
+    def test_every_exposure_toggle_is_a_companion_toggle(self):
+        assert _COMPANION_EXPOSURE_TOGGLES.issubset(_COMPANION_CREDENTIALS)
+
     # --- Controls: over-refusal is the real risk here ----------------------
 
     @pytest.mark.asyncio
@@ -429,6 +488,28 @@ class TestCompanionCredentials:
         await db_session.commit()
 
         tally = await self._restore(db_session, prometheus_enabled="true", prometheus_token="s3cret")
+
+        assert (await self._rows(db_session))["prometheus_enabled"] == "true"
+        assert not any("switched off" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_exposure_route_still_stands_down_for_a_local_token(self, db_session):
+        """Skipping condition 2 must not skip the local-state pass with it."""
+        db_session.add(Settings(key="prometheus_token", value="already-set"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, prometheus_enabled="true")
+
+        assert (await self._rows(db_session))["prometheus_enabled"] == "true"
+        assert not any("switched off" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_exposure_route_still_stands_down_when_already_on(self, db_session):
+        """The exposure pre-dates this restore either way — see ruling 3."""
+        db_session.add(Settings(key="prometheus_enabled", value="true"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, overwrite=True, prometheus_enabled="true")
 
         assert (await self._rows(db_session))["prometheus_enabled"] == "true"
         assert not any("switched off" in note for note in _messages(tally))

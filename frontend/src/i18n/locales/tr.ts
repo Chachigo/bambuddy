@@ -4879,6 +4879,7 @@ export default {
         settingsNoPayload: 'Veride ayar yok',
         settingsCredentialsWillSkip: 'Kimlik bilgisi benzeri {{count}} anahtar atlanacak',
         settingsCompanionWillSkip: 'Kimlik bilgisi benzeri {{count}} anahtar atlanacak ve bunlara bağlı {{companion}} anahtar kapalı bırakılacak',
+        settingsCompanionOnlyWillSkip: '{{companion}} anahtar kapalı bırakılacak - her birinin ihtiyaç duyduğu kimlik bilgisi bir yedekten geri yüklenemez',
         spoolsUsageCount: 'ayrıca {{count}} kullanım kaydı',
         archivesMetadataOnly: 'Yalnızca üst veri - 3MF dosyaları ve küçük resimler Git yedeğinde yer almaz',
         kprofilesPrinterCount: '{{count}} yazıcı genelinde',
