@@ -123,13 +123,45 @@ _KNOWN_NOZZLES = {"0.2", "0.4", "0.6", "0.8"}
 
 
 def _parse_dt(value) -> datetime | None:
-    """Best-effort parse of a datetime the backup wrote via ``str(...)``."""
+    """Best-effort parse of a datetime the backup wrote via ``str(...)``.
+
+    Normalised to naive UTC, because that is what every ``DateTime`` column
+    here holds: the models write ``datetime.now(timezone.utc)`` into naive
+    columns and both dialects drop the offset on the way in. Carrying an aware
+    value through would store the wrong wall clock, and comparing one against a
+    value read back out of a naive column raises ``TypeError``. The collector
+    only ever writes naive strings, so this is a guard on hand-edited or
+    foreign backups rather than a path Bambuddy takes itself.
+    """
     if not value or not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _created_at_matches(row, created_at: datetime | None) -> bool:
+    """Does ``row.created_at`` equal a timestamp read out of a backup?
+
+    Compared in Python, not in SQL, and that is the whole point. Every
+    ``created_at`` these callers dedupe on is ``server_default=func.now()``, so
+    SQLite fills it from ``CURRENT_TIMESTAMP``, which has second precision and
+    stores ``'2026-08-02 11:28:41'``. SQLAlchemy binds a Python datetime as
+    ``'2026-08-02 11:28:41.000000'``, and SQLite compares the two as strings —
+    so ``Model.created_at == created_at`` never matches a row the application
+    itself created, not even when handed that row's own value straight back.
+    Every dedupe keyed on it misses, and the restore inserts a duplicate of
+    everything instead of recognising what is already there.
+
+    Reading the candidates back and comparing the parsed datetimes sidesteps
+    the bind format entirely, and is equally correct on PostgreSQL (where the
+    column keeps microseconds and the SQL comparison happened to work).
+    """
+    return created_at is not None and row.created_at == created_at
 
 
 def _is_blocked_setting_key(key: str) -> bool:
@@ -1200,16 +1232,19 @@ class GitHubRestoreService:
         created_at = _parse_dt(entry.get("created_at"))
         if created_at is None:
             return None, None
+        # created_at is filtered in Python, not here — see _created_at_matches.
         result = await db.execute(
             select(Spool).where(
-                Spool.created_at == created_at,
                 Spool.material == (entry.get("material") or "PLA"),
                 Spool.brand == entry.get("brand"),
                 Spool.subtype == entry.get("subtype"),
                 Spool.color_name == entry.get("color_name"),
             )
         )
-        return result.scalars().first(), None
+        for row in result.scalars():
+            if _created_at_matches(row, created_at):
+                return row, None
+        return None, None
 
     @staticmethod
     async def _guard_tag_overwrite(db: AsyncSession, existing: Spool, fields: dict, matched_on: str | None) -> int:
@@ -1295,16 +1330,20 @@ class GitHubRestoreService:
 
             created_at = _parse_dt(entry.get("created_at"))
             # Usage history has no natural key of its own, so dedupe on the
-            # tuple that makes a consumption event unique in practice.
+            # tuple that makes a consumption event unique in practice. As in
+            # _find_spool, created_at is compared in Python — see
+            # _created_at_matches. An entry carrying no created_at at all
+            # cannot be recognised and is re-inserted, which is what the
+            # IS NULL comparison this replaced did too: the column is
+            # non-nullable, so it never matched either.
             existing = await db.execute(
                 select(SpoolUsageHistory).where(
                     SpoolUsageHistory.spool_id == spool_id,
-                    SpoolUsageHistory.created_at == created_at,
                     SpoolUsageHistory.weight_used == (entry.get("weight_used") or 0),
                     SpoolUsageHistory.print_name == entry.get("print_name"),
                 )
             )
-            if existing.scalars().first() is not None:
+            if any(_created_at_matches(row, created_at) for row in existing.scalars()):
                 tally.skipped += 1
                 continue
 

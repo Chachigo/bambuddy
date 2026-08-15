@@ -6,7 +6,7 @@ dependent rows, overwrite-vs-skip, the settings credential blocklist, and the
 K-profile paths that depend on live printers.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,6 +66,13 @@ class TestParseDt:
     @pytest.mark.parametrize("value", ["", None, "not a date", 12345, {}])
     def test_returns_none_for_junk(self, value):
         assert _parse_dt(value) is None
+
+    def test_an_offset_is_normalised_to_naive_utc(self):
+        """Every DateTime column here is naive UTC; an aware value cannot be
+        written to one without silently shifting the wall clock, nor compared
+        against one without raising."""
+        assert _parse_dt("2026-07-27T08:02:05+02:00") == datetime(2026, 7, 27, 6, 2, 5)
+        assert _parse_dt("2026-07-27T06:02:05+00:00").tzinfo is None
 
 
 class TestSettingKeyBlocklist:
@@ -974,6 +981,142 @@ class TestRestoreSpools:
 
         row = (await db_session.execute(select(SpoolUsageHistory))).scalar_one()
         assert row.printer_id is None
+
+
+class TestServerDefaultCreatedAtDedupe:
+    """Dedupe against rows whose ``created_at`` came from the server default.
+
+    Every test above seeds its "existing" row through the restore itself, which
+    binds ``created_at`` explicitly — so both sides end up in SQLAlchemy's
+    microsecond format and a SQL ``==`` matches. Rows the *application* created
+    do not: SQLite fills ``server_default=func.now()`` from
+    ``CURRENT_TIMESTAMP``, which has second precision, and the two strings
+    never compare equal. That is the ordinary case — a user's own spools and
+    their print history — and it duplicated the lot on every restore.
+    """
+
+    @staticmethod
+    async def _native_spool(db_session, **kwargs):
+        """A spool created the way the app creates one: no explicit created_at."""
+        spool = Spool(material="PLA", brand="Bambu Lab", subtype="Basic", color_name="Jade White", **kwargs)
+        db_session.add(spool)
+        await db_session.commit()
+        await db_session.refresh(spool)
+        return spool
+
+    def _entry_for(self, spool, **overrides):
+        """The backup entry the collector writes for ``spool``."""
+        entry = {
+            "id": 41,
+            "material": spool.material,
+            "brand": spool.brand,
+            "subtype": spool.subtype,
+            "color_name": spool.color_name,
+            "created_at": str(spool.created_at),
+        }
+        entry.update(overrides)
+        return entry
+
+    @pytest.mark.asyncio
+    async def test_find_spool_matches_on_the_composite_fallback(self, db_session):
+        spool = await self._native_spool(db_session)
+
+        found, matched_on = await _service()._find_spool(db_session, self._entry_for(spool))
+
+        assert found is not None and found.id == spool.id
+        assert matched_on is None  # the composite, not a tag column
+
+    @pytest.mark.asyncio
+    async def test_a_tagless_spool_is_not_duplicated(self, db_session):
+        spool = await self._native_spool(db_session)
+        payload = {"spools": [self._entry_for(spool)]}
+        tally = _CategoryTally()
+
+        await _service()._restore_spools(db_session, payload, None, False, tally, {})
+        await db_session.commit()
+
+        assert len((await db_session.execute(select(Spool))).scalars().all()) == 1
+        assert tally.skipped == 1
+
+    @pytest.mark.asyncio
+    async def test_overwrite_updates_the_original_instead_of_inserting(self, db_session):
+        spool = await self._native_spool(db_session)
+        payload = {"spools": [self._entry_for(spool, weight_used=250.0)]}
+
+        await _service()._restore_spools(db_session, payload, None, True, _CategoryTally(), {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(Spool))).scalar_one()
+        assert row.id == spool.id
+        assert row.weight_used == 250.0
+
+    @pytest.mark.asyncio
+    async def test_a_second_spool_added_later_stays_distinct(self, db_session):
+        """The composite is only unique because of created_at, so the Python
+        comparison has to stay exact — not a same-day tolerance."""
+        spool = await self._native_spool(db_session)
+        twin = Spool(material=spool.material, brand=spool.brand, subtype=spool.subtype, color_name=spool.color_name)
+        twin.created_at = spool.created_at + timedelta(hours=1)
+        db_session.add(twin)
+        await db_session.commit()
+
+        found, _ = await _service()._find_spool(db_session, self._entry_for(spool))
+
+        assert found.id == spool.id
+
+    @pytest.mark.asyncio
+    async def test_existing_usage_history_is_not_re_inserted(self, db_session):
+        spool = await self._native_spool(db_session, tag_uid="AABBCCDD")
+        usage_row = SpoolUsageHistory(spool_id=spool.id, print_name="b.3mf", weight_used=5.0)
+        db_session.add(usage_row)
+        await db_session.commit()
+        await db_session.refresh(usage_row)
+
+        tally = _CategoryTally()
+        inventory = {"spools": [self._entry_for(spool, tag_uid="AABBCCDD")]}
+        usage = {
+            "usage_history": [
+                {
+                    "spool_id": 41,
+                    "print_name": "b.3mf",
+                    "weight_used": 5.0,
+                    "created_at": str(usage_row.created_at),
+                }
+            ]
+        }
+
+        await _service()._restore_spools(db_session, inventory, usage, False, tally, {})
+        await db_session.commit()
+
+        rows = (await db_session.execute(select(SpoolUsageHistory))).scalars().all()
+        assert len(rows) == 1
+        assert tally.skipped == 2  # the spool and its one usage row
+
+    @pytest.mark.asyncio
+    async def test_a_genuinely_new_usage_row_still_lands(self, db_session):
+        """Dedupe by timestamp must not swallow a repeat of the same print."""
+        spool = await self._native_spool(db_session, tag_uid="AABBCCDD")
+        usage_row = SpoolUsageHistory(spool_id=spool.id, print_name="b.3mf", weight_used=5.0)
+        db_session.add(usage_row)
+        await db_session.commit()
+        await db_session.refresh(usage_row)
+
+        inventory = {"spools": [self._entry_for(spool, tag_uid="AABBCCDD")]}
+        usage = {
+            "usage_history": [
+                {
+                    "spool_id": 41,
+                    "print_name": "b.3mf",
+                    "weight_used": 5.0,
+                    "created_at": str(usage_row.created_at + timedelta(days=1)),
+                }
+            ]
+        }
+
+        await _service()._restore_spools(db_session, inventory, usage, False, _CategoryTally(), {})
+        await db_session.commit()
+
+        assert len((await db_session.execute(select(SpoolUsageHistory))).scalars().all()) == 2
 
 
 class TestRestoreArchives:
