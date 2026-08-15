@@ -7067,6 +7067,8 @@ export default {
     back: 'Retour',
     backToArchives: 'Retour aux archives d\'impression',
     backToFiles: 'Retour au gestionnaire de fichiers',
+    plates: 'Plateaux',
+    plateN: 'Plaque {{n}}',
   },
   libraryTrash: {
     title: 'Corbeille',

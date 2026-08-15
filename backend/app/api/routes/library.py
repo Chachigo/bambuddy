@@ -75,10 +75,12 @@ from backend.app.services.stl_thumbnail import MIN_USABLE_STL_BYTES, generate_st
 from backend.app.utils.filename import InvalidFilenameError, validate_print_filename
 from backend.app.utils.safe_path import PathTraversalError, safe_join_under
 from backend.app.utils.threemf_tools import (
+    default_plate_gcode_name,
     expand_to_project_slots,
     extract_embedded_presets_from_3mf,
     extract_nozzle_mapping_from_3mf,
     extract_project_filaments_from_3mf,
+    select_plate_gcode_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -5020,6 +5022,7 @@ async def get_thumbnail(
 @router.get("/files/{file_id}/gcode")
 async def get_gcode(
     file_id: int,
+    plate: int | None = None,
     db: AsyncSession = Depends(get_db),
     auth_result: tuple[User | None, bool] = Depends(
         require_ownership_permission(
@@ -5028,7 +5031,15 @@ async def get_gcode(
         )
     ),
 ):
-    """Get gcode for a file (for preview)."""
+    """Get gcode for a file (for preview).
+
+    Mirrors the archive route: ``?plate=2`` returns ``Metadata/plate_2.gcode``,
+    and omitting it returns the lowest-numbered plate. The viewer has been
+    sending ``plate`` since it gained a multi-plate URL, but this route took no
+    such parameter and FastAPI drops unknown query parameters silently — so
+    every multi-plate library file opened on whichever plate the slicer wrote
+    first into the zip, which is not plate 1.
+    """
     user, can_read_all = auth_result
     result = await db.execute(LibraryFile.active().where(LibraryFile.id == file_id))
     file = _ensure_library_file_visible(result.scalar_one_or_none(), user, can_read_all)
@@ -5042,13 +5053,22 @@ async def get_gcode(
     # case, so detect by suffix before checking the type column.
     is_gcode_3mf = file.file_type in ("3mf", "gcode.3mf") or file.filename.lower().endswith(".gcode.3mf")
 
+    if plate is not None and plate < 1:
+        raise HTTPException(status_code=400, detail="Plate index must be >= 1")
+
     if is_gcode_3mf:
         try:
             with zipfile.ZipFile(str(abs_path), "r") as zf:
                 gcode_files = [n for n in zf.namelist() if n.endswith(".gcode")]
                 if not gcode_files:
                     raise HTTPException(status_code=404, detail="No gcode found in 3MF file")
-                gcode_content = zf.read(gcode_files[0])
+                if plate is not None:
+                    selected = select_plate_gcode_name(gcode_files, plate)
+                    if selected is None:
+                        raise HTTPException(status_code=404, detail=f"Plate {plate} not found in this file")
+                else:
+                    selected = default_plate_gcode_name(gcode_files)
+                gcode_content = zf.read(selected)
                 from fastapi.responses import Response
 
                 return Response(content=gcode_content, media_type="text/plain")

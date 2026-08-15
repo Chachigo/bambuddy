@@ -7086,6 +7086,8 @@ export default {
     back: 'Atrás',
     backToArchives: 'Volver a los archivos de impresión',
     backToFiles: 'Volver al gestor de archivos',
+    plates: 'Camas',
+    plateN: 'Cama {{n}}',
   },
   libraryTrash: {
     title: 'Papelera',

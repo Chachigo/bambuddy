@@ -749,21 +749,54 @@ def _parse_3mf_gcode_header(content: str) -> dict[str, str]:
     return header
 
 
-def _select_plate_gcode_name(names: list[str], plate_id: int | None) -> str | None:
-    """Pick a plate's ``.gcode`` member out of a 3MF namelist.
+def _plate_number_of(name: str) -> int | None:
+    """Plate index encoded in a ``…/plate_<n>.gcode`` member, or None.
 
-    Prefers ``plate_<id>.gcode``, then falls back to the first ``.gcode``
-    member so single-plate files — and files from slicers that don't use the
-    plate naming convention — still resolve.
+    Parsed as an int rather than string-matched so a zero-padded
+    ``plate_01.gcode`` resolves to the same 1 the plates endpoint reports.
+    """
+    marker = "plate_"
+    idx = name.rfind(marker)
+    if idx < 0 or not name.endswith(".gcode"):
+        return None
+    try:
+        return int(name[idx + len(marker) : -len(".gcode")])
+    except ValueError:
+        return None
+
+
+def select_plate_gcode_name(names: list[str], plate_id: int | None) -> str | None:
+    """The ``.gcode`` member for exactly ``plate_id``, or None if it isn't there.
+
+    Returns None for a ``plate_id`` the file doesn't hold — callers that want a
+    fallback compose this with ``default_plate_gcode_name``; callers serving a
+    user's explicit plate choice want the None so they can 404 instead of
+    quietly rendering a different plate.
+    """
+    if plate_id is None:
+        return None
+    for name in names:
+        if name.endswith(".gcode") and _plate_number_of(name) == plate_id:
+            return name
+    return None
+
+
+def default_plate_gcode_name(names: list[str]) -> str | None:
+    """The ``.gcode`` member to show when no plate was asked for.
+
+    The lowest plate number, NOT the first member in the archive: zip order is
+    whatever the slicer happened to write, and Bambu Studio does not write
+    plates in order — a two-plate file measured here stores ``plate_2.gcode``
+    ahead of ``plate_1.gcode``, so taking the first member opened plate 2. Files
+    from slicers that don't use the plate naming convention keep the old
+    first-member behaviour, since there is no numbering to sort by.
     """
     gcodes = [n for n in names if n.endswith(".gcode")]
     if not gcodes:
         return None
-    if plate_id is not None:
-        suffix = f"plate_{plate_id}.gcode"
-        for name in gcodes:
-            if name.endswith(suffix):
-                return name
+    numbered = [(num, n) for n in gcodes if (num := _plate_number_of(n)) is not None]
+    if numbered:
+        return min(numbered)[1]
     return gcodes[0]
 
 
@@ -789,7 +822,8 @@ def extract_max_z_height_from_3mf(file_path: Path, plate_id: int | None = None) 
     """
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
-            target = _select_plate_gcode_name(zf.namelist(), plate_id)
+            names = zf.namelist()
+            target = select_plate_gcode_name(names, plate_id) or default_plate_gcode_name(names)
             if target is None:
                 return None
             with zf.open(target, "r") as fh:
@@ -911,8 +945,9 @@ def inject_gcode_into_3mf(
     try:
         # Find the target gcode file inside the 3MF
         with zipfile.ZipFile(source_path, "r") as zf:
-            # Plate-specific gcode first, else the first one in the file.
-            target_gcode = _select_plate_gcode_name(zf.namelist(), plate_id)
+            # Plate-specific gcode first, else the lowest-numbered plate.
+            names = zf.namelist()
+            target_gcode = select_plate_gcode_name(names, plate_id) or default_plate_gcode_name(names)
             if target_gcode is None:
                 return None
 

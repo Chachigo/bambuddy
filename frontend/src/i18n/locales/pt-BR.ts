@@ -7066,6 +7066,8 @@ export default {
     back: 'Voltar',
     backToArchives: 'Voltar para os arquivos de impressão',
     backToFiles: 'Voltar para o gerenciador de arquivos',
+    plates: 'Placas',
+    plateN: 'Placa {{n}}',
   },
   libraryTrash: {
     title: 'Lixeira',

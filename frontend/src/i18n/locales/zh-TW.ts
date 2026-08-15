@@ -7065,6 +7065,8 @@ export default {
     back: '返回',
     backToArchives: '返回列印歸檔',
     backToFiles: '返回檔案管理器',
+    plates: '板',
+    plateN: '板 {{n}}',
   },
   libraryTrash: {
     title: '資源回收筒',

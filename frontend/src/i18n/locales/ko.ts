@@ -6533,7 +6533,9 @@ export default {
     },
     back: '뒤로',
     backToArchives: '인쇄 아카이브로 돌아가기',
-    backToFiles: '파일 관리자로 돌아가기'
+    backToFiles: '파일 관리자로 돌아가기',
+    plates: '플레이트',
+    plateN: '플레이트 {{n}}',
   },
   libraryTrash: {
     title: '휴지통',

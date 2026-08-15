@@ -7078,6 +7078,8 @@ export default {
     back: '戻る',
     backToArchives: '印刷アーカイブに戻る',
     backToFiles: 'ファイル管理に戻る',
+    plates: 'プレート',
+    plateN: 'プレート {{n}}',
   },
   libraryTrash: {
     title: 'ゴミ箱',

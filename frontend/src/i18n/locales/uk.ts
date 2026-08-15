@@ -7121,6 +7121,8 @@ export default {
     back: "Назад",
     backToArchives: "Назад до друку архівів",
     backToFiles: "Назад до файлового менеджера",
+    plates: "Пластини",
+    plateN: "Пластина {{n}}",
   },
   libraryTrash: {
     title: "Кошик",

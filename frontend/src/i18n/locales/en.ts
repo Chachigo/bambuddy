@@ -7127,6 +7127,8 @@ export default {
     back: 'Back',
     backToArchives: 'Back to Print Archives',
     backToFiles: 'Back to File Manager',
+    plates: 'Plates',
+    plateN: 'Plate {{n}}',
   },
   libraryTrash: {
     title: 'Trash',

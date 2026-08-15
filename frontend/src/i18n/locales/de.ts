@@ -7078,6 +7078,8 @@ export default {
     back: 'Zurück',
     backToArchives: 'Zurück zum Druckarchiv',
     backToFiles: 'Zurück zum Dateimanager',
+    plates: 'Platten',
+    plateN: 'Platte {{n}}',
   },
   libraryTrash: {
     title: 'Papierkorb',

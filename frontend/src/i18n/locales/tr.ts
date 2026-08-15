@@ -7017,6 +7017,8 @@ export default {
     back: 'Geri',
     backToArchives: 'Baskı Arşivlerine Dön',
     backToFiles: 'Dosya Yöneticisine Dön',
+    plates: 'Plakalar',
+    plateN: 'Plaka {{n}}',
   },
   libraryTrash: {
     title: 'Çöp Kutusu',

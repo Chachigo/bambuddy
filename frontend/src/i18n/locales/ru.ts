@@ -6703,6 +6703,8 @@ export default {
     back: "Назад",
     backToArchives: "Вернуться в архив печати",
     backToFiles: "Вернуться в файловый менеджер",
+    plates: "Пластины",
+    plateN: "Пластина {{n}}",
   },
   libraryTrash: {
     title: "Корзина",

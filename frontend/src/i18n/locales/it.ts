@@ -7066,6 +7066,8 @@ export default {
     back: 'Indietro',
     backToArchives: 'Torna agli archivi di stampa',
     backToFiles: 'Torna al gestore file',
+    plates: 'Piastre',
+    plateN: 'Piastra {{n}}',
   },
   libraryTrash: {
     title: 'Cestino',
