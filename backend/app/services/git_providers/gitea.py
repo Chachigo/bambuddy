@@ -100,6 +100,73 @@ class GiteaBackend(GitHubBackend):
         headers["Accept"] = "application/json"
         return headers
 
+    async def _blob_shas_at(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict,
+        api_base: str,
+        owner: str,
+        repo: str,
+        ref: str,
+    ) -> tuple[dict[str, str] | None, str]:
+        """Paged override of GitHub's single-GET tree read (#2656).
+
+        Divergence four, alongside the three in the class docstring. GitHub's
+        recursive trees endpoint is not paginated and signals overflow with
+        ``truncated: true``, which the inherited implementation hard-fails on.
+        Gitea and Forgejo *do* page the same endpoint — ``page``/``per_page``,
+        with ``total_count`` alongside the tree — so the inherited version would
+        read only the first page and then report every category beyond it as
+        absent from the commit. A restore that silently skips categories is the
+        exact failure the GitHub version refuses to allow, so this pages instead.
+
+        The cap mirrors GitLab's: reaching it means there are more pages, and
+        that is a failure rather than a partial result.
+        """
+        blobs: dict[str, str] = {}
+        page = 1
+        while page <= 50:
+            response = await client.get(
+                f"{api_base}/repos/{owner}/{repo}/git/trees/{ref}",
+                headers=headers,
+                params={"recursive": "true", "page": page, "per_page": 1000},
+            )
+            if response.status_code == 404:
+                return None, f"Commit or tree '{ref}' not found in the repository"
+            if response.status_code != 200:
+                return None, (
+                    f"Failed to list tree (HTTP {response.status_code}): {self._truncated_response_text(response)}"
+                )
+            try:
+                data = response.json()
+            except ValueError:
+                return None, "Non-JSON response listing tree"
+            if not isinstance(data, dict):
+                return None, "Unexpected shape listing tree"
+
+            entries = data.get("tree")
+            if not isinstance(entries, list):
+                entries = []
+            for item in entries:
+                if not isinstance(item, dict) or item.get("type") != "blob":
+                    continue
+                path, sha = item.get("path"), item.get("sha")
+                if isinstance(path, str) and isinstance(sha, str) and path and sha:
+                    blobs[path] = sha
+
+            # total_count counts every entry, trees included, so compare against
+            # what this page returned rather than against len(blobs).
+            total = data.get("total_count")
+            seen = (page - 1) * 1000 + len(entries)
+            if not isinstance(total, int) or seen >= total or not entries:
+                return blobs, ""
+            page += 1
+
+        return None, (
+            "Repository tree exceeds the listing limit, so the backup contents cannot be "
+            "enumerated reliably. Rotate the backup repository."
+        )
+
     async def push_files(
         self,
         repo_url: str,

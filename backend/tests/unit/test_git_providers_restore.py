@@ -115,6 +115,67 @@ class TestGitHubListCommits:
         assert "Unexpected shape" in result["message"]
 
 
+class TestGetCommit:
+    """A ref older than the list window still needs a subject line and a date."""
+
+    @pytest.mark.asyncio
+    async def test_github_reads_one_commit_by_sha(self):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(200, _github_commit("abc1234567")))
+
+        result = await GitHubBackend().get_commit("https://github.com/owner/repo", "tok", "abc1234567", client)
+
+        assert result["success"] is True
+        assert result["commit"] == {
+            "sha": "abc1234567",
+            "message": "Bambuddy backup",
+            "author": "Bambuddy",
+            "date": "2026-07-01T10:00:00Z",
+        }
+        assert "repos/owner/repo/commits/abc1234567" in client.get.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_github_404_names_the_ref(self):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(404, {}))
+
+        result = await GitHubBackend().get_commit("https://github.com/owner/repo", "tok", "deadbee", client)
+
+        assert result["success"] is False
+        assert result["commit"] is None
+        assert "deadbee" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_gitlab_reads_its_flattened_shape(self):
+        client = AsyncMock()
+        client.get = AsyncMock(
+            return_value=_make_mock_response(
+                200,
+                {
+                    "id": "abc1234567",
+                    "message": "Bambuddy backup",
+                    "author_name": "Bambuddy",
+                    "committed_date": "2026-07-02T10:00:00Z",
+                },
+            )
+        )
+
+        result = await GitLabBackend().get_commit("https://gitlab.com/owner/repo", "tok", "abc1234567", client)
+
+        assert result["commit"]["author"] == "Bambuddy"
+        assert result["commit"]["date"] == "2026-07-02T10:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_gitlab_404_names_the_ref(self):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(404, {}))
+
+        result = await GitLabBackend().get_commit("https://gitlab.com/owner/repo", "tok", "deadbee", client)
+
+        assert result["success"] is False
+        assert "deadbee" in result["message"]
+
+
 class TestGitHubListTree:
     def setup_method(self):
         self.backend = GitHubBackend()
@@ -222,6 +283,40 @@ class TestGitHubFetchFiles:
         assert client.get.await_count == 3
 
     @pytest.mark.asyncio
+    async def test_a_supplied_blob_map_skips_the_second_tree_read(self):
+        """list_tree already fetched this; fetching it again was a wasted GET."""
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(200, {"content": _b64("1"), "encoding": "base64"}))
+
+        result = await self.backend.fetch_files(
+            self.repo_url, self.token, "abc1234", ["a.json"], client, blob_shas={"a.json": "sha-a"}
+        )
+
+        assert result["files"] == {"a.json": "1"}
+        # The blob read and nothing else.
+        assert client.get.await_count == 1
+        assert "git/blobs/sha-a" in client.get.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_list_tree_hands_back_the_map_it_built(self):
+        client = AsyncMock()
+        client.get = AsyncMock(
+            return_value=_make_mock_response(
+                200,
+                {
+                    "tree": [
+                        {"type": "blob", "path": "a.json", "sha": "sha-a"},
+                        {"type": "tree", "path": "dir", "sha": "sha-d"},
+                    ]
+                },
+            )
+        )
+
+        result = await self.backend.list_tree(self.repo_url, self.token, "abc1234", client)
+
+        assert result["blob_shas"] == {"a.json": "sha-a"}
+
+    @pytest.mark.asyncio
     async def test_missing_path_is_skipped_not_an_error(self):
         """Which categories a backup contains varies by config, so an absent
         path is expected rather than a failure."""
@@ -273,12 +368,84 @@ class TestGitHubFetchFiles:
 
 
 class TestGiteaAndForgejoInheritReads:
-    """Gitea overrides the *write* path only; reads come from GitHubBackend."""
+    """Gitea overrides the *write* path, plus the one read that genuinely differs."""
 
     @pytest.mark.parametrize("backend_cls", [GiteaBackend, ForgejoBackend])
     def test_read_methods_are_not_overridden(self, backend_cls):
-        for method in ("list_commits", "list_tree", "fetch_files"):
+        for method in ("list_commits", "list_tree", "fetch_files", "get_commit"):
             assert getattr(backend_cls, method) is getattr(GitHubBackend, method)
+
+    @pytest.mark.parametrize("backend_cls", [GiteaBackend, ForgejoBackend])
+    def test_the_tree_read_is_paged_rather_than_inherited(self, backend_cls):
+        """GitHub's trees endpoint is not paginated; Gitea's is (#2656)."""
+        assert backend_cls._blob_shas_at is not GitHubBackend._blob_shas_at
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("backend_cls", [GiteaBackend, ForgejoBackend])
+    async def test_a_paged_tree_is_read_to_the_end(self, backend_cls):
+        """Inheriting GitHub's single GET read only the first page.
+
+        The rest of the backup then looked absent from the commit, and the
+        preview reported those categories as "not present" — a restore silently
+        skipping data, which is exactly what GitHub's truncated=true check
+        exists to prevent.
+        """
+        page1 = {
+            "tree": [{"type": "blob", "path": f"f{i}.json", "sha": f"s{i}"} for i in range(1000)],
+            "total_count": 1002,
+        }
+        page2 = {
+            "tree": [
+                {"type": "blob", "path": "settings/app_settings.json", "sha": "sx"},
+                {"type": "tree", "path": "settings", "sha": "dx"},
+            ],
+            "total_count": 1002,
+        }
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[_make_mock_response(200, page1), _make_mock_response(200, page2)])
+
+        result = await backend_cls().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is True
+        assert client.get.await_count == 2
+        assert "settings/app_settings.json" in result["paths"]
+        assert len(result["paths"]) == 1001
+
+    @pytest.mark.asyncio
+    async def test_a_single_page_tree_costs_one_request(self):
+        client = AsyncMock()
+        client.get = AsyncMock(
+            return_value=_make_mock_response(
+                200, {"tree": [{"type": "blob", "path": "a.json", "sha": "s1"}], "total_count": 1}
+            )
+        )
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["paths"] == ["a.json"]
+        assert client.get.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_tree_beyond_the_page_cap_fails_rather_than_truncating(self):
+        page = {"tree": [{"type": "blob", "path": f"f{i}.json", "sha": f"s{i}"} for i in range(1000)]}
+        page["total_count"] = 10_000_000
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(200, page))
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "abc1234", client)
+
+        assert result["success"] is False
+        assert "listing limit" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_ref_is_still_named(self):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(404, {}))
+
+        result = await GiteaBackend().list_tree("https://git.example.com/owner/repo", "tok", "deadbee", client)
+
+        assert result["success"] is False
+        assert "deadbee" in result["message"]
 
     @pytest.mark.asyncio
     async def test_gitea_list_commits_uses_its_own_api_base(self):
@@ -299,6 +466,7 @@ class TestGiteaAndForgejoInheritReads:
         client = AsyncMock()
         client.get = AsyncMock(return_value=_make_mock_response(200, {"tree": []}))
 
+        client.get = AsyncMock(return_value=_make_mock_response(200, {"tree": [], "total_count": 0}))
         await backend.list_tree("https://example.com/git/owner/repo", "tok", "abc1234", client)
 
         url = client.get.await_args.args[0]
@@ -397,6 +565,47 @@ class TestGitLabReads:
         assert client.get.await_count == 2
         assert len(result["paths"]) == 101
         assert "last.json" in result["paths"]
+
+    @pytest.mark.asyncio
+    async def test_hitting_the_page_cap_is_a_failure_not_a_partial_list(self):
+        """The mirror image of GitHub's truncated=true check.
+
+        Falling out of the `while page <= 50` condition used to return
+        success: True with a silently partial path list, which the restore then
+        reported as "those categories are not present in this commit" — data
+        skipped without anyone being told.
+        """
+        full_page = [{"type": "blob", "path": f"f{i}.json"} for i in range(100)]
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(200, full_page))
+
+        result = await self.backend.list_tree(self.repo_url, self.token, "abc1234", client)
+
+        assert result["success"] is False
+        assert result["paths"] == []
+        assert "cannot be enumerated reliably" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_list_tree_returns_no_blob_map(self):
+        """GitLab reads files by path, so there is nothing to share."""
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(200, [{"type": "blob", "path": "a.json"}]))
+
+        result = await self.backend.list_tree(self.repo_url, self.token, "abc1234", client)
+
+        assert result["blob_shas"] == {}
+
+    @pytest.mark.asyncio
+    async def test_fetch_files_ignores_a_blob_map(self):
+        client = AsyncMock()
+        client.get = AsyncMock(return_value=_make_mock_response(200, {"content": _b64("1"), "encoding": "base64"}))
+
+        result = await self.backend.fetch_files(
+            self.repo_url, self.token, "abc1234", ["a.json"], client, blob_shas={"a.json": "irrelevant"}
+        )
+
+        assert result["files"] == {"a.json": "1"}
+        assert "repository/files/a.json" in client.get.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_fetch_files_decodes_base64(self):

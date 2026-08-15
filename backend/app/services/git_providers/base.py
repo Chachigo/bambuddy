@@ -98,6 +98,18 @@ class GitProviderBackend(ABC):
         """
 
     @abstractmethod
+    async def get_commit(self, repo_url: str, token: str, ref: str, client: httpx.AsyncClient) -> dict:
+        """Read one commit's display metadata by SHA.
+
+        ``list_commits`` only reaches back as far as its limit, so a ref outside
+        that window has no entry to describe it. This is the direct lookup for
+        that case.
+
+        Returns ``{"success", "message", "commit": {"sha", "message", "author",
+        "date"} | None}``.
+        """
+
+    @abstractmethod
     async def list_tree(
         self,
         repo_url: str,
@@ -112,7 +124,10 @@ class GitProviderBackend(ABC):
         one being restored are provably the same commit even if a scheduled
         backup lands in between.
 
-        Returns ``{"success", "message", "paths": [str]}``.
+        Returns ``{"success", "message", "paths": [str], "blob_shas":
+        {path: sha}}``. ``blob_shas`` is the path -> blob SHA map the listing
+        already had to build, offered so :meth:`fetch_files` need not fetch the
+        same tree again; providers that read files by path return ``{}``.
         """
 
     @abstractmethod
@@ -123,12 +138,18 @@ class GitProviderBackend(ABC):
         ref: str,
         paths: list[str],
         client: httpx.AsyncClient,
+        blob_shas: dict[str, str] | None = None,
     ) -> dict:
         """Read several files' decoded UTF-8 text at ``ref``.
 
         Batched rather than one-file-at-a-time so providers that need a tree
         listing to map path -> blob SHA can do that lookup once for the whole
         restore instead of per file.
+
+        ``blob_shas`` is the map :meth:`list_tree` returned for the same ref, if
+        the caller has one. Passing it saves a second recursive tree GET; a
+        provider that reads by path ignores it, and one that needs it fetches
+        the tree itself when it is absent.
 
         Returns ``{"success", "message", "files": {path: text}}``. Paths absent
         from the commit are simply missing from ``files`` — that is not an error,

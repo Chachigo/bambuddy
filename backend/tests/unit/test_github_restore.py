@@ -1837,10 +1837,12 @@ class TestResolveRef:
         service.list_commits = AsyncMock()
         config = MagicMock(branch="main")
 
-        resolved, error = await service._resolve_ref(config, "abc1234")
+        resolved, error, commit = await service._resolve_ref(config, "abc1234")
 
         assert resolved == "abc1234"
         assert error == ""
+        # Nothing was fetched, so there is no entry to describe it with.
+        assert commit is None
         service.list_commits.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -1851,10 +1853,13 @@ class TestResolveRef:
         )
         config = MagicMock(branch="main")
 
-        resolved, error = await service._resolve_ref(config, "HEAD")
+        resolved, error, commit = await service._resolve_ref(config, "HEAD")
 
         assert resolved == "tipsha1"
         assert error == ""
+        # Handed back so preview does not list commits a second time just to
+        # describe the one it already fetched.
+        assert commit == {"sha": "tipsha1"}
 
     @pytest.mark.asyncio
     async def test_empty_history_is_an_error(self):
@@ -1862,7 +1867,80 @@ class TestResolveRef:
         service.list_commits = AsyncMock(return_value={"success": True, "commits": []})
         config = MagicMock(branch="main")
 
-        resolved, error = await service._resolve_ref(config, "HEAD")
+        resolved, error, commit = await service._resolve_ref(config, "HEAD")
 
         assert resolved is None
         assert "no commits" in error
+        assert commit is None
+
+
+class TestDescribeCommit:
+    """A preview that says `commit: null` gives the user no idea what they picked."""
+
+    def _config(self):
+        return MagicMock(branch="main", provider="github", repository_url="https://github.com/o/r", access_token="t")
+
+    def _entry(self, sha: str):
+        return {"sha": sha, "message": "Bambuddy backup", "author": "Bambuddy", "date": "2026-07-01T10:00:00Z"}
+
+    @pytest.mark.asyncio
+    async def test_an_abbreviated_ref_matches_a_full_sha_in_the_window(self):
+        """REF_PATTERN accepts 7 characters; providers return 40.
+
+        The old exact `==` therefore never matched an abbreviated ref, even when
+        the commit was right there in the top 20.
+        """
+        service = _service()
+        full = "abc1234" + "0" * 33
+        service.list_commits = AsyncMock(return_value={"success": True, "commits": [self._entry(full)]})
+
+        found = await service._describe_commit(self._config(), "abc1234")
+
+        assert found is not None
+        assert found["sha"] == full
+
+    @pytest.mark.asyncio
+    async def test_a_full_sha_matches_an_abbreviated_entry(self):
+        service = _service()
+        service.list_commits = AsyncMock(return_value={"success": True, "commits": [self._entry("abc1234")]})
+
+        found = await service._describe_commit(self._config(), "abc1234" + "0" * 33)
+
+        assert found is not None
+
+    @pytest.mark.asyncio
+    async def test_a_commit_outside_the_window_is_fetched_directly(self):
+        service = _service()
+        service.list_commits = AsyncMock(return_value={"success": True, "commits": [self._entry("f" * 40)]})
+        backend = MagicMock()
+        backend.get_commit = AsyncMock(return_value={"success": True, "commit": self._entry("old" + "0" * 37)})
+
+        with patch("backend.app.services.github_restore.get_provider_backend", return_value=backend):
+            found = await service._describe_commit(self._config(), "old" + "0" * 37)
+
+        assert found["sha"] == "old" + "0" * 37
+        backend.get_commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_a_direct_lookup_failure_is_not_fatal(self):
+        """It is a subject line: render the preview without it."""
+        service = _service()
+        service.list_commits = AsyncMock(return_value={"success": True, "commits": []})
+        backend = MagicMock()
+        backend.get_commit = AsyncMock(return_value={"success": False, "message": "boom", "commit": None})
+
+        with patch("backend.app.services.github_restore.get_provider_backend", return_value=backend):
+            assert await service._describe_commit(self._config(), "a" * 40) is None
+
+    @pytest.mark.asyncio
+    async def test_the_window_scan_is_not_run_twice(self):
+        """_resolve_ref already listed commits for HEAD; preview reuses that."""
+        service = _service()
+        tip = self._entry("t" * 40)
+        service.list_commits = AsyncMock(return_value={"success": True, "commits": [tip]})
+
+        resolved, _, commit = await service._resolve_ref(self._config(), "HEAD")
+
+        assert resolved == "t" * 40
+        assert commit == tip
+        assert service.list_commits.await_count == 1

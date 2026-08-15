@@ -229,6 +229,39 @@ class GitHubBackend(GitProviderBackend):
                 blobs[path] = sha
         return blobs, ""
 
+    async def get_commit(self, repo_url: str, token: str, ref: str, client: httpx.AsyncClient) -> dict:
+        """Read one commit's metadata directly, for refs outside the list window."""
+        try:
+            owner, repo = self.parse_repo_url(repo_url)
+            api_base = self.get_api_base(repo_url)
+            headers = self.get_headers(token)
+
+            response = await client.get(f"{api_base}/repos/{owner}/{repo}/commits/{ref}", headers=headers)
+            if response.status_code == 404:
+                return {"success": False, "message": f"Commit '{ref}' not found in the repository", "commit": None}
+            if response.status_code != 200:
+                msg = f"Failed to read commit (HTTP {response.status_code}): {self._truncated_response_text(response)}"
+                logger.warning("get_commit %s/%s ref=%s: %s", owner, repo, ref, msg)
+                return {"success": False, "message": msg, "commit": None}
+
+            try:
+                data = response.json()
+            except ValueError:
+                return {"success": False, "message": "Non-JSON response reading commit", "commit": None}
+            if not isinstance(data, dict):
+                return {"success": False, "message": "Unexpected shape reading commit", "commit": None}
+
+            # Same entry shape as list_commits, so callers can treat the two
+            # interchangeably.
+            parsed = self._parse_commit_entries([data], 1)
+            if not parsed:
+                return {"success": False, "message": "Commit response carried no SHA", "commit": None}
+            return {"success": True, "message": "OK", "commit": parsed[0]}
+
+        except Exception as e:
+            logger.exception("get_commit failed for %s ref=%s", repo_url, ref)
+            return {"success": False, "message": f"{type(e).__name__}: {str(e)[:200]}", "commit": None}
+
     async def list_tree(
         self,
         repo_url: str,
@@ -245,13 +278,15 @@ class GitHubBackend(GitProviderBackend):
             blobs, error = await self._blob_shas_at(client, headers, api_base, owner, repo, ref)
             if blobs is None:
                 logger.warning("list_tree %s/%s ref=%s: %s", owner, repo, ref, error)
-                return {"success": False, "message": error, "paths": []}
+                return {"success": False, "message": error, "paths": [], "blob_shas": {}}
 
-            return {"success": True, "message": "OK", "paths": sorted(blobs)}
+            # The map is handed back so fetch_files does not GET the same
+            # recursive tree a second time for the same ref.
+            return {"success": True, "message": "OK", "paths": sorted(blobs), "blob_shas": blobs}
 
         except Exception as e:
             logger.exception("list_tree failed for %s ref=%s", repo_url, ref)
-            return {"success": False, "message": f"{type(e).__name__}: {str(e)[:200]}", "paths": []}
+            return {"success": False, "message": f"{type(e).__name__}: {str(e)[:200]}", "paths": [], "blob_shas": {}}
 
     async def fetch_files(
         self,
@@ -260,6 +295,7 @@ class GitHubBackend(GitProviderBackend):
         ref: str,
         paths: list[str],
         client: httpx.AsyncClient,
+        blob_shas: dict[str, str] | None = None,
     ) -> dict:
         """Read ``paths`` at ``ref`` via the Git Data blobs API.
 
@@ -273,10 +309,12 @@ class GitHubBackend(GitProviderBackend):
             api_base = self.get_api_base(repo_url)
             headers = self.get_headers(token)
 
-            blobs, error = await self._blob_shas_at(client, headers, api_base, owner, repo, ref)
+            blobs = blob_shas
             if blobs is None:
-                logger.warning("fetch_files %s/%s ref=%s: %s", owner, repo, ref, error)
-                return {"success": False, "message": error, "files": {}}
+                blobs, error = await self._blob_shas_at(client, headers, api_base, owner, repo, ref)
+                if blobs is None:
+                    logger.warning("fetch_files %s/%s ref=%s: %s", owner, repo, ref, error)
+                    return {"success": False, "message": error, "files": {}}
 
             files: dict[str, str] = {}
             for path in paths:

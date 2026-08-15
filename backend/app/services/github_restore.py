@@ -307,21 +307,54 @@ class GitHubRestoreService:
         result["branch"] = config.branch
         return result
 
-    async def _resolve_ref(self, config: GitHubBackupConfig, ref: str) -> tuple[str | None, str]:
+    async def _resolve_ref(self, config: GitHubBackupConfig, ref: str) -> tuple[str | None, str, dict | None]:
         """Turn ``HEAD`` into a concrete commit SHA.
 
         Done once up front so a preview and the restore that follows it act on
         the same commit even if a scheduled backup lands in between.
+
+        The third element is the commit entry, when resolving already fetched
+        one. ``preview`` displays it, and taking it from here means the ``HEAD``
+        case — by far the common one — costs one ``list_commits`` call rather
+        than two.
         """
         if ref and ref.upper() != "HEAD":
-            return ref, ""
+            return ref, "", None
         result = await self.list_commits(config, limit=1)
         if not result.get("success"):
-            return None, result.get("message") or "Could not read the backup repository"
+            return None, result.get("message") or "Could not read the backup repository", None
         commits = result.get("commits") or []
         if not commits:
-            return None, f"Branch '{config.branch}' has no commits to restore from"
-        return commits[0]["sha"], ""
+            return None, f"Branch '{config.branch}' has no commits to restore from", None
+        return commits[0]["sha"], "", commits[0]
+
+    async def _describe_commit(self, config: GitHubBackupConfig, resolved: str) -> dict | None:
+        """Find the display metadata for one commit SHA.
+
+        Two things used to leave ``commit: null`` in a preview, and the second is
+        the one that bit in practice:
+
+        * the commit is older than the 20 the picker lists, so it is not in the
+          scan at all — that is what ``get_commit`` is for;
+        * ``REF_PATTERN`` accepts a 7-character ref while providers return the
+          full 40, so an exact ``==`` never matched an abbreviated SHA *even when
+          the commit was in the window*. Hence the prefix comparison.
+
+        Best-effort throughout: this is a subject line and a date, so a failure
+        returns None and the preview renders without them rather than failing.
+        """
+        commits = (await self.list_commits(config, limit=20)).get("commits") or []
+        for entry in commits:
+            sha = entry.get("sha") or ""
+            if sha == resolved or sha.startswith(resolved) or resolved.startswith(sha):
+                return entry
+
+        backend = get_provider_backend(config.provider)
+        client = await self._get_client()
+        result = await backend.get_commit(
+            repo_url=config.repository_url, token=config.access_token, ref=resolved, client=client
+        )
+        return result.get("commit") if result.get("success") else None
 
     def _category_paths(self, category: RestoreCategory, available: list[str]) -> list[str]:
         """Return the paths in ``available`` that belong to ``category``."""
@@ -429,7 +462,7 @@ class GitHubRestoreService:
         Takes a session because the settings count depends on local state — see
         ``_plan_settings``. ``ref`` stays keyword-friendly for callers.
         """
-        resolved, error = await self._resolve_ref(config, ref)
+        resolved, error, commit_info = await self._resolve_ref(config, ref)
         if resolved is None:
             return {"success": False, "message": error, "ref": ref, "categories": []}
 
@@ -449,7 +482,14 @@ class GitHubRestoreService:
             wanted.extend(self._category_paths(category, available))
 
         fetched = await backend.fetch_files(
-            repo_url=config.repository_url, token=config.access_token, ref=resolved, paths=wanted, client=client
+            repo_url=config.repository_url,
+            token=config.access_token,
+            ref=resolved,
+            paths=wanted,
+            client=client,
+            # The listing above already built this map; without it the GitHub
+            # family would GET the same recursive tree a second time.
+            blob_shas=tree.get("blob_shas") or None,
         )
         if not fetched.get("success"):
             return {
@@ -485,12 +525,8 @@ class GitHubRestoreService:
             count, detail = await self._count_items(db, category, parsed)
             categories.append(self._category_entry(category, True, count, detail))
 
-        commit_info = None
-        commits = (await self.list_commits(config, limit=20)).get("commits") or []
-        for entry in commits:
-            if entry["sha"] == resolved:
-                commit_info = entry
-                break
+        if commit_info is None:
+            commit_info = await self._describe_commit(config, resolved)
 
         return {
             "success": True,
@@ -622,7 +658,7 @@ class GitHubRestoreService:
                     return {"success": False, "message": "Configuration not found", "results": {}}
 
                 self._progress = "Resolving commit..."
-                resolved, error = await self._resolve_ref(config, ref)
+                resolved, error, _ = await self._resolve_ref(config, ref)
                 if resolved is None:
                     return {"success": False, "message": error, "results": {}}
 
@@ -706,7 +742,12 @@ class GitHubRestoreService:
 
         self._progress = "Downloading backup files..."
         fetched = await backend.fetch_files(
-            repo_url=config.repository_url, token=config.access_token, ref=ref, paths=wanted, client=client
+            repo_url=config.repository_url,
+            token=config.access_token,
+            ref=ref,
+            paths=wanted,
+            client=client,
+            blob_shas=tree.get("blob_shas") or None,
         )
         if not fetched.get("success"):
             return {}, fetched.get("message") or "Could not read the commit contents"
