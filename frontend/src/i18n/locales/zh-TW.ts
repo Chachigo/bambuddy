@@ -4922,6 +4922,7 @@ export default {
     waitingForAmsStatus: '正在等待 {{printer}} 的 AMS 狀態…',
     insufficientFilamentMessage: '部分已分配料盤的剩餘耗材少於本次列印所需：',
     insufficientFilamentLine: '{{printer}} - {{slot}}：需要 {{required}}g，剩餘 {{remaining}}g',
+    insufficientFilamentLinePooled: '{{printer}} - {{slot}}：需要 {{required}}g，相符料卷共剩餘 {{remaining}}g（AMS 備用料盤）',
     printAnyway: '仍然列印',
     forceColorMatch: '強制顏色匹配',
     staggerPrinterStarts: '錯開印表機啟動',

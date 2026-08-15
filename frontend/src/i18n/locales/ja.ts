@@ -4934,6 +4934,7 @@ export default {
     waitingForAmsStatus: '{{printer}} のAMSステータスを待機しています…',
     insufficientFilamentMessage: '割り当てられたスプールの一部は、この印刷に必要な量より残量が少ないです:',
     insufficientFilamentLine: '{{printer}} - {{slot}}: 必要 {{required}}g、残り {{remaining}}g',
+    insufficientFilamentLinePooled: '{{printer}} - {{slot}}: 必要 {{required}}g、一致するスプール合計で {{remaining}}g（AMSフィラメントバックアップ）',
     printAnyway: 'それでも印刷',
     forceColorMatch: 'カラーマッチを強制',
     staggerPrinterStarts: 'プリンター開始を段階的に',

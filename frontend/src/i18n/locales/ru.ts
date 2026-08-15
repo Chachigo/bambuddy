@@ -4693,6 +4693,7 @@ export default {
     waitingForAmsStatus: "Ожидание состояния AMS от принтера {{printer}}…",
     insufficientFilamentMessage: "На некоторых назначенных катушках осталось меньше филамента, чем требуется для этой печати:",
     insufficientFilamentLine: "{{printer}} — {{slot}}: требуется {{required}} г, осталось {{remaining}} г",
+    insufficientFilamentLinePooled: "{{printer}} — {{slot}}: требуется {{required}} г, доступно {{remaining}} г на подходящих катушках (резервный филамент AMS)",
     printAnyway: "Всё равно печатать",
     forceColorMatch: "Обязательно учитывать цвет",
     staggerPrinterStarts: "Запускать принтеры с задержкой",

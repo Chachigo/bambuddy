@@ -4941,6 +4941,7 @@ export default {
     waitingForAmsStatus: 'Esperando el estado del AMS de {{printer}}…',
     insufficientFilamentMessage: 'Algunas bobinas asignadas tienen menos filamento restante del que necesita esta impresión:',
     insufficientFilamentLine: '{{printer}} - {{slot}}: necesita {{required}} g, restante {{remaining}} g',
+    insufficientFilamentLinePooled: '{{printer}} - {{slot}}: necesita {{required}} g, {{remaining}} g disponibles entre bobinas equivalentes (AMS Filament Backup)',
     printAnyway: 'Imprimir de todos modos',
     forceColorMatch: 'Forzar la coincidencia de color',
     staggerPrinterStarts: 'Escalonar los inicios de las impresoras',

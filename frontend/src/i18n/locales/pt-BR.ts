@@ -4922,6 +4922,7 @@ export default {
     waitingForAmsStatus: 'Aguardando o status do AMS de {{printer}}…',
     insufficientFilamentMessage: 'Alguns dos carretéis atribuídos têm menos filamento restante do que o necessário para esta impressão:',
     insufficientFilamentLine: '{{printer}} - {{slot}}: necessário {{required}}g, restante {{remaining}}g',
+    insufficientFilamentLinePooled: '{{printer}} - {{slot}}: necessário {{required}}g, {{remaining}}g disponíveis entre bobinas correspondentes (AMS Filament Backup)',
     printAnyway: 'Imprimir mesmo assim',
     forceColorMatch: 'Forçar correspondência de cor',
     staggerPrinterStarts: 'Escalonar inícios',

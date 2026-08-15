@@ -4934,6 +4934,7 @@ export default {
     waitingForAmsStatus: 'Warte auf AMS-Status von {{printer}}…',
     insufficientFilamentMessage: 'Einige zugewiesene Spulen haben weniger Filament als dieser Druck benötigt:',
     insufficientFilamentLine: '{{printer}} - {{slot}}: benötigt {{required}}g, verbleibend {{remaining}}g',
+    insufficientFilamentLinePooled: '{{printer}} - {{slot}}: benötigt {{required}}g, {{remaining}}g über passende Spulen verfügbar (AMS Filament Backup)',
     printAnyway: 'Trotzdem drucken',
     forceColorMatch: 'Farbe erzwingen',
     staggerPrinterStarts: 'Druckerstarts staffeln',

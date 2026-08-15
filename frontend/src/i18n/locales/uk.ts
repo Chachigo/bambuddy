@@ -4976,6 +4976,7 @@ export default {
     waitingForAmsStatus: "Очікування статусу AMS від {{printer}}…",
     insufficientFilamentMessage: "У деяких призначених котушках залишилося менше філаменту, ніж потрібно для друку:",
     insufficientFilamentLine: "{{printer}} - {{slot}}: потрібно {{required}}g, залишилося {{remaining}}g",
+    insufficientFilamentLinePooled: "{{printer}} - {{slot}}: потрібно {{required}}g, доступно {{remaining}}g на відповідних котушках (резервне перемикання філаменту AMS)",
     printAnyway: "Усе одно друкувати",
     forceColorMatch: "Примусовий збіг кольорів",
     staggerPrinterStarts: "Запускати принтери почергово",

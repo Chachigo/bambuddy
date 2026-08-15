@@ -4704,6 +4704,7 @@ export default {
     waitingForAmsStatus: '{{printer}}의 AMS 상태를 기다리는 중…',
     insufficientFilamentMessage: '일부 할당된 스풀에 이 인쇄에 필요한 것보다 적은 필라멘트가 남아 있습니다:',
     insufficientFilamentLine: '{{printer}} - {{slot}}: {{required}}g 필요, {{remaining}}g 남음',
+    insufficientFilamentLinePooled: '{{printer}} - {{slot}}: {{required}}g 필요, 일치하는 스풀 합계 {{remaining}}g (AMS 필라멘트 백업)',
     printAnyway: '그래도 인쇄',
     forceColorMatch: '색상 일치 강제',
     staggerPrinterStarts: '프린터 시작 분산',
