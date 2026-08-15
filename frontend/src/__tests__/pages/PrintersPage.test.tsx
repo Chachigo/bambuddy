@@ -840,6 +840,29 @@ describe('PrintersPage', () => {
       expect(numbers).toEqual(['1', '2', '3', '4', '5', '6']);
     });
 
+    it('sizes the rack chips from the card scale rather than a fixed 28px', async () => {
+      // The chips were hard-coded while the type and icons around them grow
+      // with the card size, so at L and XL the rack read as a shrunken strip
+      // next to neighbours that had grown by up to 40%.
+      server.use(
+        http.get('/api/v1/printers/:id/status', () => {
+          return HttpResponse.json(h2cStatus);
+        })
+      );
+
+      render(<PrintersPage />);
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Nozzle Rack').length).toBeGreaterThan(0);
+      });
+
+      const rackLabel = screen.getAllByText('Nozzle Rack')[0];
+      const slotRow = rackLabel.parentElement!.querySelectorAll('div.flex')[0];
+      const chip = slotRow.querySelector('span[data-rack-diameter]')!.parentElement!;
+      expect(chip.className).toContain('w-[var(--pc-i7,28px)]');
+      expect(chip.className).toContain('h-[var(--pc-i7,28px)]');
+    });
+
     it('hides nozzle rack when only L/R nozzles present (H2D)', async () => {
       const h2dStatus = {
         ...mockPrinterStatus,

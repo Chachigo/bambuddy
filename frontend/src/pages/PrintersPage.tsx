@@ -556,10 +556,11 @@ function NozzleRackCard({ slots, filamentInfo }: { slots: import('../api/client'
 
   return (
     // Sized to its contents rather than growing: the six chips are a fixed
-    // 28px each, so any extra width is dead space taken from the temperature
-    // cards beside it — which are flex-1 with a 0 basis and wrap their values
-    // ("220° / 220°") as soon as they lose it. Shrink stays enabled so the
-    // card still gives way on a narrow printer card instead of overflowing.
+    // width at any one card size, so extra width would be dead space taken
+    // from the temperature cards beside it — which are flex-1 with a 0 basis
+    // and wrap their values ("220° / 220°") as soon as they lose it. Shrink
+    // stays enabled so the card still gives way on a narrow printer card
+    // instead of overflowing.
     <div className="text-center px-2.5 py-1.5 bg-bambu-dark rounded-lg flex-[0_1_auto] flex flex-col justify-center">
       <p className="text-[length:var(--pc-t9,9px)] text-bambu-gray mb-1">{t('printers.nozzleRack')}</p>
       <div className="flex gap-[3px] justify-center">
@@ -572,7 +573,7 @@ function NozzleRackCard({ slots, filamentInfo }: { slots: import('../api/client'
             <NozzleSlotHoverCard key={slot.id >= 0 ? slot.id : `empty-${i}`} slot={slot} index={i} filamentName={slot.filament_id ? filamentInfo?.[slot.filament_id]?.name : undefined}>
               <div className="flex flex-col items-center gap-0.5">
                 <div
-                  className={`w-7 h-7 rounded flex items-center justify-center cursor-default transition-colors border-b-2 ${
+                  className={`w-[var(--pc-i7,28px)] h-[var(--pc-i7,28px)] rounded flex items-center justify-center cursor-default transition-colors border-b-2 ${
                     isEmpty
                       ? 'bg-bambu-dark-tertiary/20 border-bambu-dark-tertiary/20'
                       : 'bg-bambu-dark-tertiary/40 border-bambu-dark-tertiary/40'
@@ -589,8 +590,9 @@ function NozzleRackCard({ slots, filamentInfo }: { slots: import('../api/client'
                 </div>
                 {/* Physical rack position, so "swap the nozzle in slot 4" can be
                     acted on without counting chips. Sits below the chip rather
-                    than inside it: the chip is 28px and already carries the
-                    diameter over a filament-coloured background. */}
+                    than inside it: the chip is barely wider than its own
+                    diameter text and already carries that over a
+                    filament-coloured background. */}
                 <span className="text-[length:var(--pc-t8,8px)] leading-none tabular-nums text-bambu-gray/70">
                   {i + 1}
                 </span>
@@ -1834,6 +1836,7 @@ function buildCardScaleStyle(cardSize: number): React.CSSProperties {
     '--pc-i35': px(14),
     '--pc-i4': px(16),
     '--pc-i5': px(20),
+    '--pc-i7': px(28),
   } as React.CSSProperties;
 }
 
