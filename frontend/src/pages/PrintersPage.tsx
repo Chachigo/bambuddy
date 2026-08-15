@@ -134,6 +134,23 @@ import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
 import { getColorName, parseFilamentColor, isLightColor } from '../utils/colors';
 
+// The status filter's options, and the only values it may hold. One list so a
+// saved filter cannot be validated against a set the dropdown has since moved
+// on from (#2833). Labels stay literal so they remain greppable.
+const STATUS_FILTER_OPTIONS = [
+  { value: 'all', labelKey: 'printers.filter.allStatuses' },
+  { value: 'printing', labelKey: 'printers.status.printing' },
+  { value: 'paused', labelKey: 'printers.status.paused' },
+  { value: 'idle', labelKey: 'printers.status.idle' },
+  { value: 'finished', labelKey: 'printers.status.finished' },
+  { value: 'error', labelKey: 'printers.status.error' },
+  { value: 'offline', labelKey: 'printers.status.offline' },
+] as const;
+
+function isKnownStatusFilter(value: string | null): boolean {
+  return STATUS_FILTER_OPTIONS.some(option => option.value === value);
+}
+
 export interface SpoolmanSlotAssignmentRow {
   printer_id: number;
   ams_id: number;
@@ -8126,8 +8143,18 @@ export function PrintersPage() {
     }
   }, [compactDrilldownPrinterId, scrollPrinterIntoView]);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [locationFilter, setLocationFilter] = useState<string>('all');
+  // Both filters persist like every other preference on this page (#2833).
+  // `search` deliberately does not: a box that silently refills itself on
+  // return is more surprising than a dropdown that remembers.
+  const [statusFilter, setStatusFilter] = useState<string>(() => {
+    // Validated on read: a value the dropdown no longer offers would filter
+    // every printer out, and nothing would explain why.
+    const saved = localStorage.getItem('printerStatusFilter');
+    return isKnownStatusFilter(saved) ? (saved as string) : 'all';
+  });
+  const [locationFilter, setLocationFilter] = useState<string>(
+    () => localStorage.getItem('printerLocationFilter') || 'all'
+  );
   const [statusCacheVersion, setStatusCacheVersion] = useState(0);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
     try {
@@ -8486,6 +8513,16 @@ export function PrintersPage() {
     localStorage.setItem('printerSortBy', newSort);
   };
 
+  const handleStatusFilterChange = (value: string) => {
+    setStatusFilter(value);
+    localStorage.setItem('printerStatusFilter', value);
+  };
+
+  const handleLocationFilterChange = (value: string) => {
+    setLocationFilter(value);
+    localStorage.setItem('printerLocationFilter', value);
+  };
+
   const toggleSortDirection = () => {
     const newAsc = !sortAsc;
     setSortAsc(newAsc);
@@ -8568,6 +8605,19 @@ export function PrintersPage() {
     if (!printers) return [];
     return [...new Set(printers.map(p => p.location || '').filter(Boolean))].sort();
   }, [printers]);
+
+  // A saved location can outlive what it matched -- renamed, cleared, or the
+  // only printer that had it deleted. The dropdown is rendered only while some
+  // printer has a location, so a stale one would hide every printer *and* the
+  // control to undo it, leaving an empty page and no way back (#2833).
+  // Deliberately waits for `printers`: it is undefined while the query is in
+  // flight, and acting on the empty list that produces would throw the saved
+  // filter away every time the page loads.
+  useEffect(() => {
+    if (!printers || locationFilter === 'all' || availableLocations.includes(locationFilter)) return;
+    setLocationFilter('all');
+    localStorage.setItem('printerLocationFilter', 'all');
+  }, [printers, availableLocations, locationFilter]);
 
   // Sort printers based on selected option
   const sortedPrinters = useMemo(() => {
@@ -8767,17 +8817,9 @@ export function PrintersPage() {
       {printers && printers.length > 0 && (
         <ToolbarDropdown
           value={statusFilter}
-          onChange={setStatusFilter}
+          onChange={handleStatusFilterChange}
           fullWidth={inMenu}
-          options={[
-            { value: 'all', label: t('printers.filter.allStatuses') },
-            { value: 'printing', label: t('printers.status.printing') },
-            { value: 'paused', label: t('printers.status.paused') },
-            { value: 'idle', label: t('printers.status.idle') },
-            { value: 'finished', label: t('printers.status.finished') },
-            { value: 'error', label: t('printers.status.error') },
-            { value: 'offline', label: t('printers.status.offline') },
-          ]}
+          options={STATUS_FILTER_OPTIONS.map(option => ({ value: option.value, label: t(option.labelKey) }))}
         />
       )}
 
@@ -8785,7 +8827,7 @@ export function PrintersPage() {
       {printers && printers.length > 0 && availableLocations.length > 0 && (
         <ToolbarDropdown
           value={locationFilter}
-          onChange={setLocationFilter}
+          onChange={handleLocationFilterChange}
           fullWidth={inMenu}
           options={[
             { value: 'all', label: t('printers.filter.allLocations') },
