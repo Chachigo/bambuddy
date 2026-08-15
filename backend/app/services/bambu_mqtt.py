@@ -276,28 +276,34 @@ def apply_tray_exist_bits(
 
 # --- H2C nozzle-rack dispatch mapping (#2800) -------------------------------
 #
-# Physical nozzle IDs the H2C reports for its six rack slots. The two hotend
-# carriage positions are 0 and 1 in the same namespace, which is why a rack
-# position can never be confused with an extruder index by value.
+# Physical nozzle IDs the H2C reports for its six rack slots, verified on
+# hardware. They sit well clear of the fixed hotend's own physical ID, so a
+# rack position is never mistakable for the nozzle on the other carriage.
+#
+# Extruder indices are a different namespace that happens to overlap these
+# low numbers -- index 1 means the rack, physical ID 1 means the fixed hotend.
+# Nothing below may pass a value from one namespace to the other untranslated;
+# doing exactly that is what #2800 was.
 _RACK_NOZZLE_IDS = frozenset(range(16, 22))
 
 # BambuStudio dispatches a fixed-length nozzle_mapping on rack models: one
 # physical nozzle ID per filament slot, -1 for slots the plate does not print.
 _RACK_WIRE_SLOTS = 32
 
-# The extruder the rack feeds. On the H2C the swappable hotend sits on the
-# right carriage, which the slicer's physical_extruder_map numbers 0 (left is
-# 1) -- so a slot assigned extruder 0 is a slot that prints from whichever
-# rack nozzle is currently mounted.
-#
-# This is the one value here taken from a single hardware observation (#2800)
-# rather than from something the printer reports. It is safe to be wrong about
-# for a job that prints entirely from one side: if the rack were really on
-# extruder 1, no slot would match and the mapping would simply be omitted,
-# which is the behaviour that existed before any of this. Only a job that
-# prints from both nozzles at once could be actively harmed by a flip, and
-# that is what a second hardware capture needs to confirm.
-_RACK_EXTRUDER_ID = 0
+# The two carriages, as extruder indices in the form the queue stores (already
+# translated through the file's physical_extruder_map). Settled on hardware in
+# #2800: the same sliced mixed-nozzle plate dispatched as [17, -1, -1, 1]
+# printed the rack nozzle several millimetres above the bed, and as
+# [1, -1, -1, 17] printed correctly on both nozzles start to finish.
+_FIXED_EXTRUDER_ID = 0
+_RACK_EXTRUDER_ID = 1
+
+# The fixed hotend's physical ID, which is *not* its extruder index. The same
+# hardware A/B ruled the index out: [0, -1, -1, 17] was rejected by the printer
+# outright, which would not start the job at all. Native BambuStudio captures
+# of a mixed plate agree -- [1, 17, ...], and [17, 1, ...] once the filament
+# slot order is swapped, so the fixed side is 1 whichever slot it lands in.
+_FIXED_NOZZLE_ID = 1
 
 
 def resolve_rack_nozzle_mapping(
@@ -323,9 +329,11 @@ def resolve_rack_nozzle_mapping(
 
     - a slot needs the rack but the printer has not reported a live rack
       position (mid-swap, or a stale connection);
-    - no slot needs the rack at all. The non-rack hotend's own physical ID is
-      not yet confirmed against a known-good BambuStudio capture, and this
-      code will not guess one. Such a job dispatches as it does today.
+    - no slot needs the rack at all. BambuStudio omits nozzle_mapping entirely
+      for a plate sliced for the fixed hotend only (#2800 capture), so this
+      matches it rather than naming a nozzle it does not have to name;
+    - a slot names a carriage that is neither of the two an H2C has, which
+      means the file was mapped for a machine this translation does not model;
     - the plate needs more slots than the wire format carries;
     - the input is not a list of whole numbers.
 
@@ -363,7 +371,15 @@ def resolve_rack_nozzle_mapping(
     for index, extruder in enumerate(normalised):
         if extruder < 0:
             continue
-        wire[index] = rack_nozzle_id if extruder == _RACK_EXTRUDER_ID else extruder
+        if extruder == _RACK_EXTRUDER_ID:
+            wire[index] = rack_nozzle_id
+        elif extruder == _FIXED_EXTRUDER_ID:
+            wire[index] = _FIXED_NOZZLE_ID
+        else:
+            # An H2C has these two carriages and no others. A third index is a
+            # file mapped for something else, and forwarding it raw would name
+            # a physical nozzle by an index that does not identify one.
+            return None
     return wire
 
 
