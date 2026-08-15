@@ -4862,6 +4862,30 @@ export default {
     clearedLogs: '{{count}} journaux supprimés',
     failedToClearLogs: 'Échec de la suppression des journaux : {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: 'Restaurer',
+      title: 'Restaurer depuis la sauvegarde Git',
+      subtitle: 'Choisissez un commit et ce qui doit être restauré',
+      commitLabel: 'Commit de sauvegarde',
+      latestCommit: 'Dernière sauvegarde (tête de branche)',
+      categoriesLabel: 'Éléments à restaurer',
+      inspecting: 'Lecture du contenu de la sauvegarde...',
+      itemCount: '{{count}} dans la sauvegarde',
+      overwriteLabel: 'Écraser les entrées existantes',
+      overwriteOn: 'Les entrées existantes seront mises à jour depuis la sauvegarde.',
+      overwriteOff: 'Seules les entrées manquantes sont ajoutées ; les existantes ne sont pas modifiées.',
+      selectedCount: '{{count}} sélectionné(s)',
+      restoring: 'Restauration...',
+      confirmTitle: 'Restaurer depuis la sauvegarde ?',
+      confirmMessage: 'Les catégories sélectionnées seront restaurées depuis ce commit. Les entrées manquantes sont ajoutées, les existantes restent inchangées.',
+      confirmMessageOverwrite: 'Les catégories sélectionnées seront restaurées depuis ce commit et les entrées déjà présentes localement seront écrasées. Cette action est irréversible.',
+      tally: '{{restored}} restaurés, {{skipped}} ignorés, {{failed}} en échec',
+      reloadHint: 'Rechargez Bambuddy pour que les données restaurées apparaissent partout.',
+      failed: 'Échec de la restauration.',
+      loadFailed: 'Impossible de lire le dépôt de sauvegarde.',
+    },
+
     // History
     history: 'Historique',
     clear: 'Effacer',

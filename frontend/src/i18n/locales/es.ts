@@ -4881,6 +4881,30 @@ export default {
     clearedLogs: 'Se borraron {{count}} registros',
     failedToClearLogs: 'Error al borrar los registros: {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: 'Restaurar',
+      title: 'Restaurar desde copia de Git',
+      subtitle: 'Elige un commit y qué se debe restaurar',
+      commitLabel: 'Commit de la copia',
+      latestCommit: 'Última copia (punta de la rama)',
+      categoriesLabel: 'Qué restaurar',
+      inspecting: 'Leyendo el contenido de la copia...',
+      itemCount: '{{count}} en la copia',
+      overwriteLabel: 'Sobrescribir entradas existentes',
+      overwriteOn: 'Las entradas existentes se actualizarán desde la copia.',
+      overwriteOff: 'Solo se añaden las entradas que falten; las existentes no se modifican.',
+      selectedCount: '{{count}} seleccionados',
+      restoring: 'Restaurando...',
+      confirmTitle: '¿Restaurar desde la copia?',
+      confirmMessage: 'Las categorías seleccionadas se restaurarán desde este commit. Se añaden las entradas que falten y las existentes se mantienen igual.',
+      confirmMessageOverwrite: 'Las categorías seleccionadas se restaurarán desde este commit y se sobrescribirán las entradas que ya existan localmente. Esto no se puede deshacer.',
+      tally: '{{restored}} restaurados, {{skipped}} omitidos, {{failed}} fallidos',
+      reloadHint: 'Recarga Bambuddy para que los datos restaurados aparezcan en todas partes.',
+      failed: 'La restauración ha fallado.',
+      loadFailed: 'No se pudo leer el repositorio de copias de seguridad.',
+    },
+
     // History
     history: 'Historial',
     clear: 'Borrar',

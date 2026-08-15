@@ -4861,6 +4861,30 @@ export default {
     clearedLogs: '已清除 {{count}} 条日志',
     failedToClearLogs: '清除日志失败：{{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: '恢复',
+      title: '从 Git 备份恢复',
+      subtitle: '选择提交以及要恢复的内容',
+      commitLabel: '备份提交',
+      latestCommit: '最新备份（分支最新提交）',
+      categoriesLabel: '恢复内容',
+      inspecting: '正在读取备份内容...',
+      itemCount: '备份中有 {{count}} 项',
+      overwriteLabel: '覆盖已有条目',
+      overwriteOn: '已有条目将根据备份内容更新。',
+      overwriteOff: '仅添加缺失的条目，已有条目保持不变。',
+      selectedCount: '已选择 {{count}} 项',
+      restoring: '正在恢复...',
+      confirmTitle: '要从备份恢复吗？',
+      confirmMessage: '将从此提交恢复所选类别。缺失的条目会被添加，已有条目保持不变。',
+      confirmMessageOverwrite: '将从此提交恢复所选类别，并覆盖本地已存在的条目。此操作无法撤销。',
+      tally: '已恢复 {{restored}} 项，跳过 {{skipped}} 项，失败 {{failed}} 项',
+      reloadHint: '请重新加载 Bambuddy，以便恢复的数据在各处生效。',
+      failed: '恢复失败。',
+      loadFailed: '无法读取备份仓库。',
+    },
+
     // History
     history: '历史记录',
     clear: '清除',

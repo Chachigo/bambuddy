@@ -4873,6 +4873,30 @@ export default {
     clearedLogs: '{{count}}件のログを削除しました',
     failedToClearLogs: 'ログの削除に失敗しました: {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: '復元',
+      title: 'Git バックアップから復元',
+      subtitle: 'コミットと復元する項目を選択します',
+      commitLabel: 'バックアップのコミット',
+      latestCommit: '最新のバックアップ (ブランチ先端)',
+      categoriesLabel: '復元する項目',
+      inspecting: 'バックアップの内容を読み込んでいます...',
+      itemCount: 'バックアップ内に {{count}} 件',
+      overwriteLabel: '既存のエントリを上書きする',
+      overwriteOn: '既存のエントリはバックアップの内容で更新されます。',
+      overwriteOff: '不足しているエントリのみ追加され、既存のものは変更されません。',
+      selectedCount: '{{count}} 件選択中',
+      restoring: '復元しています...',
+      confirmTitle: 'バックアップから復元しますか?',
+      confirmMessage: '選択したカテゴリをこのコミットから復元します。不足しているエントリが追加され、既存のエントリはそのまま残ります。',
+      confirmMessageOverwrite: '選択したカテゴリをこのコミットから復元し、ローカルに既存のエントリを上書きします。この操作は取り消せません。',
+      tally: '復元 {{restored}} 件、スキップ {{skipped}} 件、失敗 {{failed}} 件',
+      reloadHint: '復元したデータを全体に反映するには Bambuddy を再読み込みしてください。',
+      failed: '復元に失敗しました。',
+      loadFailed: 'バックアップリポジトリを読み取れませんでした。',
+    },
+
     // History
     history: '履歴',
     clear: 'クリア',

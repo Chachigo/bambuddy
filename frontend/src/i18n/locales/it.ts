@@ -4861,6 +4861,30 @@ export default {
     clearedLogs: '{{count}} log eliminati',
     failedToClearLogs: 'Eliminazione log fallita: {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: 'Ripristina',
+      title: 'Ripristina dal backup Git',
+      subtitle: 'Scegli un commit e cosa ripristinare',
+      commitLabel: 'Commit del backup',
+      latestCommit: 'Ultimo backup (punta del branch)',
+      categoriesLabel: 'Cosa ripristinare',
+      inspecting: 'Lettura del contenuto del backup...',
+      itemCount: '{{count}} nel backup',
+      overwriteLabel: 'Sovrascrivi le voci esistenti',
+      overwriteOn: 'Le voci esistenti verranno aggiornate dal backup.',
+      overwriteOff: 'Vengono aggiunte solo le voci mancanti; quelle esistenti restano invariate.',
+      selectedCount: '{{count}} selezionati',
+      restoring: 'Ripristino in corso...',
+      confirmTitle: 'Ripristinare dal backup?',
+      confirmMessage: 'Le categorie selezionate verranno ripristinate da questo commit. Le voci mancanti vengono aggiunte, quelle esistenti restano invariate.',
+      confirmMessageOverwrite: 'Le categorie selezionate verranno ripristinate da questo commit sovrascrivendo le voci già presenti in locale. Operazione non annullabile.',
+      tally: '{{restored}} ripristinati, {{skipped}} saltati, {{failed}} non riusciti',
+      reloadHint: 'Ricarica Bambuddy per vedere i dati ripristinati in tutte le sezioni.',
+      failed: 'Ripristino non riuscito.',
+      loadFailed: 'Impossibile leggere il repository di backup.',
+    },
+
     // History
     history: 'Cronologia',
     clear: 'Cancella',

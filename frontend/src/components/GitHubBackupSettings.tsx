@@ -40,6 +40,7 @@ import { Card, CardContent, CardHeader } from './Card';
 import { Button } from './Button';
 import { Toggle } from './Toggle';
 import { ConfirmModal } from './ConfirmModal';
+import { GitHubRestoreModal } from './GitHubRestoreModal';
 import { useToast } from '../contexts/ToastContext';
 import { formatRelativeTime, parseUTCDate } from '../utils/date';
 
@@ -157,6 +158,9 @@ export function GitHubBackupSettings() {
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [restoreResult, setRestoreResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Restore from the Git backup repository (#2656)
+  const [showGitRestore, setShowGitRestore] = useState(false);
 
   // Scheduled local backup state
   const [deleteConfirmFile, setDeleteConfirmFile] = useState<string | null>(null);
@@ -951,6 +955,16 @@ export function GitHubBackupSettings() {
                           {testLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                           {t('backup.test')}
                         </Button>
+                        {/* Restore from the backup repo (#2656) */}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => setShowGitRestore(true)}
+                          disabled={status.restore_running}
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          {t('backup.restoreFromGit.button')}
+                        </Button>
                       </>
                     )}
                   </>
@@ -1444,6 +1458,9 @@ export function GitHubBackupSettings() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Restore from the Git backup repository (#2656) */}
+      {showGitRestore && <GitHubRestoreModal onClose={() => setShowGitRestore(false)} />}
 
       {/* Delete Backup Confirmation Modal */}
       {deleteConfirmFile && (

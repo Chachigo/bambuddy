@@ -4873,6 +4873,30 @@ export default {
     clearedLogs: '{{count}} Protokolle gelöscht',
     failedToClearLogs: 'Protokolle löschen fehlgeschlagen: {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: 'Wiederherstellen',
+      title: 'Aus Git-Backup wiederherstellen',
+      subtitle: 'Commit auswählen und festlegen, was wiederhergestellt wird',
+      commitLabel: 'Backup-Commit',
+      latestCommit: 'Neuestes Backup (Branch-Spitze)',
+      categoriesLabel: 'Was wiederherstellen',
+      inspecting: 'Backup-Inhalt wird gelesen...',
+      itemCount: '{{count}} im Backup',
+      overwriteLabel: 'Vorhandene Einträge überschreiben',
+      overwriteOn: 'Vorhandene Einträge werden aus dem Backup aktualisiert.',
+      overwriteOff: 'Es werden nur fehlende Einträge ergänzt; vorhandene bleiben unverändert.',
+      selectedCount: '{{count}} ausgewählt',
+      restoring: 'Wird wiederhergestellt...',
+      confirmTitle: 'Aus Backup wiederherstellen?',
+      confirmMessage: 'Die ausgewählten Kategorien werden aus diesem Commit wiederhergestellt. Fehlende Einträge werden ergänzt, vorhandene bleiben unverändert.',
+      confirmMessageOverwrite: 'Die ausgewählten Kategorien werden aus diesem Commit wiederhergestellt und lokal vorhandene Einträge überschrieben. Dies kann nicht rückgängig gemacht werden.',
+      tally: '{{restored}} wiederhergestellt, {{skipped}} übersprungen, {{failed}} fehlgeschlagen',
+      reloadHint: 'Bambuddy neu laden, damit die wiederhergestellten Daten überall erscheinen.',
+      failed: 'Wiederherstellung fehlgeschlagen.',
+      loadFailed: 'Das Backup-Repository konnte nicht gelesen werden.',
+    },
+
     // History
     history: 'Verlauf',
     clear: 'Löschen',

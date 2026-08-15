@@ -115,6 +115,201 @@ class GitLabBackend(GitProviderBackend):
                 "is_private": None,
             }
 
+    def _encoded_project(self, repo_url: str) -> str:
+        """Return the URL-encoded ``namespace/project`` path for /api/v4/projects/."""
+        owner, repo = self.parse_repo_url(repo_url)
+        return urllib.parse.quote(f"{owner}/{repo}", safe="")
+
+    async def list_commits(
+        self,
+        repo_url: str,
+        token: str,
+        branch: str,
+        client: httpx.AsyncClient,
+        limit: int = 20,
+    ) -> dict:
+        """List recent commits on ``branch`` via /repository/commits."""
+        try:
+            api_base = self.get_api_base(repo_url)
+            headers = self.get_headers(token)
+            encoded_path = self._encoded_project(repo_url)
+
+            response = await client.get(
+                f"{api_base}/projects/{encoded_path}/repository/commits",
+                headers=headers,
+                params={"ref_name": branch, "per_page": limit},
+            )
+
+            if response.status_code == 404:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Branch '{branch}' not found, or the repository has no commits yet. "
+                        "Run a backup before restoring."
+                    ),
+                    "commits": [],
+                }
+            if response.status_code != 200:
+                msg = f"Failed to list commits (HTTP {response.status_code}): {self._truncated_response_text(response)}"
+                logger.warning("list_commits %s: %s", repo_url, msg)
+                return {"success": False, "message": msg, "commits": []}
+
+            try:
+                data = response.json()
+            except ValueError:
+                return {"success": False, "message": "Non-JSON response listing commits", "commits": []}
+            if not isinstance(data, list):
+                return {"success": False, "message": "Unexpected shape listing commits", "commits": []}
+
+            commits = []
+            for entry in data[:limit]:
+                if not isinstance(entry, dict):
+                    continue
+                sha = entry.get("id")
+                if not isinstance(sha, str) or not sha:
+                    continue
+                # GitLab flattens author/date onto the commit itself rather than
+                # nesting them under "commit" the way GitHub does.
+                commits.append(
+                    {
+                        "sha": sha,
+                        "message": entry.get("message") or "",
+                        "author": entry.get("author_name") or "",
+                        "date": entry.get("committed_date") or entry.get("created_at") or "",
+                    }
+                )
+
+            return {"success": True, "message": "OK", "commits": commits}
+
+        except Exception as e:
+            logger.exception("list_commits failed for %s branch=%s", repo_url, branch)
+            return {"success": False, "message": f"{type(e).__name__}: {str(e)[:200]}", "commits": []}
+
+    async def list_tree(
+        self,
+        repo_url: str,
+        token: str,
+        ref: str,
+        client: httpx.AsyncClient,
+    ) -> dict:
+        """List blob paths at ``ref`` via /repository/tree, following pagination."""
+        try:
+            api_base = self.get_api_base(repo_url)
+            headers = self.get_headers(token)
+            encoded_path = self._encoded_project(repo_url)
+
+            paths: list[str] = []
+            page = 1
+            # GitLab's tree endpoint paginates instead of exposing a "truncated"
+            # flag, so walk pages until one comes back short. The page cap stops
+            # a malformed X-Next-Page loop from spinning forever.
+            while page <= 50:
+                response = await client.get(
+                    f"{api_base}/projects/{encoded_path}/repository/tree",
+                    headers=headers,
+                    params={"ref": ref, "recursive": "true", "per_page": 100, "page": page},
+                )
+                if response.status_code == 404:
+                    return {
+                        "success": False,
+                        "message": f"Commit or tree '{ref}' not found in the repository",
+                        "paths": [],
+                    }
+                if response.status_code != 200:
+                    msg = (
+                        f"Failed to list tree (HTTP {response.status_code}): {self._truncated_response_text(response)}"
+                    )
+                    logger.warning("list_tree %s ref=%s: %s", repo_url, ref, msg)
+                    return {"success": False, "message": msg, "paths": []}
+
+                try:
+                    data = response.json()
+                except ValueError:
+                    return {"success": False, "message": "Non-JSON response listing tree", "paths": []}
+                if not isinstance(data, list):
+                    return {"success": False, "message": "Unexpected shape listing tree", "paths": []}
+
+                for item in data:
+                    if isinstance(item, dict) and item.get("type") == "blob":
+                        path = item.get("path")
+                        if isinstance(path, str) and path:
+                            paths.append(path)
+
+                if len(data) < 100:
+                    break
+                page += 1
+
+            return {"success": True, "message": "OK", "paths": sorted(paths)}
+
+        except Exception as e:
+            logger.exception("list_tree failed for %s ref=%s", repo_url, ref)
+            return {"success": False, "message": f"{type(e).__name__}: {str(e)[:200]}", "paths": []}
+
+    async def fetch_files(
+        self,
+        repo_url: str,
+        token: str,
+        ref: str,
+        paths: list[str],
+        client: httpx.AsyncClient,
+    ) -> dict:
+        """Read ``paths`` at ``ref`` via /repository/files/{path}."""
+        try:
+            api_base = self.get_api_base(repo_url)
+            headers = self.get_headers(token)
+            encoded_path = self._encoded_project(repo_url)
+
+            files: dict[str, str] = {}
+            for path in paths:
+                encoded_file = urllib.parse.quote(path, safe="")
+                response = await client.get(
+                    f"{api_base}/projects/{encoded_path}/repository/files/{encoded_file}",
+                    headers=headers,
+                    params={"ref": ref},
+                )
+                # A path absent from this commit is expected — which categories a
+                # backup contains varies by config — so skip rather than fail.
+                if response.status_code == 404:
+                    continue
+                if response.status_code != 200:
+                    msg = (
+                        f"Failed to read {path} (HTTP {response.status_code}): "
+                        f"{self._truncated_response_text(response)}"
+                    )
+                    logger.warning("fetch_files %s: %s", repo_url, msg)
+                    return {"success": False, "message": msg, "files": {}}
+
+                try:
+                    data = response.json()
+                except ValueError:
+                    return {"success": False, "message": f"Non-JSON response reading {path}", "files": {}}
+                if not isinstance(data, dict):
+                    return {"success": False, "message": f"Unexpected shape reading {path}", "files": {}}
+
+                content = data.get("content")
+                if not isinstance(content, str):
+                    return {"success": False, "message": f"Missing content reading {path}", "files": {}}
+                encoding = data.get("encoding", "base64")
+                try:
+                    if encoding == "base64":
+                        files[path] = base64.b64decode(content).decode("utf-8")
+                    elif encoding in ("text", "utf-8", "plain"):
+                        files[path] = content
+                    else:
+                        return {
+                            "success": False,
+                            "message": f"Unsupported encoding {encoding!r} reading {path}",
+                            "files": {},
+                        }
+                except (ValueError, UnicodeDecodeError) as e:
+                    return {"success": False, "message": f"Could not decode {path}: {type(e).__name__}", "files": {}}
+
+            return {"success": True, "message": "OK", "files": files}
+
+        except Exception as e:
+            logger.exception("fetch_files failed for %s ref=%s", repo_url, ref)
+            return {"success": False, "message": f"{type(e).__name__}: {str(e)[:200]}", "files": {}}
+
     async def push_files(
         self,
         repo_url: str,

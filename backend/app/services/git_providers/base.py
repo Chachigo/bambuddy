@@ -76,3 +76,61 @@ class GitProviderBackend(ABC):
         client: httpx.AsyncClient,
     ) -> dict:
         """Push files to the repository. Returns status/message/commit_sha/files_changed."""
+
+    # --- Read side (restore, issue #2656) ---------------------------------
+    # The backup path only ever writes. Restore needs to walk history, list a
+    # snapshot and read individual blobs back, so these three mirror the
+    # ``{"success": bool, "message": str, ...}`` convention ``test_connection``
+    # already uses rather than raising.
+
+    @abstractmethod
+    async def list_commits(
+        self,
+        repo_url: str,
+        token: str,
+        branch: str,
+        client: httpx.AsyncClient,
+        limit: int = 20,
+    ) -> dict:
+        """List recent commits on ``branch``, newest first.
+
+        Returns ``{"success", "message", "commits": [{"sha", "message", "author", "date"}]}``.
+        """
+
+    @abstractmethod
+    async def list_tree(
+        self,
+        repo_url: str,
+        token: str,
+        ref: str,
+        client: httpx.AsyncClient,
+    ) -> dict:
+        """List every blob path present at ``ref``.
+
+        ``ref`` is a concrete commit SHA — the caller resolves "latest" to a SHA
+        via :meth:`list_commits` first, so the snapshot being previewed and the
+        one being restored are provably the same commit even if a scheduled
+        backup lands in between.
+
+        Returns ``{"success", "message", "paths": [str]}``.
+        """
+
+    @abstractmethod
+    async def fetch_files(
+        self,
+        repo_url: str,
+        token: str,
+        ref: str,
+        paths: list[str],
+        client: httpx.AsyncClient,
+    ) -> dict:
+        """Read several files' decoded UTF-8 text at ``ref``.
+
+        Batched rather than one-file-at-a-time so providers that need a tree
+        listing to map path -> blob SHA can do that lookup once for the whole
+        restore instead of per file.
+
+        Returns ``{"success", "message", "files": {path: text}}``. Paths absent
+        from the commit are simply missing from ``files`` — that is not an error,
+        since which categories a given backup contains varies by config.
+        """

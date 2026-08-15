@@ -12,6 +12,7 @@ from backend.app.core.permissions import Permission
 from backend.app.models.github_backup import GitHubBackupConfig, GitHubBackupLog
 from backend.app.models.user import User
 from backend.app.schemas.github_backup import (
+    REF_PATTERN,
     CloudAccountCounts,
     GitHubBackupConfigCreate,
     GitHubBackupConfigResponse,
@@ -19,10 +20,15 @@ from backend.app.schemas.github_backup import (
     GitHubBackupLogResponse,
     GitHubBackupStatus,
     GitHubBackupTriggerResponse,
+    GitHubCommitListResponse,
+    GitHubRestorePreview,
+    GitHubRestoreRequest,
+    GitHubRestoreResponse,
     GitHubTestConnectionResponse,
     ProviderType,
 )
 from backend.app.services.github_backup import github_backup_service
+from backend.app.services.github_restore import github_restore_service
 
 logger = logging.getLogger(__name__)
 
@@ -388,11 +394,73 @@ async def get_status(
         configured=True,
         enabled=config.enabled,
         is_running=github_backup_service.is_running,
-        progress=github_backup_service.progress,
+        restore_running=github_restore_service.is_running,
+        progress=github_backup_service.progress or github_restore_service.progress,
         last_backup_at=config.last_backup_at,
         last_backup_status=config.last_backup_status,
         next_scheduled_run=config.next_scheduled_run,
     )
+
+
+@router.get("/commits", response_model=GitHubCommitListResponse)
+async def list_commits(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.GITHUB_RESTORE),
+):
+    """List recent backup commits so the user can pick one to restore from."""
+    result = await db.execute(select(GitHubBackupConfig).limit(1))
+    config = result.scalar_one_or_none()
+
+    if not config:
+        raise HTTPException(status_code=404, detail="No configuration found. Configure backup first.")
+
+    commit_result = await github_restore_service.list_commits(config, limit=limit)
+    return GitHubCommitListResponse(**commit_result)
+
+
+@router.get("/restore/preview", response_model=GitHubRestorePreview)
+async def preview_restore(
+    ref: str = Query(default="HEAD", pattern=REF_PATTERN),
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.GITHUB_RESTORE),
+):
+    """Report which categories a given backup commit contains."""
+    result = await db.execute(select(GitHubBackupConfig).limit(1))
+    config = result.scalar_one_or_none()
+
+    if not config:
+        raise HTTPException(status_code=404, detail="No configuration found. Configure backup first.")
+
+    preview = await github_restore_service.preview(config, ref=ref)
+    return GitHubRestorePreview(**preview)
+
+
+@router.post("/restore", response_model=GitHubRestoreResponse)
+async def restore_backup(
+    request: GitHubRestoreRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User | None = RequirePermissionIfAuthEnabled(Permission.GITHUB_RESTORE),
+):
+    """Restore selected categories from one backup commit.
+
+    Note there is no private-repo gate here, unlike the config endpoints: that
+    check exists to stop credentials leaving the instance, and this path only
+    reads. A config can only be saved against a private repo anyway.
+    """
+    result = await db.execute(select(GitHubBackupConfig).limit(1))
+    config = result.scalar_one_or_none()
+
+    if not config:
+        raise HTTPException(status_code=404, detail="No configuration found. Configure backup first.")
+
+    restore_result = await github_restore_service.run_restore(
+        config.id,
+        ref=request.ref,
+        categories=request.categories,
+        overwrite_existing=request.overwrite_existing,
+    )
+    return GitHubRestoreResponse(**restore_result)
 
 
 @router.get("/logs", response_model=list[GitHubBackupLogResponse])

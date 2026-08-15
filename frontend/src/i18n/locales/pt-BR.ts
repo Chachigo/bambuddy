@@ -4861,6 +4861,30 @@ export default {
     clearedLogs: '{{count}} logs removidos',
     failedToClearLogs: 'Falha ao limpar logs: {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: 'Restaurar',
+      title: 'Restaurar do backup Git',
+      subtitle: 'Escolha um commit e o que deve ser restaurado',
+      commitLabel: 'Commit do backup',
+      latestCommit: 'Backup mais recente (ponta do branch)',
+      categoriesLabel: 'O que restaurar',
+      inspecting: 'Lendo o conteúdo do backup...',
+      itemCount: '{{count}} no backup',
+      overwriteLabel: 'Sobrescrever entradas existentes',
+      overwriteOn: 'As entradas existentes serão atualizadas a partir do backup.',
+      overwriteOff: 'Apenas as entradas ausentes são adicionadas; as existentes permanecem intactas.',
+      selectedCount: '{{count}} selecionados',
+      restoring: 'Restaurando...',
+      confirmTitle: 'Restaurar do backup?',
+      confirmMessage: 'As categorias selecionadas serão restauradas deste commit. As entradas ausentes são adicionadas e as existentes permanecem como estão.',
+      confirmMessageOverwrite: 'As categorias selecionadas serão restauradas deste commit, sobrescrevendo as entradas que já existem localmente. Não é possível desfazer.',
+      tally: '{{restored}} restaurados, {{skipped}} ignorados, {{failed}} com falha',
+      reloadHint: 'Recarregue o Bambuddy para que os dados restaurados apareçam em todos os lugares.',
+      failed: 'Falha na restauração.',
+      loadFailed: 'Não foi possível ler o repositório de backup.',
+    },
+
     // History
     history: 'Histórico',
     clear: 'Limpar',

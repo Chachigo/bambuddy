@@ -4861,6 +4861,30 @@ export default {
     clearedLogs: '已清除 {{count}} 條日誌',
     failedToClearLogs: '清除日誌失敗：{{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: '還原',
+      title: '從 Git 備份還原',
+      subtitle: '選擇提交以及要還原的項目',
+      commitLabel: '備份提交',
+      latestCommit: '最新備份（分支最新提交）',
+      categoriesLabel: '還原項目',
+      inspecting: '正在讀取備份內容...',
+      itemCount: '備份中有 {{count}} 筆',
+      overwriteLabel: '覆寫既有項目',
+      overwriteOn: '既有項目將依備份內容更新。',
+      overwriteOff: '僅新增缺少的項目，既有項目保持不變。',
+      selectedCount: '已選擇 {{count}} 筆',
+      restoring: '正在還原...',
+      confirmTitle: '要從備份還原嗎？',
+      confirmMessage: '將從此提交還原所選類別。缺少的項目會被新增，既有項目保持不變。',
+      confirmMessageOverwrite: '將從此提交還原所選類別，並覆寫本機已存在的項目。此操作無法復原。',
+      tally: '已還原 {{restored}} 筆、略過 {{skipped}} 筆、失敗 {{failed}} 筆',
+      reloadHint: '請重新載入 Bambuddy，讓還原的資料在各處生效。',
+      failed: '還原失敗。',
+      loadFailed: '無法讀取備份儲存庫。',
+    },
+
     // History
     history: '歷史紀錄',
     clear: '清除',

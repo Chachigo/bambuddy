@@ -4916,6 +4916,30 @@ export default {
     clearedLogs: 'Cleared {{count}} logs',
     failedToClearLogs: 'Failed to clear logs: {{message}}',
 
+    // Restore from Git backup (#2656)
+    restoreFromGit: {
+      button: 'Restore',
+      title: 'Restore from Git Backup',
+      subtitle: 'Pick a commit and choose what to restore',
+      commitLabel: 'Backup commit',
+      latestCommit: 'Latest backup (branch tip)',
+      categoriesLabel: 'What to restore',
+      inspecting: 'Reading backup contents...',
+      itemCount: '{{count}} in backup',
+      overwriteLabel: 'Overwrite existing entries',
+      overwriteOn: 'Existing entries will be updated from the backup.',
+      overwriteOff: 'Only missing entries are added; existing ones are left untouched.',
+      selectedCount: '{{count}} selected',
+      restoring: 'Restoring...',
+      confirmTitle: 'Restore from backup?',
+      confirmMessage: 'The selected categories will be restored from this commit. Missing entries are added; existing entries stay as they are.',
+      confirmMessageOverwrite: 'The selected categories will be restored from this commit, overwriting entries that already exist locally. This cannot be undone.',
+      tally: '{{restored}} restored, {{skipped}} skipped, {{failed}} failed',
+      reloadHint: 'Reload Bambuddy so the restored data appears everywhere.',
+      failed: 'Restore failed.',
+      loadFailed: 'Could not read the backup repository.',
+    },
+
     // History
     history: 'History',
     clear: 'Clear',

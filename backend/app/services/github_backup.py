@@ -173,8 +173,31 @@ class GitHubBackupService:
         Returns:
             dict with success, message, log_id, commit_sha, files_changed
         """
+        # Everything from here to `self._running_backup = True` must stay
+        # await-free. Both flags are plain bools and both callers are coroutines
+        # on one event loop, so with no suspension point in between the loop
+        # cannot run the restore service's mirror-image region (see
+        # github_restore.run_restore) in the gap — whichever gets here first sets
+        # its flag before the other can read it. Adding an `await` inside this
+        # block reintroduces the check-then-set race and lets a backup and a
+        # restore run at once.
         if self._running_backup:
             return {"success": False, "message": "A backup is already running", "log_id": None}
+
+        # Imported locally to avoid a module-level import cycle — the restore
+        # service imports this module's singleton to take the mirror-image lock.
+        # A restore rewrites the same tables this collector reads and publishes
+        # K-profiles to the same printers, so the two must not interleave.
+        # (A local `import` of an already-loaded module is not a suspension
+        # point, so it does not break the await-free rule above.)
+        from backend.app.services.github_restore import github_restore_service
+
+        if github_restore_service.is_running:
+            return {
+                "success": False,
+                "message": "A restore is currently running. Wait for it to finish before backing up.",
+                "log_id": None,
+            }
 
         self._running_backup = True
         log_id = None
@@ -840,6 +863,12 @@ class GitHubBackupService:
                 "energy_kwh": a.energy_kwh,
                 "energy_cost": a.energy_cost,
                 "created_at": str(a.created_at) if a.created_at else None,
+                # Soft-deleted archives are collected too — their row is kept on
+                # purpose so the stats endpoint keeps counting their filament and
+                # energy (see archive_service.soft_delete_archive). Recording
+                # deleted_at is what lets a restore put them back the way they
+                # were instead of resurrecting them as visible archives.
+                "deleted_at": str(a.deleted_at) if a.deleted_at else None,
             }
             archive_list.append(archive_data)
 
