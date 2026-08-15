@@ -1642,7 +1642,9 @@ class GitHubRestoreService:
         is the strongest signal; a delete-then-add edit regenerates it, so fall
         back to the display name, which Bambuddy's own editor preserves.
         Both are scoped by ``filament_id`` — the same preset on a different
-        filament is a different profile.
+        filament is a different profile — and by ``extruder_id``, because on a
+        dual-nozzle printer the same preset on the other extruder is a different
+        profile too.
 
         ``claimed`` holds the slot ids already taken by earlier entries in this
         nozzle's loop, and no live profile may be claimed twice. Without it, two
@@ -1658,6 +1660,22 @@ class GitHubRestoreService:
             return None
 
         candidates = [c for c in current if c.filament_id == filament_id]
+
+        # The live index is read per nozzle *diameter*, so on an H2D both
+        # extruders' profiles come back together. With the same filament
+        # calibrated on both — the ordinary case on a dual-nozzle printer, not an
+        # exotic one — filament_id alone lets extruder 0's backed-up entry match
+        # extruder 1's live profile, and the batch then carries
+        # {extruder_id: 0, cali_idx: <extruder-1 slot>}: one extruder's
+        # calibration written over the other's, counted restored.
+        #
+        # Conditional on both sides saying which extruder they mean. A pre-#2656
+        # backup carries no extruder_id, and a live index that reports none must
+        # not turn every entry into an add.
+        extruder_id = entry.get("extruder_id")
+        if isinstance(extruder_id, int) and any(getattr(c, "extruder_id", None) is not None for c in candidates):
+            candidates = [c for c in candidates if getattr(c, "extruder_id", None) == extruder_id]
+
         available = [c for c in candidates if c.slot_id not in claimed]
         if not available:
             return None

@@ -1232,9 +1232,19 @@ class TestRestoreArchives:
 
 class TestRestoreKprofiles:
     @staticmethod
-    def _live(slot_id, filament_id="GFA00", name="Bambu PLA", setting_id="PFUS123"):
-        """One profile as the printer currently reports it."""
-        return SimpleNamespace(slot_id=slot_id, filament_id=filament_id, name=name, setting_id=setting_id)
+    def _live(slot_id, filament_id="GFA00", name="Bambu PLA", setting_id="PFUS123", extruder_id=0):
+        """One profile as the printer currently reports it.
+
+        ``extruder_id`` mirrors ``KProfile`` (bambu_mqtt.py), which has carried
+        it all along; single-nozzle printers report 0.
+        """
+        return SimpleNamespace(
+            slot_id=slot_id,
+            filament_id=filament_id,
+            name=name,
+            setting_id=setting_id,
+            extruder_id=extruder_id,
+        )
 
     def _client(self, live=None, sent="7", ack=(True, "")):
         """A connected printer client.
@@ -1526,6 +1536,99 @@ class TestRestoreKprofiles:
 
         profiles, _ = client.set_kprofiles_batch.call_args.args
         assert [p["cali_idx"] for p in profiles] == [1, -1]
+
+    # --- the match is scoped to the extruder it was calibrated on -----------
+    #
+    # get_kprofiles reads per nozzle *diameter*, so on a dual-nozzle printer
+    # both extruders come back in one list. Scoping candidates on filament_id
+    # alone let one extruder's calibration be written over the other's.
+
+    @pytest.mark.asyncio
+    async def test_each_extruders_profile_lands_on_its_own_extruder(self, db_session, printer_factory):
+        """The same preset calibrated on both extruders of an H2D.
+
+        Both live profiles share a filament_id *and* a setting_id, so the
+        setting_id arm matched whichever the printer happened to list first —
+        and with an entry per extruder the two swapped slots, each overwriting
+        the other's calibration while the tally counted both restored.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entries = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"]
+        entries.append({**entries[0], "extruder_id": 1, "nozzle_id": "HS00-0.4-R"})
+        client = self._client(
+            live=[
+                # Right extruder first, which is what made the bug bite.
+                self._live(slot_id=1001, extruder_id=1),
+                self._live(slot_id=1000, extruder_id=0),
+            ]
+        )
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert [(p["extruder_id"], p["cali_idx"]) for p in profiles] == [(0, 1000), (1, 1001)]
+        assert tally.restored == 2
+        assert not any("added as new profiles" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_other_extruders_profile_is_not_a_candidate(self, db_session, printer_factory):
+        """One backed-up entry, and the only live profile is the other extruder's.
+
+        Adding as new is the right answer: extruder 0's calibration is not a
+        stand-in for extruder 1's, however well the filament and preset line up.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        client = self._client(live=[self._live(slot_id=1001, extruder_id=1)])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == -1
+        assert any("added as new profiles" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_an_entry_without_an_extruder_id_still_matches(self, db_session, printer_factory):
+        """Control: a pre-#2656 backup carries no extruder_id.
+
+        A missing key must leave the match exactly as it was, not turn every
+        entry into an add.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        payload["kprofiles/00M09A123456789/0.4.json"]["profiles"][0].pop("extruder_id")
+        client = self._client(live=[self._live(slot_id=4606)])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == 4606
+        assert tally.restored == 1
+
+    @pytest.mark.asyncio
+    async def test_a_live_index_that_reports_no_extruder_still_matches(self, db_session, printer_factory):
+        """Control: the same, for a printer whose profiles carry no extruder_id."""
+        await printer_factory(serial_number="00M09A123456789")
+        live = SimpleNamespace(slot_id=4606, filament_id="GFA00", name="Bambu PLA", setting_id="PFUS123")
+        client = self._client(live=[live])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, self._payload(), tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["cali_idx"] == 4606
+        assert tally.restored == 1
 
     @pytest.mark.asyncio
     async def test_unknown_serial_is_skipped_with_reason(self, db_session):
