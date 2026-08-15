@@ -36,6 +36,7 @@ import type {
   CloudAuthStatus,
   Printer,
 } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardHeader } from './Card';
 import { Button } from './Button';
 import { Toggle } from './Toggle';
@@ -134,6 +135,14 @@ export function GitHubBackupSettings() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { t } = useTranslation();
+  const { hasPermission } = useAuth();
+
+  // All three restore endpoints are gated on GITHUB_RESTORE server-side, so a
+  // user without it gets a 403 the moment the modal opens its preview. Hide the
+  // button rather than offer an action that cannot work. Deliberately scoped to
+  // the button: the card itself stays visible, since backup configuration is a
+  // separate permission. hasPermission returns true when auth is off.
+  const canRestoreFromGit = hasPermission('github:restore');
 
   // Local state for form
   const [repoUrl, setRepoUrl] = useState('');
@@ -956,15 +965,17 @@ export function GitHubBackupSettings() {
                           {t('backup.test')}
                         </Button>
                         {/* Restore from the backup repo (#2656) */}
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => setShowGitRestore(true)}
-                          disabled={status.restore_running}
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                          {t('backup.restoreFromGit.button')}
-                        </Button>
+                        {canRestoreFromGit && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => setShowGitRestore(true)}
+                            disabled={status.restore_running}
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                            {t('backup.restoreFromGit.button')}
+                          </Button>
+                        )}
                       </>
                     )}
                   </>

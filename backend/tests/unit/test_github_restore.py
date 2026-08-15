@@ -105,6 +105,23 @@ class TestSettingKeyBlocklist:
     def test_protected_set_is_only_the_auth_policy_keys(self, key):
         assert _is_protected_setting_key(key) is False
 
+    def test_ha_token_from_env_is_deliberately_not_carved_out(self):
+        """Recorded so the review's question about it is not re-litigated.
+
+        ``ha_token_from_env`` looks like a false positive for the ``token`` hint,
+        but it is only ever constructed in the settings GET response
+        (``get_homeassistant_settings``). It is absent from ``AppSettingsUpdate``
+        and so is never a ``Settings`` row — it cannot reach a backup, which
+        makes an allowlist entry for it dead code.
+
+        Carving it out would also be a live hole rather than a tidy-up: an
+        attacker-authored ``settings/app_settings.json`` could then get a
+        ``*token*``-named row written simply by choosing that name. This
+        blocklist's whole job is belt-and-braces, so a name-shaped exception to
+        it is exactly the wrong shape of fix.
+        """
+        assert _is_blocked_setting_key("ha_token_from_env") is True
+
 
 class TestCategoryTally:
     def test_a_note_carries_code_params_and_english(self):
@@ -482,6 +499,117 @@ class TestCompanionCredentials:
         """They are the restore's ``failed``, not a refusal."""
         plan = await _service()._plan_settings(db_session, {"": "x", 7: "y", "currency": "EUR"})
         assert plan == _SettingsPlan()
+
+
+class TestSpoolTagOverwrite:
+    """Overwrite must not write the backup's *other* tag key onto a matched spool.
+
+    ``tag_uid`` and ``tray_uuid`` are both in the overwrite ``setattr`` loop, and
+    neither column has a unique constraint, so writing one onto a spool matched
+    by the other silently creates a duplicate tag rather than erroring. After
+    that ``_find_spool``'s ``.first()`` is non-deterministic and an AMS tag
+    lookup resolves to an arbitrary one of the two. The same loop can also clear
+    a tag the user has scanned since the backup was taken.
+    """
+
+    def _entry(self, **overrides):
+        entry = {
+            "id": 41,
+            "material": "PLA",
+            "brand": "Bambu Lab",
+            "created_at": "2026-01-05 12:00:00",
+            "tag_uid": "TAG-A",
+            "tray_uuid": None,
+        }
+        entry.update(overrides)
+        return entry
+
+    async def _restore(self, db, entry, tally=None):
+        tally = tally or _CategoryTally()
+        await _service()._restore_spools(db, {"spools": [entry]}, None, True, tally, {})
+        await db.commit()
+        return tally
+
+    @pytest.mark.asyncio
+    async def test_an_empty_incoming_tag_does_not_clear_a_scanned_one(self, db_session):
+        """The backup predates the scan, so the local tag is the newer fact."""
+        db_session.add(Spool(material="PLA", brand="Bambu Lab", tag_uid="TAG-A", tray_uuid="TRAY-LIVE"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, self._entry(tray_uuid=None))
+
+        row = (await db_session.execute(select(Spool))).scalar_one()
+        assert row.tray_uuid == "TRAY-LIVE"
+        assert any(note["code"] == "spoolTagKept" for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_a_tag_another_spool_already_holds_is_not_written(self, db_session):
+        db_session.add(Spool(material="PLA", brand="Bambu Lab", tag_uid="TAG-A"))
+        db_session.add(Spool(material="PETG", brand="Other", tray_uuid="TRAY-B"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, self._entry(tray_uuid="TRAY-B"))
+
+        holders = (await db_session.execute(select(Spool).where(Spool.tray_uuid == "TRAY-B"))).scalars().all()
+        assert len(holders) == 1, "a duplicate tray_uuid makes AMS lookups non-deterministic"
+        assert holders[0].material == "PETG"
+        assert any(note["code"] == "spoolTagKept" for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_the_note_counts_every_column_it_kept(self, db_session):
+        db_session.add(Spool(material="PLA", brand="Bambu Lab", tag_uid="TAG-A", tray_uuid="TRAY-LIVE"))
+        db_session.add(Spool(material="PETG", brand="Other", tag_uid="TAG-CLASH"))
+        await db_session.commit()
+
+        # Matched on tray_uuid, so the guard judges tag_uid: it clashes.
+        tally = await self._restore(db_session, self._entry(tag_uid="TAG-CLASH", tray_uuid="TRAY-LIVE"))
+
+        row = (await db_session.execute(select(Spool).where(Spool.tray_uuid == "TRAY-LIVE"))).scalar_one()
+        assert row.tag_uid == "TAG-A"
+        note = next(n for n in tally.notes if n["code"] == "spoolTagKept")
+        assert note["params"] == {"count": 1}
+
+    # --- Controls ----------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_a_free_tag_is_still_written(self, db_session):
+        """The point of overwrite: a spool that gained a tray_uuid gets it."""
+        db_session.add(Spool(material="PLA", brand="Bambu Lab", tag_uid="TAG-A"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, self._entry(tray_uuid="TRAY-NEW"))
+
+        row = (await db_session.execute(select(Spool))).scalar_one()
+        assert row.tray_uuid == "TRAY-NEW"
+        assert not any(note["code"] == "spoolTagKept" for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_tag_is_not_reported_as_kept(self, db_session):
+        db_session.add(Spool(material="PLA", brand="Bambu Lab", tag_uid="TAG-A", tray_uuid="TRAY-A"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, self._entry(tray_uuid="TRAY-A"))
+
+        assert not any(note["code"] == "spoolTagKept" for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_a_new_spool_keeps_both_tags_from_the_backup(self, db_session):
+        """The guard is an overwrite-only concern; an insert is unaffected."""
+        await self._restore(db_session, self._entry(tag_uid="TAG-NEW", tray_uuid="TRAY-NEW"))
+
+        row = (await db_session.execute(select(Spool))).scalar_one()
+        assert (row.tag_uid, row.tray_uuid) == ("TAG-NEW", "TRAY-NEW")
+
+    @pytest.mark.asyncio
+    async def test_find_spool_reports_which_key_matched(self, db_session):
+        db_session.add(Spool(material="PLA", tag_uid="TAG-A"))
+        db_session.add(Spool(material="PETG", tray_uuid="TRAY-B"))
+        await db_session.commit()
+        service = _service()
+
+        assert (await service._find_spool(db_session, {"tag_uid": "TAG-A"}))[1] == "tag_uid"
+        assert (await service._find_spool(db_session, {"tray_uuid": "TRAY-B"}))[1] == "tray_uuid"
+        assert await service._find_spool(db_session, {"tag_uid": "NOPE"}) == (None, None)
 
 
 class TestRestoreSpools:

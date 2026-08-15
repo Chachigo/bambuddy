@@ -990,6 +990,7 @@ class GitHubRestoreService:
             return
 
         spool_id_map: dict[int, int] = {}
+        tags_kept = 0
 
         for entry in spools:
             if not isinstance(entry, dict):
@@ -997,7 +998,7 @@ class GitHubRestoreService:
                 continue
 
             old_id = entry.get("id") if isinstance(entry.get("id"), int) else None
-            existing = await self._find_spool(db, entry)
+            existing, matched_on = await self._find_spool(db, entry)
 
             fields = {
                 "material": entry.get("material") or "PLA",
@@ -1028,6 +1029,7 @@ class GitHubRestoreService:
                 if not overwrite:
                     tally.skipped += 1
                     continue
+                tags_kept += await self._guard_tag_overwrite(db, existing, fields, matched_on)
                 for key, value in fields.items():
                     setattr(existing, key, value)
                 tally.restored += 1
@@ -1047,32 +1049,45 @@ class GitHubRestoreService:
                 spool_id_map[old_id] = row.id
             tally.restored += 1
 
+        if tags_kept:
+            tally.note(
+                "spoolTagKept",
+                f"{tags_kept} spool tag(s) left as they are — the backup would have cleared a tag that "
+                "has since been scanned, or moved one onto a second spool.",
+                count=tags_kept,
+            )
+
         await self._restore_spool_usage(db, usage_payload, tally, spool_id_map, archive_id_map)
 
-    async def _find_spool(self, db: AsyncSession, entry: dict) -> Spool | None:
-        """Match a backed-up spool to a local row.
+    async def _find_spool(self, db: AsyncSession, entry: dict) -> tuple[Spool | None, str | None]:
+        """Match a backed-up spool to a local row, and say which key matched.
 
         Physical identity first (an RFID/Bambu tag is the spool), then a
         descriptive composite including ``created_at`` so two otherwise
         identical spools added at different times stay distinct.
+
+        The second element names the column that matched — ``"tag_uid"``,
+        ``"tray_uuid"`` or ``None`` for the composite. ``_guard_tag_overwrite``
+        needs it: the matched column holds the incoming value by definition, so
+        it is the *other* one that overwrite can corrupt.
         """
         tag_uid = entry.get("tag_uid")
         if tag_uid:
             result = await db.execute(select(Spool).where(Spool.tag_uid == tag_uid))
             row = result.scalars().first()
             if row is not None:
-                return row
+                return row, "tag_uid"
 
         tray_uuid = entry.get("tray_uuid")
         if tray_uuid:
             result = await db.execute(select(Spool).where(Spool.tray_uuid == tray_uuid))
             row = result.scalars().first()
             if row is not None:
-                return row
+                return row, "tray_uuid"
 
         created_at = _parse_dt(entry.get("created_at"))
         if created_at is None:
-            return None
+            return None, None
         result = await db.execute(
             select(Spool).where(
                 Spool.created_at == created_at,
@@ -1082,7 +1097,56 @@ class GitHubRestoreService:
                 Spool.color_name == entry.get("color_name"),
             )
         )
-        return result.scalars().first()
+        return result.scalars().first(), None
+
+    @staticmethod
+    async def _guard_tag_overwrite(db: AsyncSession, existing: Spool, fields: dict, matched_on: str | None) -> int:
+        """Remove tag columns from ``fields`` that an overwrite would corrupt.
+
+        ``tag_uid`` and ``tray_uuid`` are both in ``fields`` and overwrite is a
+        blanket ``setattr`` loop, so a spool matched on one key gets the backup's
+        *other* key written onto it. Neither column has a unique constraint
+        (``models/spool.py``, and no unique index in the migrations), so nothing
+        errors — a duplicate tag simply appears, after which ``_find_spool``'s
+        ``.first()`` is non-deterministic and an AMS tag lookup resolves to an
+        arbitrary one of the two spools. The same loop can also *clear* a tag the
+        user has scanned since the backup was taken, when the backup entry holds
+        ``None``.
+
+        Two refusals, and the row is otherwise overwritten as normal:
+
+        * the incoming value is empty and the local row has one — the backup
+          predates the scan, so the local tag is the newer fact;
+        * the incoming value is already held by a different local spool — writing
+          it would create the duplicate described above.
+
+        Returns how many columns were left alone, so the caller can say so in the
+        tally rather than doing it silently.
+        """
+        kept = 0
+        for column in ("tag_uid", "tray_uuid"):
+            # The column we matched on already holds the incoming value.
+            if column == matched_on:
+                continue
+
+            incoming = fields.get(column)
+            current = getattr(existing, column)
+            if incoming == current:
+                continue
+
+            if not incoming:
+                if current:
+                    fields.pop(column)
+                    kept += 1
+                continue
+
+            clash = await db.execute(
+                select(Spool.id).where(getattr(Spool, column) == incoming, Spool.id != existing.id)
+            )
+            if clash.scalars().first() is not None:
+                fields.pop(column)
+                kept += 1
+        return kept
 
     async def _restore_spool_usage(
         self,
