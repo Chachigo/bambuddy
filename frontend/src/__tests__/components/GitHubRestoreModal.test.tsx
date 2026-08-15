@@ -37,11 +37,29 @@ const mockPreview = {
   ref: 'aaa1111bbb2222ccc3333ddd4444eee5555ffff0',
   commit: mockCommits.commits[0],
   metadata_version: '1.0',
+  // The server describes each caveat as a code plus typed params, carrying the
+  // English rendering as `detail` for i18next's defaultValue (#2656). Note the
+  // fixture's English deliberately differs from en.ts, so an assertion on the
+  // locale string proves the code was translated rather than echoed.
   categories: [
-    { category: 'archives', available: true, item_count: 30, detail: 'Metadata only' },
-    { category: 'spools', available: true, item_count: 4, detail: null },
-    { category: 'settings', available: true, item_count: 12, detail: null },
-    { category: 'kprofiles', available: false, item_count: 0, detail: 'Not present in this backup commit' },
+    {
+      category: 'archives',
+      available: true,
+      item_count: 30,
+      detail: 'raw server English, should not be rendered',
+      detail_code: 'archivesMetadataOnly',
+      detail_params: {},
+    },
+    { category: 'spools', available: true, item_count: 4, detail: null, detail_code: null, detail_params: {} },
+    { category: 'settings', available: true, item_count: 12, detail: null, detail_code: null, detail_params: {} },
+    {
+      category: 'kprofiles',
+      available: false,
+      item_count: 0,
+      detail: 'raw server English, should not be rendered',
+      detail_code: 'notPresent',
+      detail_params: {},
+    },
   ],
 };
 
@@ -96,6 +114,42 @@ describe('GitHubRestoreModal', () => {
     });
     expect(screen.getByText('4 in backup')).toBeInTheDocument();
     expect(screen.getByText('12 in backup')).toBeInTheDocument();
+  });
+
+  it('translates preview caveats rather than echoing the server English', async () => {
+    render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Metadata only - 3MF files and thumbnails are not in a Git backup')
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryAllByText('raw server English, should not be rendered')).toHaveLength(0);
+  });
+
+  it('falls back to the server English for a code it does not know', async () => {
+    // A newer backend adding a detail_code this build has no key for must not
+    // print the raw key at the user. Same defaultValue arm backup.pathCheck uses.
+    mockEndpoints({
+      preview: {
+        ...mockPreview,
+        categories: [
+          {
+            category: 'spools',
+            available: true,
+            item_count: 4,
+            detail: 'Something a future release explains',
+            detail_code: 'somethingThisBuildHasNeverHeardOf',
+            detail_params: {},
+          },
+        ],
+      },
+    });
+    render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Something a future release explains')).toBeInTheDocument();
+    });
   });
 
   it('disables a category that is absent from the commit', async () => {
@@ -168,7 +222,18 @@ describe('GitHubRestoreModal', () => {
           log_id: 3,
           ref: mockPreview.ref,
           results: {
-            spools: { restored: 4, skipped: 1, failed: 0, notes: ['1 usage record(s) skipped'] },
+            spools: {
+              restored: 4,
+              skipped: 1,
+              failed: 0,
+              notes: [
+                {
+                  code: 'spoolUsageUnresolved',
+                  params: { count: 1 },
+                  message: 'raw server English, should not be rendered',
+                },
+              ],
+            },
           },
         });
       })
@@ -195,7 +260,12 @@ describe('GitHubRestoreModal', () => {
       ref: mockPreview.ref,
     });
     expect(screen.getByText('4 restored, 1 skipped, 0 failed')).toBeInTheDocument();
-    expect(screen.getByText('1 usage record(s) skipped')).toBeInTheDocument();
+    // The locale string with {{count}} filled in, not the server's English —
+    // which is what makes the note translatable for a non-English user.
+    expect(
+      screen.getByText(/^1 usage record\(s\) skipped - their spool is not in this backup's spool list/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('raw server English, should not be rendered')).not.toBeInTheDocument();
   });
 
   it('drops the selection while a newly-picked commit is still being inspected', async () => {

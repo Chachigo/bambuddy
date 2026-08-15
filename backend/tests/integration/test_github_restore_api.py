@@ -169,7 +169,18 @@ class TestRestoreEndpoint:
             "ref": "aaa1111",
             "results": {
                 "spools": {"restored": 4, "skipped": 1, "failed": 0, "notes": []},
-                "settings": {"restored": 1, "skipped": 2, "failed": 0, "notes": ["1 credential-like key(s) skipped"]},
+                "settings": {
+                    "restored": 1,
+                    "skipped": 2,
+                    "failed": 0,
+                    "notes": [
+                        {
+                            "code": "settingsCredentialsSkipped",
+                            "params": {"count": 1},
+                            "message": "1 credential-like key(s) skipped",
+                        }
+                    ],
+                },
             },
         }
         with patch(
@@ -184,7 +195,15 @@ class TestRestoreEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["results"]["spools"]["restored"] == 4
-        assert body["results"]["settings"]["notes"] == ["1 credential-like key(s) skipped"]
+        # Notes cross the wire as code + params + English fallback, so a
+        # non-English client can translate them (#2656).
+        assert body["results"]["settings"]["notes"] == [
+            {
+                "code": "settingsCredentialsSkipped",
+                "params": {"count": 1},
+                "message": "1 credential-like key(s) skipped",
+            }
+        ]
         assert mock.await_args.kwargs["overwrite_existing"] is True
         assert mock.await_args.kwargs["ref"] == "aaa1111"
 
@@ -391,7 +410,7 @@ class TestRestoreDoesNotOpenTheMetricsEndpoint:
         response = await async_client.get("/api/v1/metrics")
         assert response.status_code == 404, "a settings restore opened the metrics endpoint"
         assert "bambuddy_build_info" not in response.text
-        assert any("switched off" in note for note in tally.notes)
+        assert any(note["code"] == "settingsCompanionSkipped" for note in tally.notes)
 
     @pytest.mark.asyncio
     @pytest.mark.integration

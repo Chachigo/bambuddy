@@ -41,6 +41,20 @@ def _service() -> GitHubRestoreService:
     return GitHubRestoreService()
 
 
+def _messages(tally: _CategoryTally) -> list[str]:
+    """The English rendering of each note.
+
+    Notes are ``{code, params, message}`` since they became translatable
+    (#2656); asserting on the message keeps these tests readable while
+    ``_codes`` covers the half a client actually keys on.
+    """
+    return [note["message"] for note in tally.notes]
+
+
+def _codes(tally: _CategoryTally) -> list[str]:
+    return [note["code"] for note in tally.notes]
+
+
 class TestParseDt:
     def test_parses_str_datetime_the_backup_writes(self):
         assert _parse_dt("2026-07-27 06:02:05.123456") == datetime(2026, 7, 27, 6, 2, 5, 123456)
@@ -93,16 +107,33 @@ class TestSettingKeyBlocklist:
 
 
 class TestCategoryTally:
+    def test_a_note_carries_code_params_and_english(self):
+        tally = _CategoryTally()
+        tally.note("noData", "No data of this kind in this backup")
+        tally.note("spoolUsageUnresolved", "2 usage record(s) skipped", count=2)
+
+        assert tally.notes == [
+            {"code": "noData", "params": {}, "message": "No data of this kind in this backup"},
+            {"code": "spoolUsageUnresolved", "params": {"count": 2}, "message": "2 usage record(s) skipped"},
+        ]
+
     def test_notes_are_deduplicated(self):
         tally = _CategoryTally()
-        tally.note("same")
-        tally.note("same")
-        assert tally.notes == ["same"]
+        tally.note("noData", "same")
+        tally.note("noData", "same")
+        assert len(tally.notes) == 1
+
+    def test_the_same_code_with_different_params_is_kept(self):
+        """Two printers can both be offline, and the user needs both names."""
+        tally = _CategoryTally()
+        tally.note("kprofilesPrinterOffline", "A is not connected", printer="A")
+        tally.note("kprofilesPrinterOffline", "B is not connected", printer="B")
+        assert len(tally.notes) == 2
 
     def test_notes_are_bounded(self):
         tally = _CategoryTally()
         for i in range(50):
-            tally.note(f"note {i}")
+            tally.note("noData", f"note {i}", index=i)
         assert len(tally.notes) == 20
 
 
@@ -185,7 +216,7 @@ class TestRestoreSettings:
         # keys, so counting them here would put the total above what the user
         # was shown before they pressed Restore.
         assert tally.skipped == 0
-        assert any("credential-like" in note for note in tally.notes)
+        assert any("credential-like" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_auth_settings_are_never_restored(self, db_session):
@@ -217,14 +248,14 @@ class TestRestoreSettings:
         # As above: refused keys are outside the preview's count, so outside the
         # tally too.
         assert tally.skipped == 0
-        assert any("authentication setting" in note for note in tally.notes)
+        assert any("authentication setting" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_missing_payload_is_noted_not_fatal(self, db_session):
         tally = _CategoryTally()
         await _service()._restore_settings(db_session, None, overwrite=True, tally=tally)
         assert tally.restored == 0
-        assert tally.notes
+        assert _codes(tally) == ["noData"]
 
 
 class TestSettingValueIsTrue:
@@ -282,7 +313,7 @@ class TestCompanionCredentials:
 
         rows = await self._rows(db_session)
         assert rows == {"currency": "EUR"}
-        assert any("prometheus_enabled" in note and "switched off" in note for note in tally.notes)
+        assert any("prometheus_enabled" in note and "switched off" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("toggle,credential", sorted(_COMPANION_CREDENTIALS.items()))
@@ -367,8 +398,11 @@ class TestCompanionCredentials:
         allowed_count, allowed_detail = await _service()._count_items(db_session, RestoreCategory.SETTINGS, parsed)
 
         assert refused_count == allowed_count - 1
-        assert "switch(es)" in refused_detail
-        assert "switch(es)" not in allowed_detail
+        assert refused_detail.code == "settingsCompanionWillSkip"
+        assert refused_detail.params == {"count": 1, "companion": 1}
+        # Nothing is being left off now, so the wording drops back to the plain
+        # credential caveat.
+        assert allowed_detail.code == "settingsCredentialsWillSkip"
 
     # --- Controls: over-refusal is the real risk here ----------------------
 
@@ -380,7 +414,7 @@ class TestCompanionCredentials:
         tally = await self._restore(db_session, prometheus_enabled="true", prometheus_token="s3cret")
 
         assert (await self._rows(db_session))["prometheus_enabled"] == "true"
-        assert not any("switched off" in note for note in tally.notes)
+        assert not any("switched off" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_an_anonymous_broker_is_not_a_false_positive(self, db_session):
@@ -388,7 +422,7 @@ class TestCompanionCredentials:
         tally = await self._restore(db_session, mqtt_enabled="true", mqtt_broker="10.0.0.5")
 
         assert (await self._rows(db_session))["mqtt_enabled"] == "true"
-        assert not any("switched off" in note for note in tally.notes)
+        assert not any("switched off" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_an_anonymous_ldap_bind_is_not_a_false_positive(self, db_session):
@@ -396,7 +430,7 @@ class TestCompanionCredentials:
         tally = await self._restore(db_session, ldap_enabled="true", ldap_bind_password="   ")
 
         assert (await self._rows(db_session))["ldap_enabled"] == "true"
-        assert not any("switched off" in note for note in tally.notes)
+        assert not any("switched off" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_turning_a_toggle_off_is_always_written(self, db_session):
@@ -424,7 +458,7 @@ class TestCompanionCredentials:
         tally = await self._restore(db_session, overwrite=True, prometheus_enabled="true", prometheus_token="s3cret")
 
         assert (await self._rows(db_session))["prometheus_enabled"] == "true"
-        assert not any("switched off" in note for note in tally.notes)
+        assert not any("switched off" in note for note in _messages(tally))
 
     # --- The map itself ----------------------------------------------------
 
@@ -622,11 +656,11 @@ class TestRestoreSpools:
 
         assert (await db_session.execute(select(SpoolUsageHistory))).scalars().first() is None
         assert tally.skipped == 1
-        assert any("their spool is not in this backup's spool list" in note for note in tally.notes)
+        assert any("their spool is not in this backup's spool list" in note for note in _messages(tally))
         # No remedy is offered, because none exists: overwrite does not change
         # which spools land in the map (a skipped spool is mapped anyway), and
         # usage history is always restored alongside the spools category.
-        assert not any("overwrite" in note.lower() for note in tally.notes)
+        assert not any("overwrite" in note.lower() for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_usage_resolves_against_a_spool_skipped_because_overwrite_is_off(self, db_session):
@@ -651,7 +685,7 @@ class TestRestoreSpools:
         spool = (await db_session.execute(select(Spool))).scalar_one()
         row = (await db_session.execute(select(SpoolUsageHistory))).scalar_one()
         assert row.spool_id == spool.id
-        assert not any("spool list" in note for note in tally.notes)
+        assert not any("spool list" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_usage_history_is_not_duplicated_on_repeat_restore(self, db_session):
@@ -693,8 +727,8 @@ class TestRestoreSpools:
         assert len(rows) == 3
         assert all(row.archive_id is None for row in rows)
         # Only the two that had a link to lose are counted.
-        assert any("2 usage record(s) restored without their print-history link" in n for n in tally.notes)
-        assert any("select Print archives alongside" in n for n in tally.notes)
+        assert any("2 usage record(s) restored without their print-history link" in n for n in _messages(tally))
+        assert any("select Print archives alongside" in n for n in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_no_note_when_every_archive_link_resolves(self, db_session):
@@ -714,7 +748,7 @@ class TestRestoreSpools:
 
         row = (await db_session.execute(select(SpoolUsageHistory))).scalar_one()
         assert row.archive_id == archive.id
-        assert not any("print-history link" in note for note in tally.notes)
+        assert not any("print-history link" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_dangling_printer_id_is_cleared(self, db_session):
@@ -765,7 +799,7 @@ class TestRestoreArchives:
         assert row.filename == "benchy.3mf"
         assert row.id != 77
         assert id_map == {77: row.id}
-        assert any("metadata only" in note for note in tally.notes)
+        assert any("metadata only" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_matches_existing_archive_by_hash_and_start(self, db_session):
@@ -920,7 +954,7 @@ class TestRestoreArchives:
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.deleted_at is None
         assert tally.restored == 1
-        assert any("visible again" in note for note in tally.notes)
+        assert any("visible again" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_overwrite_updates_metadata_but_keeps_local_file_path(self, db_session):
@@ -958,7 +992,7 @@ class TestRestoreArchives:
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.printer_id is None
         assert row.project_id is None
-        assert any("no longer exist" in note for note in tally.notes)
+        assert any("no longer exist" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_valid_printer_link_is_preserved(self, db_session, printer_factory):
@@ -1044,9 +1078,9 @@ class TestRestoreKprofiles:
 
         # The printer does answer extrusion_cali_set, but it reports "fail" on
         # writes that land, so the note must not promise either way.
-        assert any("verify the profiles on the printer" in note for note in tally.notes)
-        assert not any("without acknowledgement" in note for note in tally.notes)
-        assert any("always overwrite" in note for note in tally.notes)
+        assert any("verify the profiles on the printer" in note for note in _messages(tally))
+        assert not any("without acknowledgement" in note for note in _messages(tally))
+        assert any("always overwrite" in note for note in _messages(tally))
 
     # --- cali_idx is resolved live, never taken from the backup -------------
     #
@@ -1103,7 +1137,7 @@ class TestRestoreKprofiles:
         profiles, _ = client.set_kprofiles_batch.call_args.args
         assert profiles[0]["cali_idx"] == -1, "-1 tells the printer to add a new profile"
         assert profiles[0]["setting_id"] == "PFUS123", "falls back to the backed-up preset"
-        assert any("added as new profiles" in note for note in tally.notes)
+        assert any("added as new profiles" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_different_filament_is_not_treated_as_a_match(self, db_session, printer_factory):
@@ -1179,7 +1213,7 @@ class TestRestoreKprofiles:
 
         assert tally.restored == 0
         assert tally.skipped == 1
-        assert any("No printer with serial NOSUCH" in note for note in tally.notes)
+        assert any("No printer with serial NOSUCH" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_offline_printer_is_skipped_not_failed(self, db_session, printer_factory):
@@ -1194,7 +1228,7 @@ class TestRestoreKprofiles:
 
         assert tally.skipped == 1
         assert tally.failed == 0
-        assert any("not connected" in note for note in tally.notes)
+        assert any("not connected" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_no_client_at_all_is_skipped(self, db_session, printer_factory):
@@ -1257,7 +1291,7 @@ class TestRestoreKprofiles:
     async def test_empty_payload_is_noted(self, db_session):
         tally = _CategoryTally()
         await _service()._restore_kprofiles(db_session, {}, tally)
-        assert any("No K-profile data" in note for note in tally.notes)
+        assert _codes(tally) == ["noData"]
 
 
 class TestSoftDeletedArchiveRoundTrip:
@@ -1343,7 +1377,7 @@ class TestRestoredArchiveOwnership:
 
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.created_by_id == user.id
-        assert not any("owner cleared" in note for note in tally.notes)
+        assert not any("owner cleared" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_an_unknown_owner_is_cleared_with_a_note_not_failed(self, db_session):
@@ -1358,7 +1392,7 @@ class TestRestoredArchiveOwnership:
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.created_by_id is None
         assert tally.restored == 1 and tally.failed == 0
-        assert any("owner cleared" in note and "archives:read_all" in note for note in tally.notes)
+        assert any("owner cleared" in note and "archives:read_all" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_the_owner_note_is_emitted_once_for_many_rows(self, db_session):
@@ -1371,7 +1405,7 @@ class TestRestoredArchiveOwnership:
         await _service()._restore_archives(db_session, {"archives": archives}, False, tally, {})
         await db_session.commit()
 
-        assert sum(1 for note in tally.notes if "owner cleared" in note) == 1
+        assert sum(1 for note in _messages(tally) if "owner cleared" in note) == 1
 
     @pytest.mark.asyncio
     async def test_a_backup_without_the_key_still_restores(self, db_session):
@@ -1383,7 +1417,7 @@ class TestRestoredArchiveOwnership:
 
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.created_by_id is None
-        assert not any("owner cleared" in note for note in tally.notes)
+        assert not any("owner cleared" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_overwrite_makes_the_local_owner_match_the_backup(self, db_session):
@@ -1561,7 +1595,7 @@ class TestMqttRelayReconfigure:
         with patch("backend.app.services.mqtt_relay.mqtt_relay", relay):
             await _service()._reconfigure_mqtt_relay(db_session, {"mqtt_enabled"}, tally)
 
-        assert any("restart Bambuddy" in note for note in tally.notes)
+        assert any("restart Bambuddy" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_restore_settings_reports_the_keys_it_wrote(self, db_session):

@@ -16,10 +16,39 @@ import { Card, CardContent } from './Card';
 import { Button } from './Button';
 import { Toggle } from './Toggle';
 import { ConfirmModal } from './ConfirmModal';
-import { api, type RestoreCategory, type GitHubRestoreResponse } from '../api/client';
+import {
+  api,
+  type RestoreCategory,
+  type GitHubRestoreParams,
+  type GitHubRestoreResponse,
+} from '../api/client';
+import type { TFunction } from 'i18next';
 
 interface GitHubRestoreModalProps {
   onClose: () => void;
+}
+
+/**
+ * Render a server-supplied translation code, falling back to its English text.
+ *
+ * The restore endpoints describe every note and preview caveat as a `code` plus
+ * typed `params`, and carry the English rendering along as `message`. That is
+ * the same contract `backup.pathCheck` already uses one card down in
+ * GitHubBackupSettings — including the `defaultValue` arm, which is what keeps a
+ * newer backend's unfamiliar code readable instead of printing the raw key.
+ */
+function translateCoded(
+  t: TFunction,
+  group: 'notes' | 'details',
+  code: string | null | undefined,
+  params: GitHubRestoreParams | undefined,
+  fallback: string | null
+): string | null {
+  if (!code) return fallback;
+  return t(`backup.restoreFromGit.${group}.${code}`, {
+    ...(params ?? {}),
+    defaultValue: fallback ?? code,
+  });
 }
 
 interface CategoryMeta {
@@ -77,10 +106,14 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
   const availability = useMemo(() => {
     const map: Record<string, { available: boolean; itemCount: number; detail: string | null }> = {};
     previewQuery.data?.categories?.forEach((c) => {
-      map[c.category] = { available: c.available, itemCount: c.item_count, detail: c.detail };
+      map[c.category] = {
+        available: c.available,
+        itemCount: c.item_count,
+        detail: translateCoded(t, 'details', c.detail_code, c.detail_params, c.detail),
+      };
     });
     return map;
-  }, [previewQuery.data]);
+  }, [previewQuery.data, t]);
 
   // What a Restore click would actually send. `selected` on its own is not that:
   // it survives a commit switch by design (the pruning effect below only runs
@@ -292,9 +325,15 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
                     {tally.notes.length > 0 && (
                       <ul className="mt-2 space-y-1">
                         {tally.notes.map((note) => (
-                          <li key={note} className="text-xs text-bambu-gray flex items-start gap-1.5">
+                          // The server dedupes on (code, params), not on code
+                          // alone — two printers can both be offline — so the
+                          // key has to carry the params too.
+                          <li
+                            key={`${note.code}:${JSON.stringify(note.params)}`}
+                            className="text-xs text-bambu-gray flex items-start gap-1.5"
+                          >
                             <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                            <span>{note}</span>
+                            <span>{translateCoded(t, 'notes', note.code, note.params, note.message)}</span>
                           </li>
                         ))}
                       </ul>

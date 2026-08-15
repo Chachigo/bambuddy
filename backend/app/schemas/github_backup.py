@@ -254,7 +254,13 @@ class GitHubRestorePreviewCategory(BaseModel):
     category: RestoreCategory
     available: bool = Field(description="Whether this category is present in the commit")
     item_count: int = Field(default=0, description="Rows/profiles found, 0 when unavailable")
-    detail: str | None = Field(default=None, description="Why unavailable, or extra context")
+    detail: str | None = Field(default=None, description="Why unavailable, or extra context, in English")
+    detail_code: str | None = Field(
+        default=None, description="Key under backup.restoreFromGit.details, for the client to translate"
+    )
+    detail_params: dict[str, str | int] = Field(
+        default_factory=dict, description="Interpolation values for detail_code"
+    )
 
 
 class GitHubRestorePreview(BaseModel):
@@ -289,13 +295,28 @@ class GitHubRestoreRequest(BaseModel):
         return self
 
 
+class GitHubRestoreNote(BaseModel):
+    """One tally note, as a translation code plus the values it interpolates.
+
+    Follows the ``backup.pathCheck`` contract already in use one card down in the
+    same component: the server chooses the code and supplies typed params, and
+    the client renders ``t(`...${code}`, { ...params, defaultValue: message })``.
+    ``message`` is the English original, so a client that does not know a code
+    yet still shows something sensible rather than the raw key.
+    """
+
+    code: str = Field(description="Key under backup.restoreFromGit.notes")
+    params: dict[str, str | int] = Field(default_factory=dict, description="Interpolation values for code")
+    message: str = Field(description="English rendering, used as the client's defaultValue")
+
+
 class GitHubRestoreCategoryResult(BaseModel):
     """Per-category outcome of a restore."""
 
     restored: int = 0
     skipped: int = 0
     failed: int = 0
-    notes: list[str] = Field(default_factory=list)
+    notes: list[GitHubRestoreNote] = Field(default_factory=list)
 
 
 class GitHubRestoreResponse(BaseModel):

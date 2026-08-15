@@ -33,7 +33,7 @@ import json
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclasses_field
 from datetime import datetime, timezone
 
 import httpx
@@ -227,6 +227,19 @@ class _SettingsPlan:
         return len(self.blocked) + len(self.protected) + len(self.companion)
 
 
+@dataclass(frozen=True)
+class _Detail:
+    """A preview caveat, as a translation code plus its English rendering.
+
+    Same contract as a note: the client translates ``code`` with ``params`` and
+    falls back to ``message``.
+    """
+
+    code: str
+    message: str
+    params: dict[str, str | int] = dataclasses_field(default_factory=dict)
+
+
 class _CategoryTally:
     """Mutable accumulator matching ``GitHubRestoreCategoryResult``."""
 
@@ -234,13 +247,21 @@ class _CategoryTally:
         self.restored = 0
         self.skipped = 0
         self.failed = 0
-        self.notes: list[str] = []
+        self.notes: list[dict] = []
 
-    def note(self, message: str) -> None:
-        # Notes are surfaced verbatim in the UI, so keep the list bounded rather
-        # than emitting one line per row for a large backup.
-        if message not in self.notes and len(self.notes) < 20:
-            self.notes.append(message)
+    def note(self, code: str, message: str, **params) -> None:
+        """Record a note as a translation code, its params and an English fallback.
+
+        Deduped on ``(code, params)`` rather than on the rendered text, which is
+        the same thing today but keeps two notes that differ only in a printer
+        name from collapsing into one. Bounded for the reason it always was: the
+        UI renders every note, so a large backup must not emit one per row.
+        """
+        if any(existing["code"] == code and existing["params"] == params for existing in self.notes):
+            return
+        if len(self.notes) >= 20:
+            return
+        self.notes.append({"code": code, "params": params, "message": message})
 
     def as_dict(self) -> dict:
         return {"restored": self.restored, "skipped": self.skipped, "failed": self.failed, "notes": self.notes}
@@ -446,27 +467,23 @@ class GitHubRestoreService:
             paths = self._category_paths(category, available)
             if not paths:
                 categories.append(
-                    {
-                        "category": category,
-                        "available": False,
-                        "item_count": 0,
-                        "detail": "Not present in this backup commit",
-                    }
+                    self._category_entry(category, False, 0, _Detail("notPresent", "Not present in this backup commit"))
                 )
                 continue
             unreadable = [p for p in paths if p in bad_paths]
             if unreadable:
+                joined = ", ".join(unreadable)
                 categories.append(
-                    {
-                        "category": category,
-                        "available": False,
-                        "item_count": 0,
-                        "detail": f"Unreadable JSON: {', '.join(unreadable)}",
-                    }
+                    self._category_entry(
+                        category,
+                        False,
+                        0,
+                        _Detail("unreadableJson", f"Unreadable JSON: {joined}", {"paths": joined}),
+                    )
                 )
                 continue
             count, detail = await self._count_items(db, category, parsed)
-            categories.append({"category": category, "available": True, "item_count": count, "detail": detail})
+            categories.append(self._category_entry(category, True, count, detail))
 
         commit_info = None
         commits = (await self.list_commits(config, limit=20)).get("commits") or []
@@ -484,13 +501,27 @@ class GitHubRestoreService:
             "categories": categories,
         }
 
-    async def _count_items(self, db: AsyncSession, category: RestoreCategory, parsed: dict) -> tuple[int, str | None]:
+    @staticmethod
+    def _category_entry(category: RestoreCategory, available: bool, item_count: int, detail: _Detail | None) -> dict:
+        """Shape one ``GitHubRestorePreviewCategory``, translated detail included."""
+        return {
+            "category": category,
+            "available": available,
+            "item_count": item_count,
+            "detail": detail.message if detail else None,
+            "detail_code": detail.code if detail else None,
+            "detail_params": detail.params if detail else {},
+        }
+
+    async def _count_items(
+        self, db: AsyncSession, category: RestoreCategory, parsed: dict
+    ) -> tuple[int, _Detail | None]:
         """Count restorable items for ``category`` and describe any caveat."""
         if category == RestoreCategory.SETTINGS:
             payload = parsed.get(SETTINGS_PATH)
             values = payload.get("settings") if isinstance(payload, dict) else None
             if not isinstance(values, dict):
-                return 0, "No settings in payload"
+                return 0, _Detail("settingsNoPayload", "No settings in payload")
             # Every refusal is subtracted so the count matches what the restore
             # actually writes. The wording calls out the credential ones (what a
             # user might expect to come back) and the companion ones (a
@@ -499,12 +530,18 @@ class GitHubRestoreService:
             plan = await self._plan_settings(db, values)
             detail = None
             if plan.companion:
-                detail = (
+                detail = _Detail(
+                    "settingsCompanionWillSkip",
                     f"{len(plan.blocked)} credential-like key(s) will be skipped, and "
-                    f"{len(plan.companion)} switch(es) that depend on them will be left off"
+                    f"{len(plan.companion)} switch(es) that depend on them will be left off",
+                    {"count": len(plan.blocked), "companion": len(plan.companion)},
                 )
             elif plan.blocked:
-                detail = f"{len(plan.blocked)} credential-like keys will be skipped"
+                detail = _Detail(
+                    "settingsCredentialsWillSkip",
+                    f"{len(plan.blocked)} credential-like keys will be skipped",
+                    {"count": len(plan.blocked)},
+                )
             return len(values) - plan.refused_count, detail
 
         if category == RestoreCategory.SPOOLS:
@@ -513,14 +550,18 @@ class GitHubRestoreService:
             usage_payload = parsed.get(SPOOL_USAGE_PATH)
             usage = usage_payload.get("usage_history") if isinstance(usage_payload, dict) else None
             count = len(spools) if isinstance(spools, list) else 0
-            detail = f"plus {len(usage)} usage records" if isinstance(usage, list) and usage else None
+            detail = None
+            if isinstance(usage, list) and usage:
+                detail = _Detail("spoolsUsageCount", f"plus {len(usage)} usage records", {"count": len(usage)})
             return count, detail
 
         if category == RestoreCategory.ARCHIVES:
             payload = parsed.get(ARCHIVES_PATH)
             archives = payload.get("archives") if isinstance(payload, dict) else None
             count = len(archives) if isinstance(archives, list) else 0
-            return count, "Metadata only — 3MF files and thumbnails are not in a Git backup"
+            return count, _Detail(
+                "archivesMetadataOnly", "Metadata only — 3MF files and thumbnails are not in a Git backup"
+            )
 
         if category == RestoreCategory.KPROFILES:
             total = 0
@@ -533,7 +574,9 @@ class GitHubRestoreService:
                 profiles = payload.get("profiles")
                 if isinstance(profiles, list):
                     total += len(profiles)
-            detail = f"across {len(serials)} printer(s)" if serials else None
+            detail = None
+            if serials:
+                detail = _Detail("kprofilesPrinterCount", f"across {len(serials)} printer(s)", {"count": len(serials)})
             return total, detail
 
         return 0, None
@@ -756,7 +799,7 @@ class GitHubRestoreService:
     ) -> None:
         archives = payload.get("archives") if isinstance(payload, dict) else None
         if not isinstance(archives, list):
-            tally.note("No archive data in this backup")
+            tally.note("noData", "No data of this kind in this backup")
             return
 
         valid_printers = set((await db.execute(select(Printer.id))).scalars().all())
@@ -825,11 +868,15 @@ class GitHubRestoreService:
 
             printer_id = entry.get("printer_id")
             if printer_id is not None and printer_id not in valid_printers:
-                tally.note("Some archives referenced printers that no longer exist — link cleared")
+                tally.note(
+                    "archivesPrinterMissing", "Some archives referenced printers that no longer exist — link cleared"
+                )
                 printer_id = None
             project_id = entry.get("project_id")
             if project_id is not None and project_id not in valid_projects:
-                tally.note("Some archives referenced projects that no longer exist — link cleared")
+                tally.note(
+                    "archivesProjectMissing", "Some archives referenced projects that no longer exist — link cleared"
+                )
                 project_id = None
             created_by_id = entry.get("created_by_id")
             if created_by_id is not None and created_by_id not in valid_users:
@@ -838,8 +885,9 @@ class GitHubRestoreService:
                 # cleared owner is not silent-safe — the archive becomes visible
                 # only to archives:read_all until someone does.
                 tally.note(
+                    "archivesOwnerCleared",
                     "Some archives referenced users that no longer exist — owner cleared, so they are "
-                    "visible only to users with the archives:read_all permission until an admin reassigns them"
+                    "visible only to users with the archives:read_all permission until an admin reassigns them",
                 )
                 created_by_id = None
             fields["printer_id"] = printer_id
@@ -857,7 +905,10 @@ class GitHubRestoreService:
                 # taken. Legitimate, but not obvious from a restored/skipped
                 # count, so say it.
                 if existing.deleted_at is not None and fields["deleted_at"] is None:
-                    tally.note("Archive(s) deleted since the backup are visible again — overwrite was on")
+                    tally.note(
+                        "archivesUndeleted",
+                        "Archive(s) deleted since the backup are visible again — overwrite was on",
+                    )
                 for key, value in fields.items():
                     setattr(existing, key, value)
                 tally.restored += 1
@@ -865,7 +916,8 @@ class GitHubRestoreService:
 
             if not warned_files:
                 tally.note(
-                    "Restored archives carry metadata only — the 3MF and thumbnail files are not in a Git backup"
+                    "archivesMetadataOnly",
+                    "Restored archives carry metadata only — the 3MF and thumbnail files are not in a Git backup",
                 )
                 warned_files = True
 
@@ -934,7 +986,7 @@ class GitHubRestoreService:
     ) -> None:
         spools = inventory.get("spools") if isinstance(inventory, dict) else None
         if not isinstance(spools, list):
-            tally.note("No spool data in this backup")
+            tally.note("noData", "No data of this kind in this backup")
             return
 
         spool_id_map: dict[int, int] = {}
@@ -1114,13 +1166,17 @@ class GitHubRestoreService:
 
         if unresolved:
             tally.note(
+                "spoolUsageUnresolved",
                 f"{unresolved} usage record(s) skipped — their spool is not in this backup's "
-                "spool list, so there is nothing to attach them to."
+                "spool list, so there is nothing to attach them to.",
+                count=unresolved,
             )
         if unlinked_archives:
             tally.note(
+                "spoolUsageUnlinked",
                 f"{unlinked_archives} usage record(s) restored without their print-history link — "
-                "select Print archives alongside Spool inventory to keep it."
+                "select Print archives alongside Spool inventory to keep it.",
+                count=unlinked_archives,
             )
 
     async def _restore_settings(
@@ -1133,7 +1189,7 @@ class GitHubRestoreService:
     ) -> None:
         values = payload.get("settings") if isinstance(payload, dict) else None
         if not isinstance(values, dict):
-            tally.note("No settings data in this backup")
+            tally.note("noData", "No data of this kind in this backup")
             return
 
         # Planned before the first write, so the companion rule reads genuinely
@@ -1176,17 +1232,27 @@ class GitHubRestoreService:
                 keys_written.add(key)
 
         if plan.blocked:
-            tally.note(f"{len(plan.blocked)} credential-like key(s) skipped — re-enter secrets manually")
+            tally.note(
+                "settingsCredentialsSkipped",
+                f"{len(plan.blocked)} credential-like key(s) skipped — re-enter secrets manually",
+                count=len(plan.blocked),
+            )
         if plan.protected:
             tally.note(
+                "settingsAuthSkipped",
                 f"{len(plan.protected)} authentication setting(s) skipped — change those in Settings > "
-                "Authentication so the lockout checks still run"
+                "Authentication so the lockout checks still run",
+                count=len(plan.protected),
             )
         if plan.companion:
+            keys = ", ".join(sorted(plan.companion))
             tally.note(
-                f"{', '.join(sorted(plan.companion))} left switched off — the credential each one needs "
-                "cannot be restored from a backup and this instance has none stored, so switching them "
-                "on would leave the integration unauthenticated"
+                "settingsCompanionSkipped",
+                f"{keys} left switched off — the credential each one needs cannot be restored from a "
+                "backup and this instance has none stored, so switching them on would leave the "
+                "integration unauthenticated",
+                keys=keys,
+                count=len(plan.companion),
             )
 
     async def _reconfigure_mqtt_relay(self, db: AsyncSession, keys_written: set[str], tally: _CategoryTally) -> None:
@@ -1232,7 +1298,10 @@ class GitHubRestoreService:
             # must not turn a successful restore into a failed one. Noted rather
             # than swallowed silently, so the user knows to restart.
             logger.warning("Could not reconfigure the MQTT relay after a settings restore", exc_info=True)
-            tally.note("MQTT settings restored, but the relay could not be reconnected — restart Bambuddy")
+            tally.note(
+                "settingsMqttRelayFailed",
+                "MQTT settings restored, but the relay could not be reconnected — restart Bambuddy",
+            )
 
     async def _restore_kprofiles(self, db: AsyncSession, payload: dict, tally: _CategoryTally) -> None:
         by_serial: dict[str, list[tuple[str, dict]]] = {}
@@ -1243,7 +1312,7 @@ class GitHubRestoreService:
             by_serial.setdefault(match.group(1), []).append((match.group(2), content))
 
         if not by_serial:
-            tally.note("No K-profile data in this backup")
+            tally.note("noData", "No data of this kind in this backup")
             return
 
         result = await db.execute(select(Printer))
@@ -1252,8 +1321,11 @@ class GitHubRestoreService:
         # Overwrite is not offered for K-profiles: extrusion_cali_set replaces
         # the profile occupying a slot, so writing is always an overwrite on the
         # printer side.
-        tally.note("K-profiles always overwrite the matching slot on the printer")
-        tally.note("The printer's acknowledgement is not reliable — verify the profiles on the printer")
+        tally.note("kprofilesAlwaysOverwrite", "K-profiles always overwrite the matching slot on the printer")
+        tally.note(
+            "kprofilesAckUnreliable",
+            "The printer's acknowledgement is not reliable — verify the profiles on the printer",
+        )
 
         for serial, entries in sorted(by_serial.items()):
             profile_total = sum(len(c.get("profiles") or []) for _, c in entries)
@@ -1261,13 +1333,18 @@ class GitHubRestoreService:
             printer = printers.get(serial)
             if printer is None:
                 tally.skipped += profile_total
-                tally.note(f"No printer with serial {serial} — skipped")
+                tally.note("kprofilesPrinterMissing", f"No printer with serial {serial} — skipped", serial=serial)
                 continue
 
             client = printer_manager.get_client(printer.id)
             if not client or not client.state.connected:
                 tally.skipped += profile_total
-                tally.note(f"{printer.name} ({serial}) is not connected — skipped")
+                tally.note(
+                    "kprofilesPrinterOffline",
+                    f"{printer.name} ({serial}) is not connected — skipped",
+                    printer=printer.name,
+                    serial=serial,
+                )
                 continue
 
             for nozzle, content in sorted(entries):
@@ -1275,7 +1352,12 @@ class GitHubRestoreService:
                 if not isinstance(profiles, list) or not profiles:
                     continue
                 if nozzle not in _KNOWN_NOZZLES:
-                    tally.note(f"Unexpected nozzle diameter {nozzle} for {serial} — sent as-is")
+                    tally.note(
+                        "kprofilesUnknownNozzle",
+                        f"Unexpected nozzle diameter {nozzle} for {serial} — sent as-is",
+                        nozzle=nozzle,
+                        serial=serial,
+                    )
 
                 # The backup's slot_id is a cali_idx, and cali_idx is as
                 # unstable as the autoincrement ids we already refuse to reuse
@@ -1316,8 +1398,12 @@ class GitHubRestoreService:
                     continue
                 if unmatched:
                     tally.note(
+                        "kprofilesUnmatched",
                         f"{unmatched} profile(s) for {nozzle} had no counterpart on {printer.name} "
-                        "— added as new profiles"
+                        "— added as new profiles",
+                        count=unmatched,
+                        nozzle=nozzle,
+                        printer=printer.name,
                     )
 
                 try:
@@ -1330,7 +1416,13 @@ class GitHubRestoreService:
                     tally.restored += len(profile_dicts)
                 else:
                     tally.failed += len(profile_dicts)
-                    tally.note(f"Failed to send {nozzle} profiles to {printer.name} ({serial})")
+                    tally.note(
+                        "kprofilesSendFailed",
+                        f"Failed to send {nozzle} profiles to {printer.name} ({serial})",
+                        nozzle=nozzle,
+                        printer=printer.name,
+                        serial=serial,
+                    )
 
     @staticmethod
     async def _current_kprofile_index(client, nozzle: str, serial: str) -> list:

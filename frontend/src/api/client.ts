@@ -2845,11 +2845,22 @@ export interface GitHubCommitListResponse {
   commits: GitHubCommitInfo[];
 }
 
+/**
+ * Values the server interpolates into a translated note or preview detail.
+ * Kept to strings and numbers on purpose — anything richer would have to be
+ * formatted server-side and could not be translated.
+ */
+export type GitHubRestoreParams = Record<string, string | number>;
+
 export interface GitHubRestorePreviewCategory {
   category: RestoreCategory;
   available: boolean;
   item_count: number;
+  /** English rendering. Used as i18next's defaultValue, never shown on its own. */
   detail: string | null;
+  /** Key under backup.restoreFromGit.details, or null when there is no caveat. */
+  detail_code: string | null;
+  detail_params: GitHubRestoreParams;
 }
 
 export interface GitHubRestorePreview {
@@ -2867,11 +2878,26 @@ export interface GitHubRestoreRequest {
   overwrite_existing?: boolean;
 }
 
+/**
+ * One tally note, as a translation code plus its parameters (#2656).
+ *
+ * Same contract as {@link LocalBackupPathCheck} one card down: the server picks
+ * the code and supplies typed params, and the client renders
+ * ``t(`backup.restoreFromGit.notes.${code}`, { ...params, defaultValue: message })``.
+ * A code the client does not know yet falls back to the English `message`
+ * rather than showing the raw key.
+ */
+export interface GitHubRestoreNote {
+  code: string;
+  params: GitHubRestoreParams;
+  message: string;
+}
+
 export interface GitHubRestoreCategoryResult {
   restored: number;
   skipped: number;
   failed: number;
-  notes: string[];
+  notes: GitHubRestoreNote[];
 }
 
 export interface GitHubRestoreResponse {
