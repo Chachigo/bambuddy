@@ -1090,6 +1090,51 @@ class TestMutex:
         assert "restore is currently running" in result["message"]
 
 
+class TestApplyOrdering:
+    """_apply must not hold SQLite's write transaction across the MQTT phase."""
+
+    def _recording_service(self, calls: list[str]):
+        service = _service()
+        # Sync side effects on purpose: an AsyncMock returns a coroutine its
+        # side_effect hands back rather than awaiting it, so an async recorder
+        # would never run.
+        service._restore_archives = AsyncMock(side_effect=lambda *a, **k: calls.append("archives"))
+        service._restore_spools = AsyncMock(side_effect=lambda *a, **k: calls.append("spools"))
+        service._restore_settings = AsyncMock(side_effect=lambda *a, **k: calls.append("settings"))
+        service._restore_kprofiles = AsyncMock(side_effect=lambda *a, **k: calls.append("kprofiles"))
+        return service
+
+    @pytest.mark.asyncio
+    async def test_commits_database_categories_before_talking_to_printers(self):
+        """get_kprofiles is 3 x 5 s per printer/nozzle; busy_timeout is 15 s."""
+        calls: list[str] = []
+        service = self._recording_service(calls)
+        db = MagicMock()
+        db.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
+
+        await service._apply(
+            db,
+            {},
+            [RestoreCategory.ARCHIVES, RestoreCategory.SPOOLS, RestoreCategory.KPROFILES],
+            False,
+        )
+
+        assert calls == ["archives", "spools", "commit", "kprofiles"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_split_the_transaction_without_kprofiles(self):
+        """A database-only restore stays one transaction, committed by run_restore."""
+        calls: list[str] = []
+        service = self._recording_service(calls)
+        db = MagicMock()
+        db.commit = AsyncMock(side_effect=lambda: calls.append("commit"))
+
+        await service._apply(db, {}, [RestoreCategory.ARCHIVES, RestoreCategory.SETTINGS], False)
+
+        assert calls == ["archives", "settings"]
+        assert db.commit.await_count == 0
+
+
 class TestResolveRef:
     @pytest.mark.asyncio
     async def test_concrete_sha_passes_through_without_an_api_call(self):

@@ -429,6 +429,10 @@ class GitHubRestoreService:
                     }
 
                 except Exception as e:
+                    # Rolls back whatever is still uncommitted. That is every
+                    # database category unless K-profiles were also selected, in
+                    # which case _apply has already committed them before talking
+                    # to the printers — see the comment there.
                     logger.exception("Restore failed for config %s ref %s", config_id, resolved)
                     await db.rollback()
                     log.status = "failed"
@@ -513,6 +517,23 @@ class GitHubRestoreService:
 
         # Last, because it leaves the database and publishes over MQTT.
         if RestoreCategory.KPROFILES in categories:
+            # Commit the database categories FIRST, and not just for tidiness.
+            # Everything above has already autoflushed its INSERTs, so SQLite is
+            # holding the single write transaction — and _restore_kprofiles then
+            # awaits get_kprofiles per printer per nozzle, which is
+            # timeout=5.0 * max_retries=3, i.e. up to ~15 s each against an
+            # unresponsive printer. busy_timeout is 15 s (core/database.py), so a
+            # farm with a couple of sulking printers would hold the writer past
+            # it and every concurrent writer in the app would fail with
+            # "database is locked".
+            #
+            # The cost is that a K-profile failure no longer rolls back the
+            # categories that already succeeded. That is the correct trade
+            # anyway: extrusion_cali_set has left for the printer by then and
+            # cannot be rolled back either, so a rollback would only have made
+            # the database disagree with the hardware.
+            await db.commit()
+
             self._progress = "Sending K-profiles to printers..."
             tally = _CategoryTally()
             await self._restore_kprofiles(db, payload, tally)
