@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,6 +38,11 @@ from backend.app.schemas.finance import (
     WalletBalanceResponse,
     WalletTransactionListResponse,
     WalletTransactionResponse,
+)
+from backend.app.services.finance_balance import (
+    is_personal_transaction,
+    personal_balance_condition,
+    sync_personal_wallet_balance,
 )
 
 router = APIRouter(prefix="/finance", tags=["finance"])
@@ -306,33 +311,19 @@ async def _build_personal_balance_map(db: AsyncSession, user_id: int) -> dict[in
         select(
             WalletTransaction.id,
             WalletTransaction.amount,
-            WalletTransaction.cost_center_id,
-            CostCenter.is_private,
-            CostCenter.owner_user_id,
-        )
-        .where(
-            WalletTransaction.user_id == user_id,
         )
         .outerjoin(CostCenter, WalletTransaction.cost_center_id == CostCenter.id)
+        .where(WalletTransaction.user_id == user_id, personal_balance_condition(user_id))
         .order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
     )
 
     running_balance = 0.0
     balance_map: dict[int, float] = {}
-    for transaction_id, amount, cost_center_id, is_private, owner_user_id in result.all():
-        is_personal_cost_center = bool(cost_center_id is not None and is_private and owner_user_id == user_id)
-        if cost_center_id is None or is_personal_cost_center:
-            running_balance += float(amount)
-            balance_map[int(transaction_id)] = running_balance
+    for transaction_id, amount in result.all():
+        running_balance += float(amount)
+        balance_map[int(transaction_id)] = running_balance
 
     return balance_map
-
-
-def _personal_balance_condition(user_id: int):
-    return or_(
-        WalletTransaction.cost_center_id.is_(None),
-        and_(CostCenter.is_private.is_(True), CostCenter.owner_user_id == user_id),
-    )
 
 
 async def _create_wallet_adjustment(
@@ -351,6 +342,7 @@ async def _create_wallet_adjustment(
         await _get_cost_center_or_404(db, cost_center_id)
 
     wallet = await _get_or_create_wallet(db, target_user_id)
+    affects_personal_wallet = await is_personal_transaction(db, target_user_id, cost_center_id)
 
     # Calculate balance_after for this specific transaction context
     if cost_center_id is None:
@@ -358,7 +350,6 @@ async def _create_wallet_adjustment(
         new_balance = wallet.balance + amount
         if new_balance < 0:
             raise HTTPException(status_code=400, detail="Insufficient balance for withdrawal")
-        wallet.balance = new_balance
         balance_after = new_balance
     else:
         # Cost-center transaction: validate against cost center balance only (global, not per-user)
@@ -372,7 +363,8 @@ async def _create_wallet_adjustment(
         if new_cc_balance < 0:
             raise HTTPException(status_code=400, detail="Insufficient cost center balance for withdrawal")
         balance_after = new_cc_balance
-        # Do NOT update wallet.balance for cost-center transactions
+        if affects_personal_wallet and wallet.balance + amount < 0:
+            raise HTTPException(status_code=400, detail="Insufficient balance for withdrawal")
 
     tx = WalletTransaction(
         user_id=target_user_id,
@@ -385,12 +377,13 @@ async def _create_wallet_adjustment(
     )
     db.add(tx)
     await db.flush()
+    await sync_personal_wallet_balance(db, wallet)
     await db.commit()
     await db.refresh(wallet)
     await db.refresh(tx)
 
     # Return appropriate balance based on transaction type
-    if cost_center_id is None:
+    if affects_personal_wallet:
         # Personal transaction: return user wallet balance
         response_balance = _to_balance_response(wallet)
     else:
@@ -416,19 +409,7 @@ async def get_my_balance(
     """Return the current user's wallet balance."""
     user = await _require_authenticated_user(current_user)
     wallet = await _get_or_create_wallet(db, user.id)
-    personal_balance_result = await db.execute(
-        select(func.coalesce(func.sum(WalletTransaction.amount), 0.0))
-        .select_from(WalletTransaction)
-        .outerjoin(CostCenter, WalletTransaction.cost_center_id == CostCenter.id)
-        .where(WalletTransaction.user_id == user.id, _personal_balance_condition(user.id))
-    )
-    personal_balance = float(personal_balance_result.scalar_one() or 0.0)
-    return WalletBalanceResponse(
-        user_id=user.id,
-        balance=personal_balance,
-        currency=wallet.currency,
-        updated_at=wallet.updated_at,
-    )
+    return _to_balance_response(wallet)
 
 
 @router.get("/me/transactions", response_model=WalletTransactionListResponse)
@@ -504,47 +485,10 @@ async def get_all_transactions(
 
 
 async def _rebuild_wallet_ledger_for_user(db: AsyncSession, user_id: int) -> None:
-    """Recompute `balance_after` for all wallet transactions of a user.
+    """Rebuild through the same canonical ledger repair used at startup."""
+    from backend.app.core.database import repair_wallet_ledger_internal
 
-    - Personal transactions (cost_center_id=None): running balance per user
-    - Cost-center transactions: running balance GLOBAL for entire cost center (not per-user)
-    - Also updates the user's wallet balance (sum of personal transactions only)
-    """
-    result = await db.execute(
-        select(WalletTransaction)
-        .where(WalletTransaction.user_id == user_id)
-        .order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
-    )
-    user_transactions = result.scalars().all()
-
-    # Handle personal transactions (cost_center_id=None)
-    personal_balance = 0.0
-    for tx in user_transactions:
-        if tx.cost_center_id is None:
-            personal_balance += float(tx.amount)
-            tx.balance_after = personal_balance
-            db.add(tx)
-
-    for cc_id in {tx.cost_center_id for tx in user_transactions if tx.cost_center_id is not None}:
-        # Get all transactions for this cost center (all users, all time)
-        result_all_cc = await db.execute(
-            select(WalletTransaction)
-            .where(WalletTransaction.cost_center_id == cc_id)
-            .order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
-        )
-        all_cc_transactions = result_all_cc.scalars().all()
-
-        running = 0.0
-        for tx in all_cc_transactions:
-            running += float(tx.amount)
-            tx.balance_after = running
-            db.add(tx)
-
-    # Update user wallet balance (sum of all personal transactions only)
-    wallet = await _get_or_create_wallet(db, user_id)
-    wallet.balance = personal_balance
-    await db.flush()
-    await db.commit()
+    await repair_wallet_ledger_internal(db)
 
 
 @router.delete("/transactions/{transaction_id}")
@@ -794,51 +738,19 @@ async def rebuild_balance_ledger(
     """Recompute balance_after for all wallet transactions.
 
     This rebuilds the running balance for all users and cost centers.
-    - Personal transactions: per-user running balance
+    - Personal transactions: unassigned plus the user's own private cost center
     - Cost-center transactions: global running balance for the entire cost center
     """
     await _require_authenticated_user(current_user)
 
-    # Get ALL transactions sorted by timestamp
-    result = await db.execute(
-        select(WalletTransaction).order_by(WalletTransaction.created_at.asc(), WalletTransaction.id.asc())
-    )
-    all_transactions = result.scalars().all()
+    from backend.app.core.database import repair_wallet_ledger_internal
 
-    # Build running balances per (user, cost_center_id) pair
-    # For each cost center, track its global running balance
-    # For each user's personal balance, track that separately
-    cc_running_balances: dict[int, float] = {}  # cost_center_id -> running balance
-    user_personal_balances: dict[int, float] = {}  # user_id -> personal running balance
-
-    tx_updates: list[tuple[WalletTransaction, float]] = []
-
-    for tx in all_transactions:
-        if tx.cost_center_id is None:
-            # Personal transaction: per-user running balance
-            current = user_personal_balances.get(tx.user_id, 0.0)
-            new_balance = current + float(tx.amount)
-            user_personal_balances[tx.user_id] = new_balance
-            tx_updates.append((tx, new_balance))
-        else:
-            # Cost-center transaction: global running balance for this cost center
-            current = cc_running_balances.get(tx.cost_center_id, 0.0)
-            new_balance = current + float(tx.amount)
-            cc_running_balances[tx.cost_center_id] = new_balance
-            tx_updates.append((tx, new_balance))
-
-    # Update all transactions with the new balance_after values
-    for tx, new_balance in tx_updates:
-        tx.balance_after = new_balance
-        db.add(tx)
-
-    await db.flush()
-    await db.commit()
+    rebuilt = await repair_wallet_ledger_internal(db)
 
     return {
         "status": "success",
-        "transactions_rebuilt": len(all_transactions),
-        "message": f"Rebuilt balance_after for {len(all_transactions)} transactions",
+        "transactions_rebuilt": rebuilt,
+        "message": f"Rebuilt {rebuilt} wallet ledger values",
     }
 
 
@@ -1053,6 +965,12 @@ async def delete_cost_center(
         raise HTTPException(status_code=400, detail="Cost center can only be deleted when balance is 0")
 
     await db.delete(center)
+    await db.flush()
+    # ON DELETE SET NULL reclassifies the former shared-center entries as
+    # personal transactions, so synchronize affected wallets immediately.
+    from backend.app.core.database import repair_wallet_ledger_internal
+
+    await repair_wallet_ledger_internal(db)
     await db.commit()
     return {"status": "success"}
 

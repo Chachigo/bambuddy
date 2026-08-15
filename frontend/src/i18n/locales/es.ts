@@ -447,6 +447,7 @@ export default {
     toast: {
       printerDeleted: 'Impresora eliminada',
       missingSpoolAssignment: 'Impresión iniciada en {{printer}}. Falta la asignación de bobina para: {{slots}}',
+      killSwitchTriggered: 'El interruptor de seguridad de facturación detuvo una impresión no autorizada en {{printer}}: {{filename}}',
       assignmentVerified: 'Filamento cargado en la ranura {{slot}} ({{printer}})',
       assignmentVerifiedNoKprofile: 'Ranura {{slot}} en {{printer}} cargada, pero no se aplicó el perfil de calibración de flujo (perfil K)',
       assignmentNotConfirmed: 'No se pudo confirmar la asignación de la ranura {{slot}} en {{printer}}: revisa la ranura AMS',

@@ -447,6 +447,7 @@ export default {
     toast: {
       printerDeleted: 'Stampante eliminata',
       missingSpoolAssignment: 'Stampa avviata su {{printer}}. Mancano assegnazioni bobina per: {{slots}}',
+      killSwitchTriggered: 'L’interruttore di sicurezza della fatturazione ha arrestato una stampa non autorizzata su {{printer}}: {{filename}}',
       assignmentVerified: 'Filamento caricato nello slot {{slot}} ({{printer}})',
       assignmentVerifiedNoKprofile: 'Slot {{slot}} su {{printer}} caricato, ma il profilo di calibrazione del flusso (profilo K) non è stato applicato',
       assignmentNotConfirmed: 'Impossibile confermare l\'assegnazione dello slot {{slot}} su {{printer}} — controlla lo slot AMS',

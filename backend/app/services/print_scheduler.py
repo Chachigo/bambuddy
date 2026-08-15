@@ -43,6 +43,7 @@ from backend.app.services.finance_budget import (
 )
 from backend.app.services.ha_sensor_manager import ha_sensor_manager
 from backend.app.services.notification_service import notification_service
+from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 from backend.app.services.printer_manager import (
     printer_manager,
     supports_airduct,
@@ -3684,6 +3685,20 @@ class PrintScheduler:
             from backend.app.models.user import User
 
             queue_user = await db.get(User, item.created_by_id) if item.created_by_id is not None else None
+            # Recompute at the final authorization boundary as well as enqueue
+            # time. This covers rows created before the server-side estimate
+            # migration and prevents any alternate write path from weakening
+            # the budget reservation.
+            archive = await db.get(PrintArchive, item.archive_id) if item.archive_id is not None else None
+            library_file = await db.get(LibraryFile, item.library_file_id) if item.library_file_id is not None else None
+            item.estimated_cost = await estimate_queue_source_cost(
+                db,
+                archive=archive,
+                library_file=library_file,
+                plate_id=item.plate_id,
+                ams_mapping=item.ams_mapping,
+                printer_id=item.printer_id,
+            )
             await validate_print_budget(
                 db,
                 cost_center_id=item.cost_center_id,

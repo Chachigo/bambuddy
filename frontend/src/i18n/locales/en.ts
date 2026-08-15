@@ -450,6 +450,7 @@ export default {
     toast: {
       printerDeleted: 'Printer deleted',
       missingSpoolAssignment: 'Print started on {{printer}}. Missing spool assignment for: {{slots}}',
+      killSwitchTriggered: 'The billing kill switch stopped an unauthorized print on {{printer}}: {{filename}}',
       assignmentVerified: 'Filament loaded on slot {{slot}} ({{printer}})',
       assignmentVerifiedNoKprofile: 'Slot {{slot}} on {{printer}} loaded, but the flow calibration (K-profile) was not applied',
       assignmentNotConfirmed: 'Could not confirm the assignment for slot {{slot}} on {{printer}} — check the AMS slot',

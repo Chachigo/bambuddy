@@ -146,7 +146,7 @@ class TestPrintQueueAPI:
         """Verify item can be added to queue with cost_center_id."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=1.25, filament_used_grams=50.0)
         cost_center = CostCenter(name="Queue CC", is_active=True, is_private=False)
         db_session.add(cost_center)
         await db_session.commit()
@@ -158,7 +158,7 @@ class TestPrintQueueAPI:
                 "printer_id": printer.id,
                 "archive_id": archive.id,
                 "cost_center_id": cost_center.id,
-                "estimated_cost": 1.25,
+                "estimated_cost": 0.01,
             },
         )
         assert response.status_code == 200
@@ -175,13 +175,13 @@ class TestPrintQueueAPI:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_add_to_queue_with_cost_center_requires_estimated_cost(
+    async def test_add_to_queue_derives_cost_without_client_estimate(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):
-        """Cost-center queue items require an estimated cost for budget checks."""
+        """The persisted budget estimate comes from the archive, not the request."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=1.25, filament_used_grams=50.0)
         cost_center = CostCenter(name="Budget CC", is_active=True, is_private=False, monthly_budget=10.0)
         db_session.add(cost_center)
         await db_session.commit()
@@ -196,18 +196,18 @@ class TestPrintQueueAPI:
             },
         )
 
-        assert response.status_code == 400
-        assert "Estimated cost is required" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["estimated_cost"] == 1.25
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_add_to_queue_rejects_when_estimated_cost_exceeds_budget(
+    async def test_add_to_queue_rejects_tampered_client_cost_when_server_cost_exceeds_budget(
         self, async_client: AsyncClient, printer_factory, archive_factory, db_session
     ):
-        """Queue creation is rejected if the estimated cost exceeds remaining budget."""
+        """A forged low client hint cannot bypass the server-derived budget check."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=2.0, filament_used_grams=50.0)
         cost_center = CostCenter(name="Tiny Budget CC", is_active=True, is_private=False, monthly_budget=1.0)
         db_session.add(cost_center)
         await db_session.commit()
@@ -219,7 +219,7 @@ class TestPrintQueueAPI:
                 "printer_id": printer.id,
                 "archive_id": archive.id,
                 "cost_center_id": cost_center.id,
-                "estimated_cost": 2.0,
+                "estimated_cost": 0.01,
             },
         )
 
@@ -234,7 +234,7 @@ class TestPrintQueueAPI:
         """Billing enforcement rejects queue jobs that omit cost center."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=1.0, filament_used_grams=50.0)
 
         response = await async_client.post(
             "/api/v1/queue/",
@@ -255,7 +255,7 @@ class TestPrintQueueAPI:
         """Open queue items reserve budget until they leave pending/printing states."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=3.0, filament_used_grams=50.0)
         cost_center = CostCenter(name="Reserved Budget CC", is_active=True, is_private=False, monthly_budget=10.0)
         db_session.add(cost_center)
         await db_session.commit()
@@ -274,7 +274,7 @@ class TestPrintQueueAPI:
                 "printer_id": printer.id,
                 "archive_id": archive.id,
                 "cost_center_id": cost_center.id,
-                "estimated_cost": 3.0,
+                "estimated_cost": 0.01,
             },
         )
 
@@ -345,7 +345,7 @@ class TestPrintQueueAPI:
         """Verify a pending queue item can be updated with cost_center_id."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=1.25, filament_used_grams=50.0)
         item = await queue_item_factory(printer_id=printer.id, archive_id=archive.id)
         cost_center = CostCenter(name="Update CC", is_active=True, is_private=False)
         db_session.add(cost_center)
@@ -354,7 +354,7 @@ class TestPrintQueueAPI:
 
         response = await async_client.patch(
             f"/api/v1/queue/{item.id}",
-            json={"cost_center_id": cost_center.id, "estimated_cost": 1.25},
+            json={"cost_center_id": cost_center.id, "estimated_cost": 0.01},
         )
 
         assert response.status_code == 200
@@ -822,7 +822,7 @@ class TestPrintQueueAPI:
         """Deleting a pending cost-center queue item releases its reserved budget."""
         await enable_billing(db_session)
         printer = await printer_factory()
-        archive = await archive_factory()
+        archive = await archive_factory(cost=3.0, filament_used_grams=50.0)
         cost_center = CostCenter(
             name="Delete Releases Budget CC", is_active=True, is_private=False, monthly_budget=10.0
         )
@@ -843,7 +843,7 @@ class TestPrintQueueAPI:
                 "printer_id": printer.id,
                 "archive_id": archive.id,
                 "cost_center_id": cost_center.id,
-                "estimated_cost": 3.0,
+                "estimated_cost": 0.01,
             },
         )
         assert blocked.status_code == 400
@@ -857,7 +857,7 @@ class TestPrintQueueAPI:
                 "printer_id": printer.id,
                 "archive_id": archive.id,
                 "cost_center_id": cost_center.id,
-                "estimated_cost": 3.0,
+                "estimated_cost": 0.01,
             },
         )
         assert allowed.status_code == 200
@@ -1730,11 +1730,12 @@ class TestBulkUpdateEndpoint:
     @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_bulk_update_cost_center_counts_pending_reservations(
-        self, async_client: AsyncClient, queue_item_factory, db_session
+        self, async_client: AsyncClient, queue_item_factory, archive_factory, db_session
     ):
-        """Bulk updates cannot reserve more than the available cost-center budget."""
+        """A forged bulk-update hint cannot weaken the server-derived reservation."""
         await enable_billing(db_session)
-        item = await queue_item_factory()
+        archive = await archive_factory(cost=3.0, filament_used_grams=50.0)
+        item = await queue_item_factory(archive_id=archive.id)
         existing = await queue_item_factory()
         cost_center = CostCenter(name="Bulk Reserved CC", is_active=True, is_private=False, monthly_budget=10.0)
         db_session.add(cost_center)
@@ -1747,7 +1748,7 @@ class TestBulkUpdateEndpoint:
 
         response = await async_client.patch(
             "/api/v1/queue/bulk",
-            json={"item_ids": [item.id], "cost_center_id": cost_center.id, "estimated_cost": 3.0},
+            json={"item_ids": [item.id], "cost_center_id": cost_center.id, "estimated_cost": 0.01},
         )
 
         assert response.status_code == 400

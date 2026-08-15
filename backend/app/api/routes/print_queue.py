@@ -51,6 +51,7 @@ from backend.app.services.print_batch import (
     load_progress,
     refresh_batch_status,
 )
+from backend.app.services.print_cost_estimate import estimate_queue_source_cost
 from backend.app.utils.printer_models import (
     is_gcode_compatible,
 )
@@ -277,6 +278,55 @@ async def _resolve_source_path(db: AsyncSession, item: PrintQueueItem) -> Path |
             lib_path = Path(library_file.file_path)
             return lib_path if lib_path.is_absolute() else settings.base_dir / library_file.file_path
     return None
+
+
+async def _trusted_item_estimated_cost(
+    db: AsyncSession,
+    item: PrintQueueItem,
+    *,
+    printer_id: int | None,
+    plate_id: int | None,
+    ams_mapping: list[int] | str | None,
+) -> float | None:
+    """Recompute an existing queue item's cost from its persisted source."""
+
+    if item.archive_id:
+        archive = await db.scalar(select(PrintArchive).where(PrintArchive.id == item.archive_id))
+        return await estimate_queue_source_cost(
+            db,
+            archive=archive,
+            plate_id=plate_id,
+            ams_mapping=ams_mapping,
+            printer_id=printer_id,
+        )
+    if item.library_file_id:
+        library_file = await db.scalar(LibraryFile.active().where(LibraryFile.id == item.library_file_id))
+        return await estimate_queue_source_cost(
+            db,
+            library_file=library_file,
+            plate_id=plate_id,
+            ams_mapping=ams_mapping,
+            printer_id=printer_id,
+        )
+
+    result = await db.execute(
+        select(PrintQueueVariant, LibraryFile)
+        .join(LibraryFile, LibraryFile.id == PrintQueueVariant.library_file_id)
+        .where(PrintQueueVariant.queue_item_id == item.id)
+    )
+    estimates = [
+        await estimate_queue_source_cost(
+            db,
+            library_file=library_file,
+            plate_id=variant.plate_id,
+            ams_mapping=variant.ams_mapping,
+            printer_id=printer_id,
+        )
+        for variant, library_file in result.all()
+    ]
+    if not estimates or any(cost is None for cost in estimates):
+        return None
+    return max(cost for cost in estimates if cost is not None)
 
 
 def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
@@ -945,10 +995,39 @@ async def add_to_queue(
         if not project_result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Project not found")
 
+    # Security boundary: the browser's estimated_cost is only a display hint.
+    # Budget enforcement and the persisted reservation value must be derived
+    # from the server-owned archive/library metadata and spool assignments.
+    if variant_specs:
+        variant_costs = [
+            await estimate_queue_source_cost(
+                db,
+                library_file=variant_file,
+                plate_id=spec.plate_id,
+                ams_mapping=spec.ams_mapping,
+                printer_id=data.printer_id,
+            )
+            for spec, variant_file, _model in variant_specs
+        ]
+        trusted_estimated_cost = (
+            max(cost for cost in variant_costs if cost is not None)
+            if variant_costs and all(cost is not None for cost in variant_costs)
+            else None
+        )
+    else:
+        trusted_estimated_cost = await estimate_queue_source_cost(
+            db,
+            archive=archive,
+            library_file=library_file,
+            plate_id=data.plate_id,
+            ams_mapping=data.ams_mapping,
+            printer_id=data.printer_id,
+        )
+
     await validate_print_budget(
         db,
         cost_center_id=data.cost_center_id,
-        estimated_cost=data.estimated_cost,
+        estimated_cost=trusted_estimated_cost,
         current_user=current_user,
         quantity=quantity,
     )
@@ -1010,7 +1089,7 @@ async def add_to_queue(
             archive_id=data.archive_id,
             library_file_id=data.library_file_id,
             cost_center_id=data.cost_center_id,
-            estimated_cost=data.estimated_cost,
+            estimated_cost=trusted_estimated_cost,
             scheduled_time=data.scheduled_time,
             require_previous_success=data.require_previous_success,
             auto_off_after=data.auto_off_after,
@@ -1161,16 +1240,25 @@ async def bulk_update_queue_items(
             skipped_count += 1
             continue
 
+        item_update_data = update_data.copy()
         if validates_billing_fields:
+            trusted_estimated_cost = await _trusted_item_estimated_cost(
+                db,
+                item,
+                printer_id=item_update_data.get("printer_id", item.printer_id),
+                plate_id=item.plate_id,
+                ams_mapping=item.ams_mapping,
+            )
+            item_update_data["estimated_cost"] = trusted_estimated_cost
             await validate_print_budget(
                 db,
-                cost_center_id=update_data.get("cost_center_id", item.cost_center_id),
-                estimated_cost=update_data.get("estimated_cost", item.estimated_cost),
+                cost_center_id=item_update_data.get("cost_center_id", item.cost_center_id),
+                estimated_cost=trusted_estimated_cost,
                 current_user=user,
                 exclude_queue_item_id=item.id,
             )
 
-        for field, value in update_data.items():
+        for field, value in item_update_data.items():
             setattr(item, field, value)
         updated_count += 1
 
@@ -1826,10 +1914,19 @@ async def update_queue_item(
             json.dumps(update_data["nozzle_mapping"]) if update_data["nozzle_mapping"] else None
         )
 
+    trusted_estimated_cost = await _trusted_item_estimated_cost(
+        db,
+        item,
+        printer_id=update_data.get("printer_id", item.printer_id),
+        plate_id=update_data.get("plate_id", item.plate_id),
+        ams_mapping=update_data.get("ams_mapping", item.ams_mapping),
+    )
+    update_data["estimated_cost"] = trusted_estimated_cost
+
     await validate_print_budget(
         db,
         cost_center_id=update_data.get("cost_center_id", item.cost_center_id),
-        estimated_cost=update_data.get("estimated_cost", item.estimated_cost),
+        estimated_cost=trusted_estimated_cost,
         current_user=user,
         exclude_queue_item_id=item.id,
     )
@@ -2168,6 +2265,14 @@ async def start_queue_item(
 
     if item.status != "pending":
         raise HTTPException(400, f"Can only start pending items, current status: '{item.status}'")
+
+    item.estimated_cost = await _trusted_item_estimated_cost(
+        db,
+        item,
+        printer_id=item.printer_id,
+        plate_id=item.plate_id,
+        ams_mapping=item.ams_mapping,
+    )
 
     await validate_print_budget(
         db,

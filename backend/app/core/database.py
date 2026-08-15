@@ -1232,6 +1232,14 @@ async def _migrate_create_finance_indexes(conn) -> None:
         await _safe_execute(conn, statement)
 
 
+async def _migrate_add_print_archive_cost_center(conn) -> None:
+    """Add the nullable cost-center link missing from pre-billing archives."""
+    await _safe_execute(
+        conn,
+        "ALTER TABLE print_archives ADD COLUMN cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL",
+    )
+
+
 async def run_migrations(conn):
     """Run all schema migrations and data backfills on startup.
 
@@ -1584,6 +1592,9 @@ async def run_migrations(conn):
             )
     except (OperationalError, ProgrammingError):
         pass  # Already applied
+
+    # Migration: Add cost_center_id column to print_archives for billing metadata
+    await _migrate_add_print_archive_cost_center(conn)
 
     # Migration: Add wiki_url column to maintenance_types for documentation links
     await _safe_execute(conn, "ALTER TABLE maintenance_types ADD COLUMN wiki_url VARCHAR(500)")
@@ -4913,21 +4924,11 @@ async def repair_wallet_ledger():
 
     This is called during database initialization to ensure all balance_after
     values are correct after code changes. Fixes old balance_after values to:
-    - Personal transactions: per-user running balance
+    - Personal transactions: unassigned plus the user's own private cost center
     - Cost-center transactions: global running balance for the entire cost center
-    Also updates UserWallet.balance to match final personal transaction balance.
+    Also updates UserWallet.balance to the canonical personal ledger sum.
     """
-    from sqlalchemy import select
-
-    from backend.app.models.finance import WalletTransaction
-
     async with async_session() as session:
-        # Check if there are any transactions first
-        result = await session.execute(select(WalletTransaction).limit(1))
-        if not result.scalar_one_or_none():
-            logger.info("No wallet transactions found, skipping ledger rebuild")
-            return
-
         updated_count = await repair_wallet_ledger_internal(session)
         await session.commit()
 
@@ -4942,7 +4943,8 @@ async def repair_wallet_ledger_internal(session: AsyncSession):
     """
     from sqlalchemy import select
 
-    from backend.app.models.finance import UserWallet, WalletTransaction
+    from backend.app.models.finance import CostCenter, UserWallet, WalletTransaction
+    from backend.app.services.finance_balance import transaction_affects_personal_balance
 
     # Get ALL transactions sorted by timestamp
     result = await session.execute(
@@ -4950,8 +4952,10 @@ async def repair_wallet_ledger_internal(session: AsyncSession):
     )
     all_transactions = result.scalars().all()
 
-    if not all_transactions:
-        return 0
+    center_rows = await session.execute(select(CostCenter.id, CostCenter.is_private, CostCenter.owner_user_id))
+    centers = {
+        int(center_id): (bool(is_private), owner_user_id) for center_id, is_private, owner_user_id in center_rows
+    }
 
     # Build running balances per (user, cost_center_id) pair
     cc_running_balances: dict[int, float] = {}  # cost_center_id -> running balance
@@ -4960,6 +4964,13 @@ async def repair_wallet_ledger_internal(session: AsyncSession):
     tx_updates: list[tuple[WalletTransaction, float]] = []
 
     for tx in all_transactions:
+        center_is_private, center_owner_user_id = centers.get(tx.cost_center_id, (False, None))
+        affects_personal = transaction_affects_personal_balance(
+            tx.user_id,
+            tx.cost_center_id,
+            is_private=center_is_private,
+            owner_user_id=center_owner_user_id,
+        )
         if tx.cost_center_id is None:
             # Personal transaction: per-user running balance
             current = user_personal_balances.get(tx.user_id, 0.0)
@@ -4973,6 +4984,11 @@ async def repair_wallet_ledger_internal(session: AsyncSession):
             cc_running_balances[tx.cost_center_id] = new_balance
             tx_updates.append((tx, new_balance))
 
+            # The owner's private cost center is also part of that user's
+            # personal wallet. Shared centers never enter this sum.
+            if affects_personal:
+                user_personal_balances[tx.user_id] = user_personal_balances.get(tx.user_id, 0.0) + float(tx.amount)
+
     # Update all transactions with the new balance_after values
     updated_count = 0
     for tx, new_balance in tx_updates:
@@ -4981,11 +4997,12 @@ async def repair_wallet_ledger_internal(session: AsyncSession):
             session.add(tx)
             updated_count += 1
 
-    # Update UserWallet balances to match final personal balances
-    for user_id, balance in user_personal_balances.items():
-        wallet_result = await session.execute(select(UserWallet).where(UserWallet.user_id == user_id))
-        wallet = wallet_result.scalar_one_or_none()
-        if wallet and wallet.balance != balance:
+    # Update every wallet, including stale wallets whose canonical balance is
+    # now zero because their last personal transaction was deleted.
+    wallet_result = await session.execute(select(UserWallet))
+    for wallet in wallet_result.scalars().all():
+        balance = round(user_personal_balances.get(wallet.user_id, 0.0), 2)
+        if wallet.balance != balance:
             wallet.balance = balance
             session.add(wallet)
             updated_count += 1

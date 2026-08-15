@@ -17,6 +17,7 @@ interface WebSocketMessage {
   printer_id?: number;
   data?: Record<string, unknown>;
   printer_name?: string;
+  filename?: string;
   missing_slots?: Array<{ slot?: string }>;
   // Spool-assignment read-back verification (#2582).
   slot?: string;
@@ -337,6 +338,13 @@ export function useWebSocket() {
         debouncedInvalidate('archives');
         debouncedInvalidate('archiveStats');
         break;
+
+      case 'kill_switch_triggered': {
+        const printer = message.printer_name || `Printer ${message.printer_id ?? '?'}`;
+        const filename = message.filename || t('common.unknown');
+        showToast(t('printers.toast.killSwitchTriggered', { printer, filename }), 'error');
+        break;
+      }
 
       case 'archive_created':
         debouncedInvalidate('archives');

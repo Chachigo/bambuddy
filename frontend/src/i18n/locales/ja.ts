@@ -446,6 +446,7 @@ export default {
     toast: {
       printerDeleted: 'プリンターを削除しました',
       missingSpoolAssignment: '{{printer}}で印刷を開始しました。以下のスプール割り当てがありません: {{slots}}',
+      killSwitchTriggered: '課金キルスイッチが{{printer}}で未承認の印刷を停止しました：{{filename}}',
       assignmentVerified: 'スロット{{slot}}にフィラメントを読み込みました（{{printer}}）',
       assignmentVerifiedNoKprofile: '{{printer}}のスロット{{slot}}を読み込みましたが、フロー校正プロファイル（Kプロファイル）は適用されませんでした',
       assignmentNotConfirmed: '{{printer}}のスロット{{slot}}の割り当てを確認できませんでした。AMSスロットを確認してください',

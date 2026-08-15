@@ -7,7 +7,11 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from backend.app.core.database import _migrate_create_finance_indexes, _migrate_create_finance_tables
+from backend.app.core.database import (
+    _migrate_add_print_archive_cost_center,
+    _migrate_create_finance_indexes,
+    _migrate_create_finance_tables,
+)
 
 EXPECTED_TABLES = {
     "cost_centers",
@@ -67,6 +71,31 @@ async def test_legacy_cost_center_indexes_are_delayed_until_columns_exist():
 
 
 @pytest.mark.asyncio
+async def test_print_archive_cost_center_is_added_idempotently_on_sqlite():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("PRAGMA foreign_keys = ON"))
+            await conn.execute(text("CREATE TABLE cost_centers (id INTEGER PRIMARY KEY)"))
+            await conn.execute(text("CREATE TABLE print_archives (id INTEGER PRIMARY KEY)"))
+
+            await _migrate_add_print_archive_cost_center(conn)
+            await _migrate_add_print_archive_cost_center(conn)
+
+            columns = await conn.execute(text("PRAGMA table_info(print_archives)"))
+            foreign_keys = await conn.execute(text("PRAGMA foreign_key_list(print_archives)"))
+
+        assert "cost_center_id" in {row[1] for row in columns}
+        assert any(
+            row[2] == "cost_centers" and row[3] == "cost_center_id" and row[6].upper() == "SET NULL"
+            for row in foreign_keys
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_postgres_finance_ddl_uses_postgres_types():
     statements: list[str] = []
 
@@ -110,6 +139,8 @@ async def test_finance_tables_are_created_idempotently_on_postgres():
             with patch("backend.app.core.database.is_sqlite", return_value=False):
                 await _migrate_create_finance_tables(conn)
                 await _migrate_create_finance_tables(conn)
+                await _migrate_add_print_archive_cost_center(conn)
+                await _migrate_add_print_archive_cost_center(conn)
                 await _migrate_create_finance_indexes(conn)
                 await _migrate_create_finance_indexes(conn)
 
@@ -127,8 +158,25 @@ async def test_finance_tables_are_created_idempotently_on_postgres():
                     "AND table_name = 'cost_centers' AND column_name = 'created_at'"
                 )
             )
+            archive_cost_center = await conn.execute(
+                text(
+                    "SELECT c.data_type, rc.delete_rule "
+                    "FROM information_schema.columns c "
+                    "JOIN information_schema.key_column_usage kcu "
+                    "  ON kcu.table_schema = c.table_schema "
+                    " AND kcu.table_name = c.table_name "
+                    " AND kcu.column_name = c.column_name "
+                    "JOIN information_schema.referential_constraints rc "
+                    "  ON rc.constraint_schema = kcu.constraint_schema "
+                    " AND rc.constraint_name = kcu.constraint_name "
+                    "WHERE c.table_schema = 'public' "
+                    "AND c.table_name = 'print_archives' "
+                    "AND c.column_name = 'cost_center_id'"
+                )
+            )
 
         assert {row[0] for row in rows} == EXPECTED_TABLES
         assert timestamp_type.scalar_one() == "timestamp without time zone"
+        assert archive_cost_center.one() == ("integer", "SET NULL")
     finally:
         await engine.dispose()

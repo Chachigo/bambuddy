@@ -450,6 +450,7 @@ export default {
     toast: {
       printerDeleted: "Принтер видалено",
       missingSpoolAssignment: "Друк на {{printer}} розпочато. Для слотів {{slots}} не призначено котушки.",
+      killSwitchTriggered: 'Аварійний вимикач білінгу зупинив несанкціонований друк на {{printer}}: {{filename}}',
       assignmentVerified: "Філамент завантажено в слот AMS {{slot}} принтера {{printer}}",
       assignmentVerifiedNoKprofile: "Слот AMS {{slot}} на {{printer}} завантажено, але калібрування потоку (K-профіль) не застосовано",
       assignmentNotConfirmed: "Не вдалося підтвердити призначення для слота {{slot}} на {{printer}} — перевірте слот AMS",

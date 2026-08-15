@@ -447,6 +447,7 @@ export default {
     toast: {
       printerDeleted: 'Yazıcı silindi',
       missingSpoolAssignment: '{{printer}} üzerinde baskı başladı. Şunlar için eksik makara ataması: {{slots}}',
+      killSwitchTriggered: 'Faturalandırma durdurma anahtarı {{printer}} üzerindeki yetkisiz baskıyı durdurdu: {{filename}}',
       assignmentVerified: '{{slot}} yuvasına filament yüklendi ({{printer}})',
       assignmentVerifiedNoKprofile: '{{printer}} üzerindeki {{slot}} yuvası yüklendi, ancak akış kalibrasyonu profili (K profili) uygulanmadı',
       assignmentNotConfirmed: '{{printer}} üzerindeki {{slot}} yuvası ataması doğrulanamadı — AMS yuvasını kontrol edin',

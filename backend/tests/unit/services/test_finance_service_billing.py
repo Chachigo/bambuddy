@@ -60,7 +60,7 @@ class TestFinanceBilling:
 
         wallet = await db_session.scalar(select(UserWallet).where(UserWallet.user_id == user.id))
         assert wallet is not None
-        assert wallet.balance == -7.5
+        assert wallet.balance == 0.0
 
         tx = await db_session.scalar(select(WalletTransaction).where(WalletTransaction.print_run_id == "run-1"))
         assert tx is not None
@@ -86,7 +86,7 @@ class TestFinanceBilling:
         assert second_run is True
         wallet = await db_session.scalar(select(UserWallet).where(UserWallet.user_id == user.id))
         assert wallet is not None
-        assert wallet.balance == -15.0
+        assert wallet.balance == 0.0
 
         rows = (
             (await db_session.execute(select(WalletTransaction).where(WalletTransaction.user_id == user.id)))
@@ -277,7 +277,7 @@ class TestPartialPrintCharges:
         assert changed is True
         wallet = await db_session.scalar(select(UserWallet).where(UserWallet.user_id == user.id))
         assert wallet is not None
-        assert wallet.balance == -3.0
+        assert wallet.balance == 0.0
 
         transaction = await db_session.scalar(
             select(WalletTransaction).where(WalletTransaction.print_archive_id == archive.id)
@@ -374,7 +374,7 @@ class TestPartialPrintCharges:
 
         wallet = await db_session.scalar(select(UserWallet).where(UserWallet.user_id == user.id))
         assert wallet is not None
-        assert wallet.balance == -5.0  # 50% of 10.0
+        assert wallet.balance == 0.0
 
         tx = await db_session.scalar(
             select(WalletTransaction)
@@ -476,7 +476,7 @@ class TestPartialPrintCharges:
 
         wallet = await db_session.scalar(select(UserWallet).where(UserWallet.user_id == user.id))
         assert wallet is not None
-        assert wallet.balance == pytest.approx(-1.0, abs=0.01)  # 5% of 20.0
+        assert wallet.balance == 0.0
 
     @pytest.mark.asyncio
     async def test_completed_print_still_charges_full_cost(self, db_session):
@@ -512,7 +512,7 @@ class TestPartialPrintCharges:
         assert changed is True
 
         wallet = await db_session.scalar(select(UserWallet).where(UserWallet.user_id == user.id))
-        assert wallet.balance == -15.0  # Full cost, not proportional
+        assert wallet.balance == 0.0
 
     @pytest.mark.asyncio
     async def test_partial_charge_with_cost_center_override(self, db_session):

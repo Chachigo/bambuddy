@@ -447,6 +447,7 @@ export default {
     toast: {
       printerDeleted: 'Impressora excluída',
       missingSpoolAssignment: 'Impressão iniciada em {{printer}}. Atribuição de bobina ausente para: {{slots}}',
+      killSwitchTriggered: 'O bloqueio de segurança de cobrança interrompeu uma impressão não autorizada em {{printer}}: {{filename}}',
       assignmentVerified: 'Filamento carregado no compartimento {{slot}} ({{printer}})',
       assignmentVerifiedNoKprofile: 'Compartimento {{slot}} em {{printer}} carregado, mas o perfil de calibração de fluxo (perfil K) não foi aplicado',
       assignmentNotConfirmed: 'Não foi possível confirmar a atribuição do compartimento {{slot}} em {{printer}} — verifique o compartimento AMS',

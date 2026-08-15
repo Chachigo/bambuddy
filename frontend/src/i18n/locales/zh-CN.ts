@@ -447,6 +447,7 @@ export default {
     toast: {
       printerDeleted: '打印机已删除',
       missingSpoolAssignment: '已在{{printer}}上开始打印。以下料槽未分配耗材: {{slots}}',
+      killSwitchTriggered: '计费终止开关已停止 {{printer}} 上的未授权打印：{{filename}}',
       assignmentVerified: '耗材已加载到料槽{{slot}}（{{printer}}）',
       assignmentVerifiedNoKprofile: '{{printer}}的料槽{{slot}}已加载，但流量校准配置（K配置）未应用',
       assignmentNotConfirmed: '无法确认{{printer}}上料槽{{slot}}的分配，请检查AMS料槽',

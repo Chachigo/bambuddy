@@ -7,8 +7,10 @@ from sqlalchemy import select
 from backend.app.core.auth import get_password_hash
 from backend.app.models.archive import PrintArchive
 from backend.app.models.finance import CostCenter, UserWallet, WalletTransaction
+from backend.app.models.group import Group
 from backend.app.models.settings import Settings
 from backend.app.models.user import User
+from backend.app.services.finance_billing import apply_print_charge_for_archive
 
 
 class TestFinanceAPI:
@@ -143,34 +145,30 @@ class TestFinanceAPI:
         admin_user,
         db_session,
     ):
-        """Test cost-center and personal transaction handling.
-
-        Cost-center transactions affect cost-center balance only.
-        Personal transactions (no cost_center_id) affect user wallet.
-        """
+        """A user's private cost center and unassigned entries share one wallet."""
         await self._enable_basic_user_creation(db_session)
         created_user = await self._create_user_via_api(async_client, auth_headers, "dave")
 
-        shared_center = await db_session.scalar(
+        private_center = await db_session.scalar(
             select(CostCenter).where(CostCenter.owner_user_id == created_user["id"], CostCenter.is_private.is_(True))
         )
-        assert shared_center is not None
+        assert private_center is not None
 
-        # Deposit to cost center: affects cost-center balance, not user wallet
+        # The owner's private cost center affects both its own ledger and the wallet.
         deposit = await async_client.post(
             f"/api/v1/finance/users/{created_user['id']}/deposit",
-            json={"amount": 25.0, "description": "Initial CC top-up", "cost_center_id": shared_center.id},
+            json={"amount": 25.0, "description": "Initial CC top-up", "cost_center_id": private_center.id},
             headers=auth_headers,
         )
         assert deposit.status_code == 200
-        assert deposit.json()["transaction"]["cost_center_id"] == shared_center.id
+        assert deposit.json()["transaction"]["cost_center_id"] == private_center.id
         assert deposit.json()["transaction"]["balance_after"] == 25.0  # CC balance
         assert deposit.json()["balance"]["balance"] == 25.0  # Response shows CC balance
 
-        # Withdraw from cost center: affects cost-center balance only
+        # A withdrawal updates both views by the same amount.
         withdraw = await async_client.post(
             f"/api/v1/finance/users/{created_user['id']}/withdraw",
-            json={"amount": 5.0, "description": "CC Usage", "cost_center_id": shared_center.id},
+            json={"amount": 5.0, "description": "CC Usage", "cost_center_id": private_center.id},
             headers=auth_headers,
         )
         assert withdraw.status_code == 200
@@ -186,8 +184,8 @@ class TestFinanceAPI:
         )
         assert personal_deposit.status_code == 200
         assert personal_deposit.json()["transaction"]["cost_center_id"] is None
-        assert personal_deposit.json()["transaction"]["balance_after"] == 30.0  # Personal balance
-        assert personal_deposit.json()["balance"]["balance"] == 30.0  # User wallet updated
+        assert personal_deposit.json()["transaction"]["balance_after"] == 50.0
+        assert personal_deposit.json()["balance"]["balance"] == 50.0
 
         transactions_response = await async_client.get(
             f"/api/v1/finance/users/{created_user['id']}/transactions", headers=auth_headers
@@ -195,7 +193,7 @@ class TestFinanceAPI:
         assert transactions_response.status_code == 200
         transactions = transactions_response.json()
         assert len(transactions) == 3
-        cc_txs = [tx for tx in transactions if tx["cost_center_id"] == shared_center.id]
+        cc_txs = [tx for tx in transactions if tx["cost_center_id"] == private_center.id]
         personal_txs = [tx for tx in transactions if tx["cost_center_id"] is None]
         assert len(cc_txs) == 2
         assert len(personal_txs) == 1
@@ -204,7 +202,7 @@ class TestFinanceAPI:
             f"/api/v1/finance/users/{created_user['id']}/balance", headers=auth_headers
         )
         assert balance_response.status_code == 200
-        assert balance_response.json()["balance"] == 30.0  # Only personal balance
+        assert balance_response.json()["balance"] == 50.0
 
         # Delete personal transaction, user wallet should decrease
         personal_tx = next(tx for tx in transactions if tx["cost_center_id"] is None)
@@ -217,13 +215,81 @@ class TestFinanceAPI:
             f"/api/v1/finance/users/{created_user['id']}/balance", headers=auth_headers
         )
         assert balance_after_delete.status_code == 200
-        assert balance_after_delete.json()["balance"] == 0.0  # Personal balance back to 0
+        assert balance_after_delete.json()["balance"] == 20.0
 
         remaining = await async_client.get(
             f"/api/v1/finance/users/{created_user['id']}/transactions", headers=auth_headers
         )
         assert remaining.status_code == 200
         assert len(remaining.json()) == 2  # 2 CC transactions remain
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_admin_and_user_balances_agree_after_charge_adjustment_and_delete(
+        self,
+        async_client: AsyncClient,
+        auth_headers: dict[str, str],
+        db_session,
+    ):
+        created_user = await self._create_user_via_api(async_client, auth_headers, "balance-lifecycle")
+        user = await db_session.get(User, created_user["id"])
+        operators = await db_session.scalar(select(Group).where(Group.name == "Operators"))
+        assert operators is not None
+        user.groups.append(operators)
+        await db_session.commit()
+        user_headers = await self._login_user(async_client, "balance-lifecycle")
+        private_center = await db_session.scalar(
+            select(CostCenter).where(CostCenter.owner_user_id == user.id, CostCenter.is_private.is_(True))
+        )
+        assert private_center is not None
+
+        deposit = await async_client.post(
+            f"/api/v1/finance/users/{user.id}/deposit",
+            json={"amount": 20.0, "cost_center_id": private_center.id},
+            headers=auth_headers,
+        )
+        assert deposit.status_code == 200
+
+        archive = PrintArchive(
+            filename="charged.gcode.3mf",
+            file_path="archives/test/charged.gcode.3mf",
+            file_size=10,
+            status="completed",
+            cost=4.0,
+            created_by_id=user.id,
+            cost_center_id=private_center.id,
+        )
+        db_session.add(archive)
+        await db_session.commit()
+        assert await apply_print_charge_for_archive(db_session, archive.id) is True
+        await db_session.commit()
+
+        adjustment = await async_client.post(
+            f"/api/v1/finance/users/{user.id}/deposit",
+            json={"amount": 5.0, "description": "temporary adjustment"},
+            headers=auth_headers,
+        )
+        assert adjustment.status_code == 200
+
+        async def assert_views_agree(expected: float):
+            admin_view = await async_client.get(
+                f"/api/v1/finance/users/{user.id}/balance",
+                headers=auth_headers,
+            )
+            user_view = await async_client.get("/api/v1/finance/me/balance", headers=user_headers)
+            assert admin_view.status_code == 200
+            assert user_view.status_code == 200
+            assert admin_view.json()["balance"] == expected
+            assert user_view.json()["balance"] == expected
+
+        await assert_views_agree(21.0)
+
+        delete_response = await async_client.delete(
+            f"/api/v1/finance/transactions/{adjustment.json()['transaction']['id']}",
+            headers=auth_headers,
+        )
+        assert delete_response.status_code == 200
+        await assert_views_agree(16.0)
 
     @pytest.mark.asyncio
     @pytest.mark.integration
@@ -283,7 +349,7 @@ class TestFinanceAPI:
             f"/api/v1/finance/users/{created_user['id']}/balance", headers=auth_headers
         )
         assert balance_response.status_code == 200
-        assert balance_response.json()["balance"] == 12.0
+        assert balance_response.json()["balance"] == 7.0
 
     @pytest.mark.asyncio
     @pytest.mark.integration

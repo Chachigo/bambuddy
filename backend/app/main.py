@@ -106,6 +106,7 @@ from backend.app.services.mqtt_relay import mqtt_relay
 from backend.app.services.mqtt_smart_plug import mqtt_smart_plug_service
 from backend.app.services.notification_service import notification_service
 from backend.app.services.obico_detection import obico_detection_service
+from backend.app.services.print_cost_estimate import plate_scoped_run_estimate as _plate_scoped_run_estimate
 from backend.app.services.print_scheduler import scheduler as print_scheduler
 from backend.app.services.printer_manager import (
     init_printer_connections,
@@ -425,6 +426,11 @@ _first_layer_notified: dict[int, bool] = {}
 # Track whether we already sent a kill-switch stop for the current unauthorized print
 _unauthorized_print_kill_sent: set[int] = set()
 
+# Provider notification started when the kill switch stops a print. The later
+# MQTT print-complete callback awaits this task and only sends its regular
+# provider notification when the immediate attempt failed.
+_kill_switch_notification_tasks: dict[int, asyncio.Task[bool]] = {}
+
 # Track HMS errors that have been notified: {printer_id: set of error codes}
 # This prevents sending duplicate notifications for the same error
 _notified_hms_errors: dict[int, set[str]] = {}
@@ -689,14 +695,94 @@ def _build_status_print_keys(printer_id: int, state: PrinterState) -> list[tuple
     return possible_keys
 
 
-def _is_bambuddy_authorized_print(printer_id: int, state: PrinterState) -> bool:
-    """Return True when the current status belongs to a print started by Bambuddy."""
+async def _is_bambuddy_authorized_print(printer_id: int, state: PrinterState, db) -> bool | None:
+    """Resolve whether the current print was started by Bambuddy.
+
+    ``None`` means identity is not yet safe to decide. The kill switch must
+    defer in that case: stopping a print is irreversible, and the first status
+    frames after a restart may arrive before all subtask fields are populated.
+    """
 
     if printer_manager.get_current_print_user(printer_id):
         return True
 
     possible_keys = _build_status_print_keys(printer_id, state)
-    return any(key in _expected_prints or key in _active_prints for key in possible_keys)
+    if any(key in _expected_prints or key in _active_prints for key in possible_keys):
+        return True
+
+    # In-memory ownership is lost on every Bambuddy restart. The archive row is
+    # the durable source of truth; subtask_id is minted per print and avoids
+    # authorizing an unrelated job that happens to reuse the same filename.
+    raw_subtask_id = getattr(state, "subtask_id", None)
+    subtask_id = str(raw_subtask_id).strip() if raw_subtask_id is not None else ""
+    if subtask_id in ("", "0"):
+        return None
+
+    from backend.app.models.archive import PrintArchive
+
+    result = await db.execute(
+        select(PrintArchive)
+        .where(
+            PrintArchive.printer_id == printer_id,
+            PrintArchive.status == "printing",
+            PrintArchive.subtask_id == subtask_id,
+        )
+        .order_by(PrintArchive.created_at.desc())
+        .limit(1)
+    )
+    archive = result.scalar_one_or_none()
+    if archive is None:
+        return False
+
+    # Rehydrate the fast in-memory path for subsequent status frames. Include
+    # both the archive filename and every normalized key reported by MQTT.
+    _active_prints[(printer_id, archive.filename)] = archive.id
+    for key in possible_keys:
+        _active_prints[key] = archive.id
+    return True
+
+
+async def _send_kill_switch_provider_notification(
+    printer_id: int,
+    printer_name: str,
+    data: dict,
+) -> bool:
+    """Send the immediate print-stopped provider notification.
+
+    Returning a success flag lets the normal MQTT completion path retry when
+    this early notification could not be delivered.
+    """
+
+    logger = logging.getLogger(__name__)
+    try:
+        async with async_session() as db:
+            await notification_service.on_print_complete(
+                printer_id,
+                printer_name,
+                "stopped",
+                data,
+                db,
+            )
+        return True
+    except Exception as e:
+        logger.warning(
+            "[KILL SWITCH] Immediate provider notification failed for printer %s: %s",
+            printer_id,
+            e,
+        )
+        return False
+
+
+async def _kill_switch_notification_already_sent(task: asyncio.Task[bool] | None) -> bool:
+    """Wait for an immediate kill-switch notification, if one was scheduled."""
+
+    if task is None:
+        return False
+    try:
+        return await task
+    except Exception as e:
+        logging.getLogger(__name__).warning("[KILL SWITCH] Notification task failed: %s", e)
+        return False
 
 
 async def _get_plug_energy(plug, db) -> dict | None:
@@ -886,41 +972,6 @@ def _compute_run_filament_grams(
             return round(archive_filament_used_grams * scale, 1)
 
     return None
-
-
-def _plate_scoped_run_estimate(archive, full_path) -> tuple[float | None, float | None]:
-    """Per-run (grams, cost) scoped to the plate this run actually printed (#2614).
-
-    ``PrintArchive.filament_used_grams`` / ``.cost`` are the sum over EVERY plate of
-    the source 3MF — correct for the archive card and project rollup, but wrong for a
-    single plate dispatched from a multi-plate file: without scoping, each printed
-    plate of a 22-plate file logs the whole ~12 kg and inflates every statistic. When
-    the archive carries a ``plate_id`` and its 3MF is on disk, return that plate's
-    slicer estimate instead; cost is scaled by the plate's share of the whole so it
-    stays consistent with the scoped grams without re-doing the filament price lookup.
-    Falls back to the archive's whole-file values when there's no plate to scope to.
-    """
-    whole_grams = archive.filament_used_grams
-    if archive.plate_id is None or full_path is None or not full_path.exists():
-        return whole_grams, archive.cost
-    try:
-        from backend.app.utils.threemf_tools import extract_plate_metadata_from_3mf
-
-        plate_grams = extract_plate_metadata_from_3mf(full_path, archive.plate_id).filament_used_grams
-    except Exception as exc:
-        logging.getLogger(__name__).debug(
-            "[#2614] plate-scoped estimate failed for archive %s (plate %s): %s",
-            archive.id,
-            archive.plate_id,
-            exc,
-        )
-        return whole_grams, archive.cost
-    if not plate_grams or plate_grams <= 0:
-        return whole_grams, archive.cost
-    plate_cost = archive.cost
-    if archive.cost and whole_grams and whole_grams > 0:
-        plate_cost = round(archive.cost * (plate_grams / whole_grams), 2)
-    return round(plate_grams, 2), plate_cost
 
 
 def _get_start_ams_mapping(data: dict, archive_id: int | None) -> list[int] | None:
@@ -1380,17 +1431,31 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         _unauthorized_print_kill_sent.discard(printer_id)
     else:
         kill_switch_enabled = False
+        authorization: bool | None = None
         status_logger = logging.getLogger(__name__)
         try:
             async with async_session() as db:
                 from backend.app.services.finance_budget import is_printer_kill_switch_enabled
 
                 kill_switch_enabled = await is_printer_kill_switch_enabled(db)
+                if kill_switch_enabled:
+                    authorization = await _is_bambuddy_authorized_print(printer_id, state, db)
         except Exception as e:
-            status_logger.warning("[KILL SWITCH] Failed to read kill-switch setting for printer %s: %s", printer_id, e)
+            # Fail safe: a database/reconciliation error must never turn into an
+            # irreversible stop of a print whose ownership is still unknown.
+            authorization = None
+            status_logger.warning(
+                "[KILL SWITCH] Failed to reconcile print authorization for printer %s: %s", printer_id, e
+            )
 
-        if not kill_switch_enabled or _is_bambuddy_authorized_print(printer_id, state):
+        if not kill_switch_enabled or authorization is True:
             _unauthorized_print_kill_sent.discard(printer_id)
+        elif authorization is None:
+            _unauthorized_print_kill_sent.discard(printer_id)
+            status_logger.debug(
+                "[KILL SWITCH] Deferring authorization for printer %s until archive state is reconciled",
+                printer_id,
+            )
         elif printer_id in _unauthorized_print_kill_sent:
             pass
         else:
@@ -1398,10 +1463,42 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
                 stopped = printer_manager.stop_print(printer_id)
                 if stopped:
                     _unauthorized_print_kill_sent.add(printer_id)
+                    printer_info = printer_manager.get_printer(printer_id)
+                    printer_name = printer_info.name if printer_info else f"Printer {printer_id}"
+                    filename = state.subtask_name or state.gcode_file or state.current_print or "Unknown"
+                    notification_data = {
+                        "status": "stopped",
+                        "filename": state.gcode_file or state.current_print or "",
+                        "subtask_name": state.subtask_name or "",
+                        "progress": state.progress,
+                        "reason": "unauthorized_print",
+                    }
                     status_logger.warning(
                         "[KILL SWITCH] Stopped unauthorized print on printer %s (state=%s)",
                         printer_id,
                         state.state,
+                    )
+                    try:
+                        await ws_manager.broadcast(
+                            {
+                                "type": "kill_switch_triggered",
+                                "printer_id": printer_id,
+                                "printer_name": printer_name,
+                                "filename": filename,
+                                "reason": "unauthorized_print",
+                            }
+                        )
+                    except Exception as e:
+                        status_logger.warning(
+                            "[KILL SWITCH] WebSocket notification failed for printer %s: %s", printer_id, e
+                        )
+
+                    previous_task = _kill_switch_notification_tasks.pop(printer_id, None)
+                    if previous_task is not None and not previous_task.done():
+                        previous_task.cancel()
+                    _kill_switch_notification_tasks[printer_id] = spawn_background_task(
+                        _send_kill_switch_provider_notification(printer_id, printer_name, notification_data),
+                        name=f"kill-switch-notification-{printer_id}",
                     )
                 else:
                     status_logger.warning(
@@ -2583,6 +2680,7 @@ async def on_print_start(printer_id: int, data: dict):
 
     # Clear any stale user-stopped flag from previous print cycles
     _user_stopped_printers.discard(printer_id)
+    _kill_switch_notification_tasks.pop(printer_id, None)
 
     # #1721: drop any leftover pre-captured finish frame from a prior print
     # so a never-consumed cache entry can't bleed into the new print's photo.
@@ -4252,16 +4350,12 @@ async def _upgrade_finish_photo_from_timelapse(archive_id: int, archive_dir: Pat
 
 
 async def on_print_running_observed(printer_id: int, data: dict):
-    """Restart-recovery: capture a fresh timelapse baseline for a print that
-    started before Bambuddy came up.
+    """Restart-recovery for a print that started before Bambuddy came up.
 
     bambu_mqtt.py suppresses ``on_print_start`` on the first RUNNING push
     after Bambuddy startup (#1304 guard, prevents duplicate archive
-    creation). Without that path, ``_capture_timelapse_baseline_at_start``
-    never runs and ``_scan_for_timelapse_with_retries`` falls into its
-    "take baseline now" fallback at completion time — but by then the
-    printer has already uploaded the in-flight MP4, so the baseline
-    includes it and no diff ever matches (#1485 follow-up).
+    creation). This hook restores the persisted archive into ``_active_prints``
+    and captures the timelapse baseline that normally hangs off print start.
 
     Fires once per session, in lieu of on_print_start when restart-recovery
     kicks in. The printer doesn't upload the timelapse until after PRINT
@@ -4270,20 +4364,14 @@ async def on_print_running_observed(printer_id: int, data: dict):
     """
     logger = logging.getLogger(__name__)
 
-    # Avoid double-capture: on_print_start may have run earlier in this
-    # Bambuddy process if the print started AFTER startup and we crashed
-    # later in the same session. (Realistically this can't happen — the
-    # MQTT client object would have been recreated — but the cheap guard
-    # is correct regardless.)
-    if printer_id in _timelapse_baselines:
-        logger.debug(
-            "[TIMELAPSE] on_print_running_observed: baseline already present for printer %s, skipping",
-            printer_id,
-        )
-        return
-
     async with async_session() as db:
         from backend.app.models.printer import Printer
+
+        state = printer_manager.get_status(printer_id)
+        if state is not None:
+            authorization = await _is_bambuddy_authorized_print(printer_id, state, db)
+            if authorization is True:
+                logger.info("[RESTART] Restored active Bambuddy print for printer %s", printer_id)
 
         result = await db.execute(select(Printer).where(Printer.id == printer_id))
         printer = result.scalar_one_or_none()
@@ -4293,6 +4381,15 @@ async def on_print_running_observed(printer_id: int, data: dict):
                 printer_id,
             )
             return
+
+    # Avoid double-capture: ownership reconciliation above must still run when
+    # a baseline already exists, but the camera work itself is one-shot.
+    if printer_id in _timelapse_baselines:
+        logger.debug(
+            "[TIMELAPSE] on_print_running_observed: baseline already present for printer %s, skipping",
+            printer_id,
+        )
+        return
 
     await _capture_timelapse_baseline_at_start(printer, printer_id, logger)
 
@@ -4871,6 +4968,11 @@ async def on_print_complete(printer_id: int, data: dict):
         logger.info("[TIMING] %s: %.3fs elapsed", section, elapsed)
 
     logger.info("[CALLBACK] on_print_complete started for printer %s", printer_id)
+
+    # A kill-switch stop sends its provider notification immediately. Keep the
+    # task so the later notification path can await it and avoid a duplicate;
+    # if that immediate attempt failed, the regular completion path retries.
+    kill_switch_notification_task = _kill_switch_notification_tasks.pop(printer_id, None)
 
     # Drop the 3MF download cache for this printer (#972). The print is over,
     # nothing else legitimately needs the bytes; keeping them would only risk
@@ -5452,9 +5554,12 @@ async def on_print_complete(printer_id: int, data: dict):
                     logger.info(
                         "[NOTIFY-BG] Sending notification without archive: printer=%s, status=%s", printer_id, ps
                     )
-                    await notification_service.on_print_complete(
-                        printer_id, p_name, ps, data, db, archive_data=no_archive_data
-                    )
+                    if not await _kill_switch_notification_already_sent(kill_switch_notification_task):
+                        await notification_service.on_print_complete(
+                            printer_id, p_name, ps, data, db, archive_data=no_archive_data
+                        )
+                    else:
+                        logger.info("[NOTIFY-BG] Skipped duplicate kill-switch provider notification")
 
                     # Send user-specific email if we have a created_by_id
                     if no_archive_data and no_archive_data.get("created_by_id"):
@@ -6134,9 +6239,12 @@ async def on_print_complete(printer_id: int, data: dict):
                             except Exception as e:
                                 logger.warning("[NOTIFY-BG] Failed to read finish photo bytes: %s", e)
 
-                await notification_service.on_print_complete(
-                    printer_id, printer_name, print_status, data, db, archive_data=archive_data
-                )
+                if not await _kill_switch_notification_already_sent(kill_switch_notification_task):
+                    await notification_service.on_print_complete(
+                        printer_id, printer_name, print_status, data, db, archive_data=archive_data
+                    )
+                else:
+                    logger.info("[NOTIFY-BG] Skipped duplicate kill-switch provider notification")
 
                 # Send user-specific email notification
                 if archive_data:

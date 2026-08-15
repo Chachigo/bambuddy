@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.archive import PrintArchive
 from backend.app.models.finance import TransactionType, UserWallet, WalletTransaction
+from backend.app.services.finance_balance import sync_personal_wallet_balance
 from backend.app.services.finance_budget import is_billing_enabled, release_budget_reservation
 
 logger = logging.getLogger(__name__)
@@ -185,10 +186,6 @@ async def apply_print_charge_for_archive(
             await db.flush()
             logger.info(f"Created new wallet for user ID {archive.created_by_id}.")
 
-        # Persist wallet balances rounded to cents
-        new_wallet_balance = round(float(wallet.balance) - charge, 2)
-        wallet.balance = new_wallet_balance
-
         label = archive.print_name or archive.filename or f"Archive {archive.id}"
         description = f"Print charge: {label}{' ' + reason_suffix if reason_suffix else ''}"
 
@@ -218,6 +215,10 @@ async def apply_print_charge_for_archive(
             logger.info("Transaction already exists for archive ID %s (concurrent), skipping: %s", archive_id, e)
             await db.rollback()
             return False
+
+        # Rebuild from the canonical personal-ledger definition. A shared cost
+        # center charge must not debit the user's personal wallet.
+        new_wallet_balance = await sync_personal_wallet_balance(db, wallet)
 
         # Consume matching budget reservations after the transaction is persisted
         await release_budget_reservation(db, print_archive_id=archive.id, status="consumed")

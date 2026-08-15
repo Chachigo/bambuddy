@@ -447,6 +447,7 @@ export default {
     toast: {
       printerDeleted: 'Imprimante supprimée',
       missingSpoolAssignment: 'Impression démarrée sur {{printer}}. Attribution de bobine manquante pour : {{slots}}',
+      killSwitchTriggered: 'Le coupe-circuit de facturation a arrêté une impression non autorisée sur {{printer}} : {{filename}}',
       assignmentVerified: 'Filament chargé dans l\'emplacement {{slot}} ({{printer}})',
       assignmentVerifiedNoKprofile: 'Emplacement {{slot}} sur {{printer}} chargé, mais le profil de calibration de débit (profil K) n\'a pas été appliqué',
       assignmentNotConfirmed: 'Impossible de confirmer l\'attribution de l\'emplacement {{slot}} sur {{printer}} — vérifiez l\'emplacement AMS',
