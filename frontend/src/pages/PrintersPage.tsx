@@ -943,7 +943,7 @@ function getEmptySlotKind(tray: { tray_type?: string | null; state?: number | nu
 const DRY_START_CONFIRM_MS = 30_000;
 
 
-function CoverImage({
+export function CoverImage({
   url,
   printName,
   className = 'w-20 h-20',
@@ -958,6 +958,7 @@ function CoverImage({
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
   const [showOverlay, setShowOverlay] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   // Cache-bust the image URL when the print name changes so the browser
   // fetches the new cover instead of serving the stale cached image.
@@ -967,10 +968,34 @@ function CoverImage({
     return withStreamToken(`${url}${sep}v=${encodeURIComponent(printName || Date.now().toString())}`);
   }, [url, printName]);
 
-  // Reset loaded/error state when the image URL changes
+  // Re-evaluate load state when the image URL changes, and ask the element
+  // whether it is already showing something rather than assuming it is not.
+  //
+  // `onLoad` used to be the only thing that could set `loaded`, and this
+  // effect reset it to false unconditionally. That is right when the URL
+  // really changes, but it also runs on mount — and the two are not the same
+  // situation (#2826). The URL is cache-busted on the print *name*, which is
+  // constant for the duration of a print, so navigating away from the
+  // printers page and back re-mounts with a byte-identical src that the
+  // browser serves from its in-memory cache. The `load` event for a cache hit
+  // and React's passive-effect flush are both plain tasks with no ordering
+  // between them, so when `load` won, this effect ran afterwards and undid
+  // it: `loaded` stayed false, the img stayed `hidden`, and the placeholder
+  // sat there until a full reload. Nothing recovered it, because the URL
+  // never changes again during the print and so this effect never re-runs.
+  //
+  // Being a race, it reproduced every time for #2826's reporter and not at
+  // all here, which is also why the network panel showed no request: there
+  // was no request to show.
+  //
+  // Asking `complete && naturalWidth > 0` settles it without needing to know
+  // which of the two ran first. It is also correct for the case the reporter
+  // proposed (a `load` that fires before React's handler is live), so the
+  // fix stands whichever mechanism is really at work.
   useEffect(() => {
-    setLoaded(false);
     setError(false);
+    const el = imgRef.current;
+    setLoaded(Boolean(el?.complete && el.naturalWidth > 0));
   }, [cacheBustedUrl]);
 
   return (
@@ -982,6 +1007,7 @@ function CoverImage({
         {cacheBustedUrl && !error ? (
           <>
             <img
+              ref={imgRef}
               src={cacheBustedUrl}
               alt={t('printers.printPreview')}
               className={`w-full h-full object-cover ${loaded ? 'block' : 'hidden'}`}
