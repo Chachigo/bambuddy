@@ -230,9 +230,11 @@ class TestCheckEligibility:
         )
         src = await library_file_factory()
 
+        # The printer reports the generic material in tray_type and the product
+        # name in tray_sub_brands, so this is the shape a real AMS sends.
         live_status = {
             "connected": True,
-            "raw_data": {"ams": [{"tray": [{"tray_type": "PLA Basic", "tray_color": "FFFFFFFF"}]}]},
+            "raw_data": {"ams": [{"tray": [{"tray_type": "PLA", "tray_color": "FFFFFFFF"}]}]},
         }
         with patch(
             "backend.app.api.routes.pipeline_runs._load_printer_status",
@@ -247,6 +249,59 @@ class TestCheckEligibility:
         assert body["ok"] is True
         assert body["issues"] == []
         assert body["target_printer_name"] == printer.name
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_product_name_in_tray_type_is_reported_as_a_mismatch(
+        self,
+        async_client: AsyncClient,
+        db_session,
+        printer_factory,
+        pipeline_factory,
+        library_file_factory,
+    ):
+        """Eligibility answers with the dispatch matcher's type rules, not its own.
+
+        It used to alias "PLA Basic" to "PLA" and pass this; the matcher never
+        did, so the run cleared the pre-flight and then failed to map the slot.
+        Flagging it here is the honest answer even though it is the stricter one.
+        """
+        from backend.app.models.local_preset import LocalPreset
+
+        preset = LocalPreset(
+            name="My PLA",
+            preset_type="filament",
+            source="manual",
+            setting="{}",
+            filament_type="PLA",
+            default_filament_colour="#FFFFFF",
+        )
+        db_session.add(preset)
+        await db_session.commit()
+        await db_session.refresh(preset)
+
+        printer = await printer_factory()
+        pipeline = await pipeline_factory(
+            target_printer_id=printer.id,
+            filament_presets=[{"source": "local", "id": str(preset.id)}],
+        )
+        src = await library_file_factory()
+
+        live_status = {
+            "connected": True,
+            "raw_data": {"ams": [{"tray": [{"tray_type": "PLA Basic", "tray_color": "FFFFFFFF"}]}]},
+        }
+        with patch(
+            "backend.app.api.routes.pipeline_runs._load_printer_status",
+            new=AsyncMock(return_value=live_status),
+        ):
+            resp = await async_client.post(
+                f"/api/v1/slicer-pipelines/{pipeline['id']}/check-eligibility",
+                json={"source_library_file_id": src.id},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [i["kind"] for i in body["issues"]] == ["filament_type_mismatch"]
 
 
 class TestRunPipeline:

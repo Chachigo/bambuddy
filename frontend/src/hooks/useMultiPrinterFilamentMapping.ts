@@ -11,6 +11,7 @@ import {
 import {
   normalizeColorForCompare,
   colorsAreSimilar,
+  filamentTypesCompatible,
   findNearestSimilar,
   preferLowestSortKey,
   compareSortKeys,
@@ -116,7 +117,7 @@ function computeMatchDetails(
       const manualLoaded = loadedFilaments.find((f) => f.globalTrayId === manualTrayId);
 
       if (manualLoaded) {
-        const typeMatch = manualLoaded.type?.toUpperCase() === req.type?.toUpperCase();
+        const typeMatch = filamentTypesCompatible(manualLoaded.type, req.type);
         const colorMatch =
           normalizeColorForCompare(manualLoaded.color) === normalizeColorForCompare(req.color) ||
           colorsAreSimilar(manualLoaded.color, req.color);
@@ -152,13 +153,13 @@ function computeMatchDetails(
 
     const exactMatch = candidates.find(
       (f) =>
-        f.type?.toUpperCase() === req.type?.toUpperCase() &&
+        filamentTypesCompatible(f.type, req.type) &&
         normalizeColorForCompare(f.color) === normalizeColorForCompare(req.color)
     );
     const similarMatch = exactMatch
       ? undefined
       : findNearestSimilar(
-          candidates.filter((f) => f.type?.toUpperCase() === req.type?.toUpperCase()),
+          candidates.filter((f) => filamentTypesCompatible(f.type, req.type)),
           req.color,
           (f) => f.color,
         );
@@ -166,7 +167,7 @@ function computeMatchDetails(
       exactMatch || similarMatch
         ? undefined
         : candidates.find(
-            (f) => f.type?.toUpperCase() === req.type?.toUpperCase()
+            (f) => filamentTypesCompatible(f.type, req.type)
           );
     const loaded = exactMatch ?? similarMatch ?? typeOnlyMatch;
 
@@ -241,13 +242,13 @@ function computeMappingWithOverrides(
 
     const exactMatch = candidates.find(
       (f) =>
-        f.type?.toUpperCase() === req.type?.toUpperCase() &&
+        filamentTypesCompatible(f.type, req.type) &&
         normalizeColorForCompare(f.color) === normalizeColorForCompare(req.color)
     );
     const similarMatch = exactMatch
       ? undefined
       : findNearestSimilar(
-          candidates.filter((f) => f.type?.toUpperCase() === req.type?.toUpperCase()),
+          candidates.filter((f) => filamentTypesCompatible(f.type, req.type)),
           req.color,
           (f) => f.color,
         );
@@ -255,7 +256,7 @@ function computeMappingWithOverrides(
       exactMatch || similarMatch
         ? undefined
         : candidates.find(
-            (f) => f.type?.toUpperCase() === req.type?.toUpperCase()
+            (f) => filamentTypesCompatible(f.type, req.type)
           );
     const loaded = exactMatch ?? similarMatch ?? typeOnlyMatch;
 

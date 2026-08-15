@@ -6,9 +6,13 @@ so the winner depended on which slot a spool sat in rather than on which colour
 was closest.
 
 The worked example throughout is the maintainer's: a required ``#3A7BD5`` with a
-purple ``#6253AD`` in tray 1 (40/40/40 off — admitted by the box, distance ~69)
-and a near-identical ``#3B7AD2`` in tray 3 (distance ~3). Both qualify; the
-purple used to win on position alone.
+purple ``#6253AD`` in tray 1 (40/40/40 off — admitted by the box) and a
+near-identical ``#3B7AD2`` in tray 3. Both qualify; the purple used to win on
+position alone.
+
+Ranking is by CIEDE2000 delta-E, so the two are ~18.5 and ~0.5 apart rather
+than the ~69 and ~3 an RGB metric reported. Eligibility is still the per-channel
+RGB box, unchanged — only the ordering within it is perceptual.
 """
 
 import pytest
@@ -16,8 +20,8 @@ import pytest
 from backend.app.services.print_scheduler import PrintScheduler
 
 REQUIRED_COLOR = "#3A7BD5"
-NEAR = "3B7AD2FF"  # distance ~3
-FAR_BUT_ADMITTED = "6253ADFF"  # 40/40/40 off — inside the box, distance ~69
+NEAR = "3B7AD2FF"  # dE00 ~0.5
+FAR_BUT_ADMITTED = "6253ADFF"  # 40/40/40 off — inside the box, dE00 ~18.5
 
 
 @pytest.fixture
@@ -48,9 +52,19 @@ class TestColorDistance:
         """The alpha a slicer writes is not a colour the user chose."""
         assert scheduler._color_distance("#76D9F4", "76D9F400") == 0
 
-    def test_distance_is_euclidean_not_per_channel(self, scheduler):
-        # 40 off on each channel is sqrt(3 * 40^2) ~= 69.28, not 40.
-        assert scheduler._color_distance("#000000", "#282828") == pytest.approx(69.28, abs=0.01)
+    def test_distance_is_perceptual_not_per_channel(self, scheduler):
+        # A near-match is ranked by how different it looks, not by how far
+        # apart the numbers are. Scale is CIEDE2000 delta-E, where ~1 is a
+        # just-noticeable difference — see test_perceptual_color_distance.py
+        # for the formula's verification against published reference data.
+        assert scheduler._color_distance("#000000", "#282828") == pytest.approx(9.91, abs=0.01)
+
+    def test_a_perceptually_nearer_colour_beats_a_numerically_nearer_one(self, scheduler):
+        # Against a green requirement, a purple is the closer of the two by RGB
+        # distance (49.7 vs 56.9) and much the further once measured
+        # perceptually. Both are inside the tolerance, so ranking alone decides.
+        required = "#1E4821"
+        assert scheduler._color_distance("#43683E", required) < scheduler._color_distance("#38202F", required)
 
     def test_unusable_input_is_none_rather_than_a_number(self, scheduler):
         assert scheduler._color_distance(None, "#3A7BD5") is None
@@ -82,8 +96,13 @@ class TestNearestSimilarWins:
 
     def test_ties_keep_the_caller_order_so_prefer_lowest_still_decides(self, scheduler):
         """Two spools equally close: the incoming order wins, which is the
-        prefer-lowest sort when that preference is on."""
-        loaded = [tray(2, "3A7BD0FF"), tray(7, "3A7BDAFF")]  # both 5 away
+        prefer-lowest sort when that preference is on.
+
+        Same colour in both trays, so the tie is exact. Two *different* colours
+        at equal RGB distance are not perceptually tied — that is the whole
+        point of the metric — so they cannot be used to test this any more.
+        """
+        loaded = [tray(2, NEAR), tray(7, NEAR)]
         assert scheduler._match_filaments_to_slots([req()], loaded) == [2]
         assert scheduler._match_filaments_to_slots([req()], list(reversed(loaded))) == [7]
 

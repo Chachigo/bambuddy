@@ -55,6 +55,8 @@ from backend.app.services.printer_manager import (
     supports_drying_while_printing,
 )
 from backend.app.services.smart_plug_manager import smart_plug_manager
+from backend.app.utils.color_utils import perceptual_color_distance
+from backend.app.utils.filament_types import canonical_filament_type
 from backend.app.utils.filename import derive_remote_filename
 from backend.app.utils.printer_models import (
     is_gcode_compatible,
@@ -226,23 +228,6 @@ _ACTIVE_PRINT_STATES: frozenset[str] = frozenset({"PREPARE", "SLICING", "RUNNING
 # a lost MQTT publish on a half-broken session (#887/#936) is fixed by the
 # force-reconnect on the very next attempt — while still bounding the loop.
 DISPATCH_MAX_ATTEMPTS = 3
-
-# Filament type equivalence groups — types within the same group are
-# interchangeable on the printer side (Bambu Lab firmware treats them as compatible).
-_FILAMENT_TYPE_GROUPS: list[list[str]] = [
-    ["PA-CF", "PA12-CF", "PAHT-CF"],
-]
-_FILAMENT_EQUIV_MAP: dict[str, str] = {}
-for _group in _FILAMENT_TYPE_GROUPS:
-    _canonical = _group[0].upper()
-    for _t in _group:
-        _FILAMENT_EQUIV_MAP[_t.upper()] = _canonical
-
-
-def _canonical_filament_type(ftype: str) -> str:
-    """Return canonical type for equivalence matching."""
-    upper = ftype.upper()
-    return _FILAMENT_EQUIV_MAP.get(upper, upper)
 
 
 @dataclass(slots=True)
@@ -2141,18 +2126,16 @@ class PrintScheduler:
                 tray_type = tray.get("tray_type")
                 if tray_type:
                     color_norm = (tray.get("tray_color", "") or "").replace("#", "").lower()[:6]
-                    loaded.append(
-                        (_canonical_filament_type(tray_type), color_norm, tray.get("tray_info_idx", "") or "")
-                    )
+                    loaded.append((canonical_filament_type(tray_type), color_norm, tray.get("tray_info_idx", "") or ""))
         for vt in status.raw_data.get("vt_tray") or []:
             vt_type = vt.get("tray_type")
             if vt_type:
                 color_norm = (vt.get("tray_color", "") or "").replace("#", "").lower()[:6]
-                loaded.append((_canonical_filament_type(vt_type), color_norm, vt.get("tray_info_idx", "") or ""))
+                loaded.append((canonical_filament_type(vt_type), color_norm, vt.get("tray_info_idx", "") or ""))
 
         missing = []
         for o in force_overrides:
-            o_type = _canonical_filament_type(o.get("type") or "")
+            o_type = canonical_filament_type(o.get("type") or "")
             o_color = (o.get("color") or "").replace("#", "").lower()[:6]
             o_idx = o.get("tray_info_idx") or ""
             satisfied = any(
@@ -2189,18 +2172,18 @@ class PrintScheduler:
                 for tray in ams_unit.get("tray", []):
                     tray_type = tray.get("tray_type")
                     if tray_type:
-                        loaded_types.add(_canonical_filament_type(tray_type))
+                        loaded_types.add(canonical_filament_type(tray_type))
 
         # Check external spool(s) (virtual tray, stored in raw_data["vt_tray"] as list)
         for vt in status.raw_data.get("vt_tray") or []:
             vt_type = vt.get("tray_type")
             if vt_type:
-                loaded_types.add(_canonical_filament_type(vt_type))
+                loaded_types.add(canonical_filament_type(vt_type))
 
         # Find which required types are missing (using canonical type for equivalence)
         missing = []
         for req_type in required_types:
-            if _canonical_filament_type(req_type) not in loaded_types:
+            if canonical_filament_type(req_type) not in loaded_types:
                 missing.append(req_type)
 
         return missing
@@ -2741,29 +2724,24 @@ class PrintScheduler:
         return color.replace("#", "").lower()[:6]
 
     def _color_distance(self, color1: str | None, color2: str | None) -> float | None:
-        """Euclidean RGB distance, or None when either colour is unusable.
+        """Perceptual (CIEDE2000) distance, or None when either colour is unusable.
 
         Ranks the candidates ``_colors_are_similar`` admits (#2804). Eligibility
         stays the per-channel box that shipped — this only decides which of
         several eligible spools is closest, so nothing becomes usable or
         unusable because of it.
 
-        Alpha is dropped by ``_normalize_color_for_compare``, deliberately: the
-        alpha a slicer writes for a transparent filament is not a colour the
-        user chose, and counting it would stop a transparent filament matching
-        itself.
+        It ranks by how far apart the colours *look*, not how far apart their
+        numbers are. RGB distance overweights blue badly enough to invert the
+        answer: against a required ``#1E4821`` green, a purple ``#38202F`` is
+        the nearer of two eligible spools by RGB and the further by a factor of
+        four once measured perceptually.
+
+        Alpha is ignored, deliberately: the alpha a slicer writes for a
+        transparent filament is not a colour the user chose, and counting it
+        would stop a transparent filament matching itself.
         """
-        hex1 = self._normalize_color_for_compare(color1)
-        hex2 = self._normalize_color_for_compare(color2)
-        if not hex1 or not hex2 or len(hex1) < 6 or len(hex2) < 6:
-            return None
-        try:
-            dr = int(hex1[0:2], 16) - int(hex2[0:2], 16)
-            dg = int(hex1[2:4], 16) - int(hex2[2:4], 16)
-            db = int(hex1[4:6], 16) - int(hex2[4:6], 16)
-        except ValueError:
-            return None
-        return (dr * dr + dg * dg + db * db) ** 0.5
+        return perceptual_color_distance(color1, color2)
 
     def _colors_are_similar(self, color1: str | None, color2: str | None, threshold: int = 40) -> bool:
         """Check if two colors are visually similar within a threshold."""
@@ -3055,7 +3033,7 @@ class PrintScheduler:
             if not idx_match and not exact_match and not similar_match and not type_only_match:
                 for f in available:
                     f_type = (f.get("type") or "").upper()
-                    if _canonical_filament_type(f_type) != _canonical_filament_type(req_type):
+                    if canonical_filament_type(f_type) != canonical_filament_type(req_type):
                         continue
 
                     # Type matches - check color
@@ -3104,7 +3082,7 @@ class PrintScheduler:
                     match["global_tray_id"],
                     bucket,
                     req.get("slot_id"),
-                    f" (colour distance {similar_distance:.1f})" if bucket == "similar_color" else "",
+                    f" (deltaE {similar_distance:.2f})" if bucket == "similar_color" else "",
                 )
             else:
                 logger.info(
