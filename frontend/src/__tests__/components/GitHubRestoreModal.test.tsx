@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { QueryClient, useQuery, useQueryClient } from '@tanstack/react-query';
 import { render } from '../utils';
 import { server } from '../mocks/server';
@@ -196,6 +196,34 @@ describe('GitHubRestoreModal', () => {
     });
     expect(screen.getByText('4 restored, 1 skipped, 0 failed')).toBeInTheDocument();
     expect(screen.getByText('1 usage record(s) skipped')).toBeInTheDocument();
+  });
+
+  it('drops the selection while a newly-picked commit is still being inspected', async () => {
+    // Switching commits keeps `selected` (it is only pruned once the new preview
+    // lands), so the footer must not keep counting it: the categories belong to
+    // the commit that was switched away from, and the user has not seen an item
+    // count for the new one.
+    let previewCalls = 0;
+    server.use(
+      http.get('/api/v1/github-backup/restore/preview', async () => {
+        previewCalls += 1;
+        // The second commit's preview never resolves, holding the modal in the
+        // in-flight state the assertions below describe.
+        if (previewCalls > 1) await delay('infinite');
+        return HttpResponse.json(mockPreview as unknown as JsonBody);
+      })
+    );
+    render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+    const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
+    await userEvent.click(checkboxes[1]);
+    await waitFor(() => expect(screen.getByText('1 selected')).toBeInTheDocument());
+
+    await userEvent.selectOptions(screen.getByLabelText('Backup commit'), mockCommits.commits[1].sha);
+
+    await waitFor(() => expect(screen.getByText('Reading backup contents...')).toBeInTheDocument());
+    expect(screen.getByText('0 selected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Restore$/ })).toBeDisabled();
   });
 
   it('sends overwrite_existing when the toggle is on', async () => {

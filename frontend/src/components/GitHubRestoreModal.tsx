@@ -74,11 +74,35 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
   // the one whose contents the user just approved.
   const resolvedRef = previewQuery.data?.success ? previewQuery.data.ref : selectedRef;
 
+  const availability = useMemo(() => {
+    const map: Record<string, { available: boolean; itemCount: number; detail: string | null }> = {};
+    previewQuery.data?.categories?.forEach((c) => {
+      map[c.category] = { available: c.available, itemCount: c.item_count, detail: c.detail };
+    });
+    return map;
+  }, [previewQuery.data]);
+
+  // What a Restore click would actually send. `selected` on its own is not that:
+  // it survives a commit switch by design (the pruning effect below only runs
+  // once the new preview lands), so between picking a commit and its preview
+  // resolving, `selected` still describes the *previous* commit while the
+  // checkbox list is replaced by a spinner. Counting it raw put "2 selected"
+  // and an enabled Restore button under that spinner, and clicking restored the
+  // new commit with the old commit's categories — none of which the user had
+  // seen an item count for. Gating on availability, exactly as the checkboxes
+  // do, empties the list until the preview says otherwise, which also disables
+  // the button.
+  const selectedCategories = useMemo(
+    () => CATEGORIES.filter((c) => selected[c.id] && availability[c.id]?.available).map((c) => c.id),
+    [selected, availability]
+  );
+  const selectedCount = selectedCategories.length;
+
   const restoreMutation = useMutation({
     mutationFn: () =>
       api.restoreFromGitHub({
         ref: resolvedRef,
-        categories: CATEGORIES.filter((c) => selected[c.id]).map((c) => c.id),
+        categories: selectedCategories,
         overwrite_existing: overwriteExisting,
       }),
     onSuccess: (data) => {
@@ -177,14 +201,6 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
     return () => window.removeEventListener('beforeunload', handler);
   }, [isRestoring]);
 
-  const availability = useMemo(() => {
-    const map: Record<string, { available: boolean; itemCount: number; detail: string | null }> = {};
-    previewQuery.data?.categories?.forEach((c) => {
-      map[c.category] = { available: c.available, itemCount: c.item_count, detail: c.detail };
-    });
-    return map;
-  }, [previewQuery.data]);
-
   // Selecting a category that isn't in the newly-picked commit would send a
   // request the backend rejects, so drop those whenever the preview changes.
   useEffect(() => {
@@ -198,7 +214,6 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
     });
   }, [previewQuery.data, availability]);
 
-  const selectedCount = CATEGORIES.filter((c) => selected[c.id]).length;
   const commits = commitsQuery.data?.commits ?? [];
 
   const formatCommitLabel = (sha: string, message: string, date: string) => {

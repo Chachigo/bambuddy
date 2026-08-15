@@ -848,6 +848,7 @@ class GitHubRestoreService:
 
         valid_printers = set((await db.execute(select(Printer.id))).scalars().all())
         unresolved = 0
+        unlinked_archives = 0
 
         for entry in usage:
             if not isinstance(entry, dict):
@@ -887,6 +888,16 @@ class GitHubRestoreService:
 
             old_archive_id = entry.get("archive_id")
             archive_id = archive_id_map.get(old_archive_id) if isinstance(old_archive_id, int) else None
+            if archive_id is None and isinstance(old_archive_id, int):
+                # Restoring spools without archives leaves archive_id_map empty,
+                # so every "this print consumed that spool" link is dropped — the
+                # local archive may well exist, but its payload wasn't fetched,
+                # so there is no natural key here to match it on. Nor is it
+                # repairable by a later archives-only restore: the dedupe key
+                # above doesn't include archive_id, so these rows are recognised
+                # as already-present and skipped. Worth telling the user while
+                # they can still redo the run with both categories ticked.
+                unlinked_archives += 1
 
             row = SpoolUsageHistory(
                 spool_id=spool_id,
@@ -907,6 +918,11 @@ class GitHubRestoreService:
             tally.note(
                 f"{unresolved} usage record(s) skipped — their spool is not in this backup's "
                 "spool list, so there is nothing to attach them to."
+            )
+        if unlinked_archives:
+            tally.note(
+                f"{unlinked_archives} usage record(s) restored without their print-history link — "
+                "select Print archives alongside Spool inventory to keep it."
             )
 
     async def _restore_settings(

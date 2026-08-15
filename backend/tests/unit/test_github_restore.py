@@ -440,6 +440,51 @@ class TestRestoreSpools:
         assert len(rows) == 1
 
     @pytest.mark.asyncio
+    async def test_dropped_archive_link_is_explained(self, db_session):
+        """Spools without archives nulls every usage -> archive link, silently."""
+        tally = _CategoryTally()
+        inventory = {"spools": [self._spool_entry(id=41)]}
+        usage = {
+            "usage_history": [
+                {"spool_id": 41, "archive_id": 7, "weight_used": 1.0, "created_at": "2026-02-01 09:00:00"},
+                {"spool_id": 41, "archive_id": 8, "weight_used": 2.0, "created_at": "2026-02-01 10:00:00"},
+                {"spool_id": 41, "weight_used": 3.0, "created_at": "2026-02-01 11:00:00"},
+            ]
+        }
+
+        # Empty archive_id_map: the archives category wasn't selected, so its
+        # payload was never fetched and there is nothing to match against.
+        await _service()._restore_spools(db_session, inventory, usage, False, tally, {})
+        await db_session.commit()
+
+        rows = (await db_session.execute(select(SpoolUsageHistory))).scalars().all()
+        assert len(rows) == 3
+        assert all(row.archive_id is None for row in rows)
+        # Only the two that had a link to lose are counted.
+        assert any("2 usage record(s) restored without their print-history link" in n for n in tally.notes)
+        assert any("select Print archives alongside" in n for n in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_no_note_when_every_archive_link_resolves(self, db_session):
+        tally = _CategoryTally()
+        inventory = {"spools": [self._spool_entry(id=41)]}
+        usage = {
+            "usage_history": [
+                {"spool_id": 41, "archive_id": 7, "weight_used": 1.0, "created_at": "2026-02-01 09:00:00"}
+            ]
+        }
+        archive = PrintArchive(filename="linked.3mf", file_path="", file_size=1)
+        db_session.add(archive)
+        await db_session.flush()
+
+        await _service()._restore_spools(db_session, inventory, usage, False, tally, {7: archive.id})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(SpoolUsageHistory))).scalar_one()
+        assert row.archive_id == archive.id
+        assert not any("print-history link" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
     async def test_dangling_printer_id_is_cleared(self, db_session):
         tally = _CategoryTally()
         inventory = {"spools": [self._spool_entry(id=41)]}
