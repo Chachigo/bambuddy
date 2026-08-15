@@ -4836,6 +4836,10 @@ export const api = {
     dateTo?: string;
     limit?: number;
     offset?: number;
+    // Sorting is server-side because paging is: ordering only the rows the
+    // client holds would sort one page, not the log (#2636).
+    sortBy?: string;
+    sortDir?: 'asc' | 'desc';
   }) => {
     const searchParams = new URLSearchParams();
     if (params?.search) searchParams.set('search', params.search);
@@ -4846,6 +4850,8 @@ export const api = {
     if (params?.dateTo) searchParams.set('date_to', params.dateTo);
     if (params?.limit) searchParams.set('limit', String(params.limit));
     if (params?.offset !== undefined) searchParams.set('offset', String(params.offset));
+    if (params?.sortBy) searchParams.set('sort_by', params.sortBy);
+    if (params?.sortDir) searchParams.set('sort_dir', params.sortDir);
     return request<PrintLogResponse>(`/print-log/?${searchParams}`);
   },
   getPrintLogThumbnail: (id: number) => withStreamToken(`${API_BASE}/print-log/${id}/thumbnail`),
