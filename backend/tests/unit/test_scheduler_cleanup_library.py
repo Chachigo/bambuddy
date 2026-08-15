@@ -118,6 +118,7 @@ async def _dispatch_library_item(ctx, *, archive_failure=False, unlink_side_effe
         original_filename,
         created_by_id=None,
         project_id=None,
+        cost_center_id=None,
         plate_id=None,
         library_file_id=None,
     ):

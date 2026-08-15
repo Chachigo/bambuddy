@@ -3189,10 +3189,11 @@ class BambuMQTTClient:
             self.state.subtask_id = data["subtask_id"]
         if "mc_percent" in data:
             # Save last non-zero progress for usage tracking (firmware resets to 0 on cancel)
-            if self.state.progress > 0:
-                self._last_valid_progress = self.state.progress
             previous_progress = self.state.progress
-            self.state.progress = float(data["mc_percent"])
+            new_progress = float(data["mc_percent"])
+            if new_progress > 0:
+                self._last_valid_progress = new_progress
+            self.state.progress = new_progress
             # #2547: strictly-increasing only. The firmware resets progress to 0
             # on cancel and re-reports the same percent on most frames; neither
             # is the print advancing, and both would make the frame bank grab a

@@ -2,7 +2,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import { AlertCircle, AlertTriangle, Loader2, Pencil, Printer, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PrinterStatus, PrintQueueItemCreate, PrintQueueItemUpdate, SpoolAssignment } from '../../api/client';
+import type { CostCenterSummary, PrinterStatus, PrintQueueItemCreate, PrintQueueItemUpdate, SpoolAssignment } from '../../api/client';
 import { api } from '../../api/client';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent } from '../Card';
@@ -30,6 +30,7 @@ import { PrinterSelector } from './PrinterSelector';
 import { PrintOptionsPanel } from './PrintOptions';
 import { ScheduleOptionsPanel } from './ScheduleOptions';
 import { VariantCandidates, type VariantCandidate } from './VariantCandidates';
+import { CostCenterSelect } from './CostCenterSelect';
 import type {
   AssignmentMode,
   FilamentReqsData,
@@ -64,7 +65,7 @@ export function PrintModal({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
 
   // Determine if we're printing a library file
   const isLibraryFile = !!libraryFileId && !archiveId;
@@ -221,6 +222,12 @@ export function PrintModal({
     return null;
   });
 
+  const [selectedCostCenterId, setSelectedCostCenterId] = useState<number | null>(() =>
+    mode === 'edit-queue-item' ? queueItem?.cost_center_id ?? null : null
+  );
+  const [estimatedCost, setEstimatedCost] = useState<number | null>(queueItem?.estimated_cost ?? null);
+  const [estimatedCostsByPlate, setEstimatedCostsByPlate] = useState<Record<number, number | null>>({});
+
   // Filament overrides for model-based assignment: slot_id -> {type, color}
   const [filamentOverrides, setFilamentOverrides] = useState<Record<number, { type: string; color: string }>>(() => {
     if (mode === 'edit-queue-item' && queueItem?.filament_overrides) {
@@ -301,11 +308,36 @@ export function PrintModal({
 
   const currencySymbol = getCurrencySymbol(settings?.currency || 'USD');
   const defaultCostPerKg = settings?.default_filament_cost ?? 0;
+  const billingEnabled = settings?.billing_enabled === true;
 
   const { data: printers, isLoading: loadingPrinters } = useQuery({
     queryKey: ['printers'],
     queryFn: api.getPrinters,
   });
+
+  const { data: myCostCenters } = useQuery({
+    queryKey: ['finance', 'cost-centers', 'mine'],
+    queryFn: api.getMyCostCenters,
+    enabled: !!user && billingEnabled,
+  });
+
+  const printableCostCenters = useMemo(
+    () => (myCostCenters || []).filter((center: CostCenterSummary) => center.can_print && center.is_active),
+    [myCostCenters],
+  );
+  const selectedCostCenter = useMemo(
+    () => printableCostCenters.find((center) => center.id === selectedCostCenterId) ?? null,
+    [printableCostCenters, selectedCostCenterId],
+  );
+
+  useEffect(() => {
+    if (printableCostCenters.length === 0) return;
+    if (selectedCostCenterId != null && printableCostCenters.some((center) => center.id === selectedCostCenterId)) {
+      return;
+    }
+    const preferredPrivate = printableCostCenters.find((center) => center.is_private);
+    setSelectedCostCenterId(preferredPrivate?.id ?? printableCostCenters[0].id);
+  }, [printableCostCenters, selectedCostCenterId]);
 
   const { data: spoolAssignments } = useQuery({
     queryKey: ['spool-assignments'],
@@ -1050,6 +1082,8 @@ export function PrintModal({
     // Common queue data for create and edit modes
     const getQueueData = (printerId: number | null, plateOverride?: number | null): PrintQueueItemCreate => {
       const plateId = plateOverride !== undefined ? plateOverride : selectedPlate;
+      const plateEstimatedCost =
+        plateId != null && isMultiPlateSelection ? estimatedCostsByPlate[plateId] ?? null : estimatedCost;
       return {
       printer_id: assignmentMode === 'printer' ? printerId : null,
       target_model: assignmentMode === 'model' ? targetModel : null,
@@ -1073,6 +1107,8 @@ export function PrintModal({
         : undefined,
       ...printOptions,
       project_id: projectId ?? undefined,
+      cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
+      estimated_cost: billingEnabled && selectedCostCenterId != null ? plateEstimatedCost : undefined,
       batch_id: autoBatchId ?? undefined,
       cleanup_library_after_dispatch: cleanupLibraryAfterDispatch,
       };
@@ -1104,6 +1140,8 @@ export function PrintModal({
                 ? new Date(scheduleOptions.scheduledTime).toISOString()
                 : null,
               ...printOptions,
+              cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
+              estimated_cost: billingEnabled && selectedCostCenterId != null ? estimatedCost : undefined,
             };
             await updateQueueMutation.mutateAsync(updateData);
           } else {
@@ -1160,6 +1198,12 @@ export function PrintModal({
                   ? new Date(scheduleOptions.scheduledTime).toISOString()
                   : null,
                 ...printOptions,
+                cost_center_id: billingEnabled ? selectedCostCenterId : undefined,
+                estimated_cost: billingEnabled && selectedCostCenterId != null
+                  ? (plateId != null && isMultiPlateSelection
+                    ? estimatedCostsByPlate[plateId] ?? null
+                    : estimatedCost)
+                  : undefined,
               };
               await updateQueueMutation.mutateAsync(updateData);
             } else {
@@ -1339,6 +1383,12 @@ export function PrintModal({
   const showFilamentMapping = effectivePrinterId && selectedPlates.size <= 1 && (
     isLibraryFile || (isMultiPlate ? selectedPlate !== null : true)
   );
+
+  useEffect(() => {
+    if (!showFilamentMapping || archiveDataMissing || selectedPrinters.length !== 1) {
+      setEstimatedCost(null);
+    }
+  }, [archiveDataMissing, selectedPrinters.length, showFilamentMapping]);
 
   // Several plates on one printer: one mapping panel per plate, each mapping only
   // the slots its own plate prints. Multi-printer fan-out would be a panel per
@@ -1600,6 +1650,9 @@ export function PrintModal({
                 filamentReqs={effectiveFilamentReqs}
                 manualMappings={manualMappings}
                 onManualMappingChange={setManualMappings}
+                onEstimatedCostChange={setEstimatedCost}
+                budgetAvailable={billingEnabled ? selectedCostCenter?.budget_available ?? null : null}
+                quantity={effectiveQuantity}
                 defaultExpanded={!!initialSelectedPrinterIds?.length || (settings?.per_printer_mapping_expanded ?? false)}
                 currencySymbol={currencySymbol}
                 defaultCostPerKg={defaultCostPerKg}
@@ -1627,6 +1680,11 @@ export function PrintModal({
                   onManualMappingChange={(mappings) =>
                     setManualMappingsByPlate((prev) => ({ ...prev, [plateId]: mappings }))
                   }
+                  onEstimatedCostChange={(cost) =>
+                    setEstimatedCostsByPlate((prev) => ({ ...prev, [plateId]: cost }))
+                  }
+                  budgetAvailable={billingEnabled ? selectedCostCenter?.budget_available ?? null : null}
+                  quantity={quantityForPlate(plateId)}
                   defaultExpanded={false}
                   currencySymbol={currencySymbol}
                   defaultCostPerKg={defaultCostPerKg}
@@ -1646,6 +1704,14 @@ export function PrintModal({
                 onChange={setPrintOptions}
                 defaultExpanded={!!initialSelectedPrinterIds?.length}
                 showDualNozzleOptions={showDualNozzleOptions}
+              />
+            )}
+
+            {billingEnabled && printableCostCenters.length > 0 && (
+              <CostCenterSelect
+                costCenters={printableCostCenters}
+                selectedCostCenterId={selectedCostCenterId}
+                onChange={setSelectedCostCenterId}
               />
             )}
 

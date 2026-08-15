@@ -18,6 +18,9 @@ export function FilamentMapping({
   filamentReqs,
   manualMappings,
   onManualMappingChange,
+  onEstimatedCostChange,
+  budgetAvailable,
+  quantity = 1,
   currencySymbol,
   defaultCostPerKg,
   defaultExpanded = false,
@@ -170,10 +173,24 @@ export function FilamentMapping({
     return total;
   }, [filamentComparison, trayCostMap, defaultCostPerKg]);
 
+  // Callers rendering one mapping per selected plate naturally create a
+  // plate-scoped callback inline. Keep the latest callback in a ref so a new
+  // function identity does not retrigger the cost effect and create a
+  // parent/child render loop.
+  const onEstimatedCostChangeRef = useRef(onEstimatedCostChange);
+  useEffect(() => {
+    onEstimatedCostChangeRef.current = onEstimatedCostChange;
+  }, [onEstimatedCostChange]);
+  useEffect(() => {
+    onEstimatedCostChangeRef.current?.(totalCost > 0 ? totalCost : null);
+  }, [totalCost]);
+
   const hasAnyCost = useMemo(
     () => Array.from(trayCostMap.values()).some((v) => v != null && v > 0),
     [trayCostMap]
   );
+  const budgetCheckCost = totalCost * Math.max(1, quantity);
+  const isBudgetInsufficient = budgetAvailable != null && budgetCheckCost > budgetAvailable;
   const hasFilamentReqs = filamentReqs?.filaments && filamentReqs.filaments.length > 0;
   const isDualNozzle = filamentReqs?.filaments?.some((f) => f.nozzle_id != null) ?? false;
 
@@ -416,7 +433,19 @@ export function FilamentMapping({
             <span className="text-white">
               {totalCost > 0 || hasAnyCost ? `${currencySymbol}${totalCost.toFixed(2)}` : 'N/A'}
             </span>
+            {quantity > 1 && totalCost > 0 && (
+              <span className="ml-2">
+                {t('printModal.totalCostForQuantity', 'total: {{cost}}', {
+                  cost: `${currencySymbol}${budgetCheckCost.toFixed(2)}`,
+                })}
+              </span>
+            )}
           </div>
+          {isBudgetInsufficient && (
+            <p className="text-xs text-red-400 mt-2">
+              {t('printModal.insufficientBudget', 'Insufficient budget for this cost center.')}
+            </p>
+          )}
           {hasTypeMismatch && (
             <p className="text-xs text-orange-700 dark:text-orange-400 mt-2">Required filament type not found in printer.</p>
           )}

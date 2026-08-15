@@ -114,6 +114,8 @@ class PrintQueueItemCreate(BaseModel):
     batch_id: int | None = None
     # Project to associate the resulting archive with
     project_id: int | None = None
+    cost_center_id: int | None = None
+    estimated_cost: float | None = None
     # Direct printer-card uploads are temporary library files. The scheduler
     # deletes them after creating the durable archive copy.
     cleanup_library_after_dispatch: bool = False
@@ -149,6 +151,8 @@ class PrintQueueItemUpdate(BaseModel):
     preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
     # Auto-print G-code injection
     gcode_injection: bool | None = None
+    cost_center_id: int | None = None
+    estimated_cost: float | None = None
     # H2C dual-nozzle-rack slicer pick (#1780). list[int] per-filament
     # physical nozzle position IDs from BambuStudio's project_file MQTT
     # body; sent back to the printer verbatim on dispatch.
@@ -174,6 +178,8 @@ class PrintQueueItemResponse(BaseModel):
     waiting_reason: str | None = None  # Why a model-based job hasn't started yet
     archive_id: int | None  # None if library_file_id is set (archive created at print start)
     library_file_id: int | None  # For queue items from library files
+    cost_center_id: int | None = None
+    estimated_cost: float | None = None
     position: int
     scheduled_time: UTCDatetime
     require_previous_success: bool
@@ -321,6 +327,8 @@ class PrintQueueBulkUpdate(BaseModel):
     preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
     # Auto-print G-code injection
     gcode_injection: bool | None = None
+    cost_center_id: int | None = None
+    estimated_cost: float | None = None
 
 
 class PrintQueueBulkUpdateResponse(BaseModel):

@@ -216,6 +216,11 @@ _APIKEY_DENIED_PERMISSIONS: frozenset[Permission] = frozenset(
         Permission.API_KEYS_UPDATE,
         Permission.API_KEYS_DELETE,
         Permission.API_KEYS_READ,
+        # Finance / cost-center data has no dedicated API-key scope.
+        Permission.COST_CENTERS_READ_OWN,
+        Permission.COST_CENTERS_READ_ALL,
+        Permission.COST_CENTERS_MODIFY,
+        Permission.COST_CENTERS_CREATE,
         # GitHub backup admin + firmware OTA.
         Permission.GITHUB_BACKUP,
         Permission.GITHUB_RESTORE,

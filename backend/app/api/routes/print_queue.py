@@ -43,6 +43,7 @@ from backend.app.schemas.print_queue import (
 )
 from backend.app.services.filament_deficit import compute_deficit_for_queue_item
 from backend.app.services.filament_requirements import overrides_for_plate
+from backend.app.services.finance_budget import release_budget_reservation, validate_print_budget
 from backend.app.services.notification_service import notification_service
 from backend.app.services.print_batch import (
     BatchDispatchError,
@@ -333,6 +334,8 @@ def _enrich_response(item: PrintQueueItem) -> PrintQueueItemResponse:
         "waiting_reason": item.waiting_reason,
         "archive_id": item.archive_id,
         "library_file_id": item.library_file_id,
+        "cost_center_id": item.cost_center_id,
+        "estimated_cost": item.estimated_cost,
         "position": item.position,
         "scheduled_time": item.scheduled_time,
         "require_previous_success": item.require_previous_success,
@@ -942,6 +945,14 @@ async def add_to_queue(
         if not project_result.scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Project not found")
 
+    await validate_print_budget(
+        db,
+        cost_center_id=data.cost_center_id,
+        estimated_cost=data.estimated_cost,
+        current_user=current_user,
+        quantity=quantity,
+    )
+
     ams_mapping_json = json.dumps(data.ams_mapping) if data.ams_mapping else None
     # Reprint fallback: the caller didn't specify an explicit ams_mapping (no
     # per-slot filament-mapping edit was made), but the archive carries the
@@ -998,6 +1009,8 @@ async def add_to_queue(
             filament_overrides=filament_overrides_json,
             archive_id=data.archive_id,
             library_file_id=data.library_file_id,
+            cost_center_id=data.cost_center_id,
+            estimated_cost=data.estimated_cost,
             scheduled_time=data.scheduled_time,
             require_previous_success=data.require_previous_success,
             auto_off_after=data.auto_off_after,
@@ -1133,6 +1146,7 @@ async def bulk_update_queue_items(
 
     updated_count = 0
     skipped_count = 0
+    validates_billing_fields = "cost_center_id" in update_data or "estimated_cost" in update_data
 
     for item in items:
         # Skip non-pending rows and rows a dispatch worker has claimed (#2615) —
@@ -1146,6 +1160,15 @@ async def bulk_update_queue_items(
         if not can_modify_all and item.created_by_id != user.id:
             skipped_count += 1
             continue
+
+        if validates_billing_fields:
+            await validate_print_budget(
+                db,
+                cost_center_id=update_data.get("cost_center_id", item.cost_center_id),
+                estimated_cost=update_data.get("estimated_cost", item.estimated_cost),
+                current_user=user,
+                exclude_queue_item_id=item.id,
+            )
 
         for field, value in update_data.items():
             setattr(item, field, value)
@@ -1552,6 +1575,12 @@ async def cancel_batch(
     cancelled_count = 0
     for item in pending_items:
         item.status = "cancelled"
+        await release_budget_reservation(
+            db,
+            source_type="print_queue",
+            source_id=item.id,
+            status="released",
+        )
         cancelled_count += 1
 
     batch.status = "cancelled"
@@ -1797,6 +1826,14 @@ async def update_queue_item(
             json.dumps(update_data["nozzle_mapping"]) if update_data["nozzle_mapping"] else None
         )
 
+    await validate_print_budget(
+        db,
+        cost_center_id=update_data.get("cost_center_id", item.cost_center_id),
+        estimated_cost=update_data.get("estimated_cost", item.estimated_cost),
+        current_user=user,
+        exclude_queue_item_id=item.id,
+    )
+
     # Re-check the dispatch claim right before mutating (#2615). Several awaited
     # validations ran since the guard above, and a scheduler worker may have
     # claimed the row in that gap. A fresh read (item isn't dirty yet, so no
@@ -1844,6 +1881,12 @@ async def delete_queue_item(
     if item.status == "printing":
         raise HTTPException(400, "Cannot delete item that is currently printing")
 
+    await release_budget_reservation(
+        db,
+        source_type="print_queue",
+        source_id=item.id,
+        status="released",
+    )
     await db.delete(item)
     await db.commit()
 
@@ -1956,6 +1999,12 @@ async def cancel_queue_item(
 
     item.status = "cancelled"
     item.completed_at = datetime.now(timezone.utc)
+    await release_budget_reservation(
+        db,
+        source_type="print_queue",
+        source_id=item.id,
+        status="released",
+    )
     await db.commit()
 
     logger.info("Cancelled queue item %s", item_id)
@@ -2119,6 +2168,14 @@ async def start_queue_item(
 
     if item.status != "pending":
         raise HTTPException(400, f"Can only start pending items, current status: '{item.status}'")
+
+    await validate_print_budget(
+        db,
+        cost_center_id=item.cost_center_id,
+        estimated_cost=item.estimated_cost,
+        current_user=user,
+        exclude_queue_item_id=item.id,
+    )
 
     # Live deficit check — re-evaluated against current spool state, so a
     # spool swap between scheduler flagging and the user clicking ▶ clears

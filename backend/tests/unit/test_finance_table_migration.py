@@ -1,0 +1,134 @@
+"""Regression tests for finance tables on upgraded databases."""
+
+import os
+from unittest.mock import patch
+
+import pytest
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from backend.app.core.database import _migrate_create_finance_indexes, _migrate_create_finance_tables
+
+EXPECTED_TABLES = {
+    "cost_centers",
+    "wallet_transactions",
+    "budget_reservations",
+    "cost_center_members",
+    "cost_center_invitations",
+    "user_wallets",
+}
+
+
+@pytest.mark.asyncio
+async def test_finance_tables_are_created_idempotently_on_sqlite():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    try:
+        async with engine.begin() as conn:
+            with patch("backend.app.core.database.is_sqlite", return_value=True):
+                await _migrate_create_finance_tables(conn)
+                await _migrate_create_finance_tables(conn)
+
+            rows = await conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name IN "
+                    "('cost_centers', 'wallet_transactions', 'budget_reservations', "
+                    "'cost_center_members', 'cost_center_invitations', 'user_wallets')"
+                )
+            )
+
+        assert {row[0] for row in rows} == EXPECTED_TABLES
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_legacy_cost_center_indexes_are_delayed_until_columns_exist():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE TABLE cost_centers (id INTEGER PRIMARY KEY, name VARCHAR(150) NOT NULL)"))
+
+            with patch("backend.app.core.database.is_sqlite", return_value=True):
+                await _migrate_create_finance_tables(conn)
+
+            await conn.execute(text("ALTER TABLE cost_centers ADD COLUMN code VARCHAR(32)"))
+            await _migrate_create_finance_indexes(conn)
+
+            result = await conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ix_cost_centers_code'")
+            )
+
+        assert result.scalar_one() == "ix_cost_centers_code"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_finance_ddl_uses_postgres_types():
+    statements: list[str] = []
+
+    async def capture_statement(_conn, sql: str) -> None:
+        statements.append(sql)
+
+    with (
+        patch("backend.app.core.database.is_sqlite", return_value=False),
+        patch("backend.app.core.database._safe_execute", side_effect=capture_statement),
+    ):
+        await _migrate_create_finance_tables(object())
+
+    create_statements = [sql for sql in statements if "CREATE TABLE" in sql]
+    assert len(create_statements) == len(EXPECTED_TABLES)
+    assert all("IF NOT EXISTS" in sql for sql in create_statements)
+    assert all("DATETIME" not in sql for sql in create_statements)
+    assert all("id SERIAL PRIMARY KEY" in sql for sql in create_statements)
+    assert "TIMESTAMP" in "\n".join(create_statements)
+
+    created_tables = {
+        sql.split("CREATE TABLE IF NOT EXISTS", 1)[1].split("(", 1)[0].strip() for sql in create_statements
+    }
+    assert created_tables == EXPECTED_TABLES
+
+
+@pytest.mark.asyncio
+async def test_finance_tables_are_created_idempotently_on_postgres():
+    database_url = os.getenv("BAMBUDDY_TEST_POSTGRES_URL")
+    if not database_url:
+        pytest.skip("BAMBUDDY_TEST_POSTGRES_URL is not configured")
+
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as conn:
+            # Minimal pre-billing schema: these are the only tables referenced
+            # by foreign keys in the new finance tables.
+            await conn.execute(text("CREATE TABLE users (id SERIAL PRIMARY KEY)"))
+            await conn.execute(text("CREATE TABLE print_archives (id SERIAL PRIMARY KEY)"))
+            await conn.execute(text("CREATE TABLE print_queue (id SERIAL PRIMARY KEY)"))
+
+            with patch("backend.app.core.database.is_sqlite", return_value=False):
+                await _migrate_create_finance_tables(conn)
+                await _migrate_create_finance_tables(conn)
+                await _migrate_create_finance_indexes(conn)
+                await _migrate_create_finance_indexes(conn)
+
+            rows = await conn.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = ANY(:tables)"
+                ),
+                {"tables": sorted(EXPECTED_TABLES)},
+            )
+            timestamp_type = await conn.execute(
+                text(
+                    "SELECT data_type FROM information_schema.columns "
+                    "WHERE table_schema = 'public' "
+                    "AND table_name = 'cost_centers' AND column_name = 'created_at'"
+                )
+            )
+
+        assert {row[0] for row in rows} == EXPECTED_TABLES
+        assert timestamp_type.scalar_one() == "timestamp without time zone"
+    finally:
+        await engine.dispose()
