@@ -899,12 +899,6 @@ class GitHubRestoreService:
                 "quantity": entry.get("quantity") or 1,
                 "energy_kwh": entry.get("energy_kwh"),
                 "energy_cost": entry.get("energy_cost"),
-                # A soft-deleted archive is still in the backup (its row is kept
-                # so stats keep counting it), so carry the flag across or the
-                # restore turns something the user deleted back into a visible
-                # archive. Backups written before this key existed have no
-                # deleted_at, and those rows can only come back live.
-                "deleted_at": _parse_dt(entry.get("deleted_at")),
             }
 
             printer_id = entry.get("printer_id")
@@ -919,21 +913,38 @@ class GitHubRestoreService:
                     "archivesProjectMissing", "Some archives referenced projects that no longer exist — link cleared"
                 )
                 project_id = None
-            created_by_id = entry.get("created_by_id")
-            if created_by_id is not None and created_by_id not in valid_users:
-                # Coerced rather than failing the row: the archive is still worth
-                # having, and an admin can reassign it. Said out loud because a
-                # cleared owner is not silent-safe — the archive becomes visible
-                # only to archives:read_all until someone does.
-                tally.note(
-                    "archivesOwnerCleared",
-                    "Some archives referenced users that no longer exist — owner cleared, so they are "
-                    "visible only to users with the archives:read_all permission until an admin reassigns them",
-                )
-                created_by_id = None
             fields["printer_id"] = printer_id
             fields["project_id"] = project_id
-            fields["created_by_id"] = created_by_id
+
+            # created_by_id and deleted_at are the two late arrivals — a backup
+            # commit taken before the collector wrote them carries neither key.
+            # Absent is NOT the same as null here, because the overwrite branch
+            # below is a blanket setattr: treating a missing key as None would
+            # write NULL over a live owner (_ensure_archive_visible then 404s the
+            # archive for the very user who owns it — the failure carrying the
+            # column was added to fix) and silently un-delete a row the user
+            # deleted. So only carry a column the backup actually knows about;
+            # on insert, an absent key just takes the model default.
+            if "created_by_id" in entry:
+                created_by_id = entry.get("created_by_id")
+                if created_by_id is not None and created_by_id not in valid_users:
+                    # Coerced rather than failing the row: the archive is still
+                    # worth having, and an admin can reassign it. Said out loud
+                    # because a cleared owner is not silent-safe — the archive
+                    # becomes visible only to archives:read_all until someone does.
+                    tally.note(
+                        "archivesOwnerCleared",
+                        "Some archives referenced users that no longer exist — owner cleared, so they are "
+                        "visible only to users with the archives:read_all permission until an admin reassigns them",
+                    )
+                    created_by_id = None
+                fields["created_by_id"] = created_by_id
+            if "deleted_at" in entry:
+                # A soft-deleted archive is still in the backup (its row is kept
+                # so stats keep counting it), so carry the flag across or the
+                # restore turns something the user deleted back into a visible
+                # archive.
+                fields["deleted_at"] = _parse_dt(entry.get("deleted_at"))
 
             if existing is not None:
                 if old_id is not None:
@@ -945,7 +956,7 @@ class GitHubRestoreService:
                 # includes un-deleting one the user deleted after the backup was
                 # taken. Legitimate, but not obvious from a restored/skipped
                 # count, so say it.
-                if existing.deleted_at is not None and fields["deleted_at"] is None:
+                if existing.deleted_at is not None and "deleted_at" in fields and fields["deleted_at"] is None:
                     tally.note(
                         "archivesUndeleted",
                         "Archive(s) deleted since the backup are visible again — overwrite was on",

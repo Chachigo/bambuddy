@@ -1063,6 +1063,12 @@ class TestRestoreArchives:
 
     @pytest.mark.asyncio
     async def test_overwrite_undeletes_a_locally_deleted_archive_and_says_so(self, db_session):
+        """The entry has to *say* the archive was live — absent no longer means null.
+
+        A commit taken before the collector wrote ``deleted_at`` carries no
+        opinion about it, and overwrite now leaves the column alone in that
+        case; see ``TestRestoredArchiveOwnership``.
+        """
         db_session.add(
             PrintArchive(
                 filename="benchy.3mf",
@@ -1076,7 +1082,9 @@ class TestRestoreArchives:
         await db_session.commit()
         tally = _CategoryTally()
 
-        await _service()._restore_archives(db_session, {"archives": [self._archive_entry()]}, True, tally, {})
+        await _service()._restore_archives(
+            db_session, {"archives": [self._archive_entry(deleted_at=None)]}, True, tally, {}
+        )
         await db_session.commit()
 
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
@@ -1570,6 +1578,114 @@ class TestRestoredArchiveOwnership:
 
         row = (await db_session.execute(select(PrintArchive))).scalar_one()
         assert row.created_by_id == alice.id
+
+    @pytest.mark.asyncio
+    async def test_overwrite_leaves_the_owner_alone_when_the_backup_predates_the_key(self, db_session):
+        """A pre-#2656 commit must not blank the owner of a row that was fine.
+
+        The entry carries no ``created_by_id`` at all, so there is nothing to
+        write. Treating that as an explicit null inflicted the exact bug the
+        column was added to fix — a 404 for the owner — on rows the restore had
+        no business touching, silently, while still counting them restored.
+        """
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+
+        tally = _CategoryTally()
+        await _service()._restore_archives(db_session, {"archives": [self._entry()]}, True, tally, {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id == bob.id, "an old backup does not know the owner, so it must not clear one"
+        assert tally.restored == 1
+
+    @pytest.mark.asyncio
+    async def test_overwrite_leaves_deleted_at_alone_when_the_backup_predates_the_key(self, db_session):
+        """The mirror case: an old commit must not un-delete, and must not claim to.
+
+        ``archivesUndeleted`` reads the same absent value, so the un-delete was
+        not merely wrong but unannounced.
+        """
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                deleted_at=datetime(2026, 3, 4, 8, 0, 0),
+            )
+        )
+        await db_session.commit()
+
+        tally = _CategoryTally()
+        await _service()._restore_archives(db_session, {"archives": [self._entry()]}, True, tally, {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.deleted_at == datetime(2026, 3, 4, 8, 0, 0), "an old backup must not resurrect a deleted archive"
+        assert not any("visible again" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_overwrite_still_clears_an_owner_the_backup_explicitly_nulls(self, db_session):
+        """Control: absent is ignored, but an explicit null is still honoured.
+
+        A current-format backup of an unowned archive has to be able to say so,
+        or overwrite stops meaning "make the local row match the backup".
+        """
+        bob = await self._user(db_session, "bob")
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                created_by_id=bob.id,
+            )
+        )
+        await db_session.commit()
+
+        await _service()._restore_archives(
+            db_session, {"archives": [self._entry(created_by_id=None)]}, True, _CategoryTally(), {}
+        )
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.created_by_id is None
+
+    @pytest.mark.asyncio
+    async def test_overwrite_still_undeletes_when_the_backup_explicitly_nulls(self, db_session):
+        """Control for the deleted_at half, with the note that goes with it."""
+        db_session.add(
+            PrintArchive(
+                filename="benchy.3mf",
+                file_path="/data/benchy.3mf",
+                file_size=2048,
+                content_hash="abc123",
+                started_at=datetime(2026, 3, 1, 10, 0, 0),
+                deleted_at=datetime(2026, 3, 4, 8, 0, 0),
+            )
+        )
+        await db_session.commit()
+
+        tally = _CategoryTally()
+        await _service()._restore_archives(db_session, {"archives": [self._entry(deleted_at=None)]}, True, tally, {})
+        await db_session.commit()
+
+        row = (await db_session.execute(select(PrintArchive))).scalar_one()
+        assert row.deleted_at is None
+        assert any("visible again" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
     async def test_owner_survives_collect_then_restore(self, db_session):
