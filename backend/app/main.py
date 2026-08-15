@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import mimetypes as _mimetypes
 import os
 import posixpath
 import secrets
@@ -8063,7 +8062,8 @@ def _frame_ancestors(default_value: str) -> str:
 
     ``default_value`` is the strict directive used when the operator has not
     configured ``TRUSTED_FRAME_ORIGINS`` — typically ``'none'`` (catch-all and
-    docs) or ``'self'`` (gcode-viewer, served same-origin). When trusted origins
+    docs) or ``'self'`` (the streaming overlay, embedded same-origin by the
+    Settings URL builder's preview). When trusted origins
     are configured, ``'self'`` is always included so same-origin embedding never
     breaks even if an operator forgets to add their own origin to the list.
     """
@@ -8103,23 +8103,7 @@ async def security_headers_middleware(request, call_next):
     #   - img-src data: / blob:: base64 thumbnails and Blob-URL timelapse previews.
     #   - media-src blob:: timelapse video player uses Blob URLs.
     #   - font-src data:: some icon fonts are embedded as data URIs.
-    if request.url.path.startswith("/gcode-viewer"):
-        # The gcode viewer is embedded in an iframe served by this same origin,
-        # so frame-ancestors must allow 'self'.  prettygcode.js also uses eval()
-        # internally, so script-src needs 'unsafe-eval'.
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-eval'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "media-src 'self' blob:; "
-            "connect-src 'self' ws: wss:; "
-            "font-src 'self' data:; "
-            "object-src 'none'; "
-            "base-uri 'self'; "
-            "frame-src 'self' http: https:; " + _frame_ancestors("'self'")
-        )
-    elif request.url.path in ("/docs", "/redoc", "/docs/oauth2-redirect"):
+    if request.url.path in ("/docs", "/redoc", "/docs/oauth2-redirect"):
         # FastAPI's built-in Swagger UI / ReDoc pages load assets from
         # cdn.jsdelivr.net and bootstrap with an inline <script>, so the
         # default CSP would render a blank page.
@@ -8136,8 +8120,8 @@ async def security_headers_middleware(request, call_next):
         )
     else:
         # The streaming overlay is embedded same-origin by the URL builder's
-        # preview in Settings (#1422) — the same reason /gcode-viewer allows
-        # 'self' above. Embedding from anywhere else is still refused: 'self'
+        # preview in Settings (#1422), so this branch allows 'self'.
+        # Embedding from anywhere else is still refused: 'self'
         # only permits a framer on this origin, which is Bambuddy's own UI, so
         # a clickjacking page on another host is blocked exactly as before.
         # (The overlay draws status over a camera feed and its only interactive
@@ -8507,48 +8491,6 @@ async def serve_sw_register():
 
 
 # ── GCode viewer static files ────────────────────────────────────────────────
-# Served via explicit routes so ordering is guaranteed (app.mount() loses
-# to the /{full_path:path} catch-all in some Starlette versions).
-_gcode_viewer_dir = (app_settings.static_dir.parent / "gcode_viewer").resolve()
-
-# Surface packaging gaps at startup instead of as silent runtime 404s. If the
-# directory is missing the explicit @app.get("/gcode-viewer/...") routes below
-# return bare HTTPException(404) which renders as {"detail":"Not Found"} in
-# the 3D Preview iframe (#1218) — easy to miss in normal operation, easy to
-# spot if the operator scans the startup log or a support bundle.
-if not (_gcode_viewer_dir / "index.html").is_file():
-    logging.getLogger(__name__).error(
-        "Embedded GCode viewer assets missing at %s — /gcode-viewer/ will return 404 "
-        "and 3D Preview will fail. This indicates a packaging bug; the gcode_viewer/ "
-        "directory must be present alongside static/.",
-        _gcode_viewer_dir,
-    )
-
-
-def _gcode_viewer_response(rel: str) -> FileResponse:
-    from fastapi import HTTPException as _HTTPException
-
-    safe = (_gcode_viewer_dir / rel).resolve()
-    if not safe.is_relative_to(_gcode_viewer_dir):
-        raise _HTTPException(status_code=403)
-    if safe.is_file():
-        mt, _ = _mimetypes.guess_type(str(safe))
-        return FileResponse(str(safe), media_type=mt or "application/octet-stream")
-    raise _HTTPException(status_code=404)
-
-
-@app.get("/gcode-viewer/")
-async def serve_gcode_viewer_index() -> FileResponse:
-    """Raw PrettyGCode viewer for the iframe. The bare ``/gcode-viewer``
-    (no trailing slash) intentionally falls through to the SPA catch-all so a
-    full-page reload re-enters the React layout instead of serving the iframe
-    contents standalone."""
-    return _gcode_viewer_response("index.html")
-
-
-@app.get("/gcode-viewer/{file_path:path}")
-async def serve_gcode_viewer_file(file_path: str) -> FileResponse:
-    return _gcode_viewer_response(file_path)
 
 
 # Catch-all route for React Router (must be last)

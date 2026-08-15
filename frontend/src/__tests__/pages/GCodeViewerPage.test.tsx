@@ -1,120 +1,139 @@
 /**
- * The G-code viewer's frame, when something refuses to let it be embedded (#2787).
+ * The full-page G-code preview.
  *
- * Sliced files preview through a full-page route whose body is an iframe of
- * /gcode-viewer/; STL and source 3MF use an in-page three.js modal instead. So a
- * proxy that injects a framing header breaks exactly one of the two previews,
- * and all the user sees is the browser's own "refused to connect" page inside
- * our layout shell — no clue what happened, and no hint that the viewer works
- * perfectly well in a tab of its own.
+ * This used to be an iframe onto a vendored copy of PrettyGCode, and most of
+ * the page was machinery for detecting when a proxy refused the embed. It now
+ * renders Bambuddy's own toolpath viewer directly, so what is worth testing is
+ * that the right file reaches it -- including the plate, which a multi-plate
+ * archive needs or the viewer silently shows a different plate than the one
+ * that was picked.
  */
 
-import { describe, it, expect } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { render } from '../utils';
-import { GCodeViewerPage } from '../../pages/GCodeViewerPage';
-import { findFramingRefusal } from '../../utils/framing';
 import { server } from '../mocks/server';
+import { GCodeViewerPage } from '../../pages/GCodeViewerPage';
 
-const ORIGIN = 'https://printers.example.com';
-const OURS = "default-src 'self'; script-src 'self' 'unsafe-eval'; frame-ancestors 'self';";
+// The viewer itself needs WebGL, which jsdom has no answer for. Its own
+// behaviour is covered by the parser and renderer tests; here we only care
+// which URL the page hands it.
+vi.mock('../../components/GcodeToolpathViewer', () => ({
+  GcodeToolpathViewer: ({ gcodeUrl, filamentColors }: { gcodeUrl: string; filamentColors?: string[] }) => (
+    <div data-testid="toolpath-viewer" data-url={gcodeUrl} data-colors={(filamentColors ?? []).join(',')} />
+  ),
+}));
 
-function serveViewer(status: number, headers: Record<string, string> = {}) {
-  server.use(http.get('/gcode-viewer/', () => new HttpResponse(null, { status, headers })));
+function visit(search: string) {
+  window.history.pushState({}, '', `/gcode-viewer${search}`);
+  render(<GCodeViewerPage />);
 }
 
-describe('findFramingRefusal', () => {
-  it('accepts the headers Bambuddy itself sends', () => {
-    expect(findFramingRefusal('SAMEORIGIN', OURS, ORIGIN)).toBeNull();
+const viewerUrl = () => screen.getByTestId('toolpath-viewer').getAttribute('data-url');
+
+describe('GCodeViewerPage', () => {
+  const originalUrl = window.location.href;
+
+  beforeEach(() => {
+    window.history.pushState({}, '', '/gcode-viewer');
   });
 
-  it('accepts an origin named explicitly instead of self', () => {
-    const csp = `frame-ancestors ${ORIGIN};`;
-    expect(findFramingRefusal(null, csp, ORIGIN)).toBeNull();
+  afterEach(() => {
+    window.history.pushState({}, '', originalUrl);
   });
 
-  it('reports a proxy-added policy that intersects ours down to none', () => {
-    // Two Content-Security-Policy headers arrive as one comma-joined string.
-    // Both apply, so ours permitting us is not enough.
-    const refusal = findFramingRefusal('SAMEORIGIN', `${OURS}, frame-ancestors 'none'`, ORIGIN);
-    expect(refusal).toBe("Content-Security-Policy: frame-ancestors 'none'");
+  it('previews an archive', () => {
+    visit('?archive=82');
+    expect(viewerUrl()).toContain('/archives/82/gcode');
   });
 
-  it('reports frame-ancestors listing only somebody else', () => {
-    const refusal = findFramingRefusal(null, "frame-ancestors https://ha.example.com;", ORIGIN);
-    expect(refusal).toContain('ha.example.com');
+  it('previews a library file', () => {
+    visit('?library_file=7');
+    expect(viewerUrl()).toContain('/library/files/7/gcode');
   });
 
-  it('reports X-Frame-Options DENY when no frame-ancestors is present', () => {
-    expect(findFramingRefusal('DENY', null, ORIGIN)).toBe('X-Frame-Options: DENY');
+  it('carries the plate through for a multi-plate source', () => {
+    // Dropping this shows whichever plate the backend defaults to rather than
+    // the one the user picked, with nothing on screen to say so.
+    visit('?archive=82&plate=3');
+    expect(viewerUrl()).toContain('plate=3');
   });
 
-  it('reports a second X-Frame-Options appended to ours', () => {
-    expect(findFramingRefusal('SAMEORIGIN, DENY', null, ORIGIN)).toBe(
-      'X-Frame-Options: SAMEORIGIN, DENY',
-    );
+  it('omits the plate parameter when there is no plate', () => {
+    visit('?archive=82');
+    expect(viewerUrl()).not.toContain('plate=');
   });
 
-  it('ignores X-Frame-Options when frame-ancestors permits us, as browsers do', () => {
-    // CSP supersedes the legacy header outright — flagging this would blame a
-    // header the browser never consulted.
-    expect(findFramingRefusal('DENY', OURS, ORIGIN)).toBeNull();
+  it('says so when no file was given rather than rendering an empty viewer', () => {
+    visit('');
+    expect(screen.queryByTestId('toolpath-viewer')).not.toBeInTheDocument();
+    expect(screen.getByText(/No file was given/i)).toBeInTheDocument();
   });
 
-  it('accepts a response carrying no framing headers at all', () => {
-    expect(findFramingRefusal(null, null, ORIGIN)).toBeNull();
+  it('offers a way back to where the file came from', () => {
+    visit('?archive=82');
+    expect(screen.getByRole('button', { name: /Back to Print Archives/i })).toBeInTheDocument();
+  });
+
+  it('names the file manager when the source was a library file', () => {
+    visit('?library_file=7');
+    expect(screen.getByRole('button', { name: /Back to File Manager/i })).toBeInTheDocument();
   });
 });
 
-describe('GCodeViewerPage', () => {
-  it('embeds the viewer when nothing refuses the frame', async () => {
-    serveViewer(200, { 'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': OURS });
+describe('GCodeViewerPage — filament colours', () => {
+  const originalUrl = window.location.href;
+  afterEach(() => window.history.pushState({}, '', originalUrl));
 
+  it('indexes library-file colours by tool number, not slot number', async () => {
+    // slot_id is 1-based and the G-code's T numbers are 0-based; indexing
+    // straight by slot puts every colour one filament out, so a two-material
+    // print comes out with the wrong body colour.
+    server.use(
+      http.get('/api/v1/library/files/:id/plates', () =>
+        HttpResponse.json({
+          file_id: 7,
+          filename: 'duck.gcode.3mf',
+          is_multi_plate: false,
+          plates: [
+            {
+              index: 1,
+              name: null,
+              objects: [],
+              has_thumbnail: false,
+              thumbnail_url: null,
+              print_time_seconds: null,
+              filament_used_grams: null,
+              filaments: [
+                { slot_id: 1, type: 'PLA', color: '#ffffff', used_grams: 1, used_meters: 1 },
+                { slot_id: 2, type: 'PLA', color: '#000000', used_grams: 1, used_meters: 1 },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    window.history.pushState({}, '', '/gcode-viewer?library_file=7');
     render(<GCodeViewerPage />);
 
-    expect(await screen.findByTitle('GCode Viewer')).toBeInTheDocument();
-    // Give the probe a chance to land and prove it changes nothing.
-    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
-    expect(screen.getByTitle('GCode Viewer')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId('toolpath-viewer')).toHaveAttribute('data-colors', '#ffffff,#000000'),
+    );
   });
 
-  it('explains a refused frame and offers the viewer in its own tab', async () => {
-    serveViewer(200, { 'Content-Security-Policy': "frame-ancestors 'none';" });
+  it('previews without colours when the plate metadata carries none', async () => {
+    server.use(
+      http.get('/api/v1/library/files/:id/plates', () =>
+        HttpResponse.json({ file_id: 7, filename: 'x', is_multi_plate: false, plates: [] }),
+      ),
+    );
 
+    window.history.pushState({}, '', '/gcode-viewer?library_file=7');
     render(<GCodeViewerPage />);
 
-    const panel = await screen.findByRole('alert');
-    expect(panel).toHaveTextContent(/could not be embedded/i);
-    // Name the header so the operator can go and find it in their proxy.
-    expect(panel).toHaveTextContent(/frame-ancestors 'none'/);
-    // A top-level navigation is not subject to frame-ancestors, so this works.
-    const link = within(panel).getByRole('link', { name: /new tab/i });
-    expect(link).toHaveAttribute('href', '/gcode-viewer/');
-    expect(link).toHaveAttribute('target', '_blank');
-    expect(screen.queryByTitle('GCode Viewer')).not.toBeInTheDocument();
-  });
-
-  it('reports missing viewer assets rather than showing raw JSON', async () => {
-    serveViewer(404);
-
-    render(<GCodeViewerPage />);
-
-    const panel = await screen.findByRole('alert');
-    expect(panel).toHaveTextContent(/unavailable/i);
-    expect(panel).toHaveTextContent(/HTTP 404/);
-    expect(screen.queryByTitle('GCode Viewer')).not.toBeInTheDocument();
-  });
-
-  it('keeps the frame when the probe itself fails', async () => {
-    // No evidence either way — the browser's own error page is better than a
-    // guess at a cause we cannot see.
-    server.use(http.get('/gcode-viewer/', () => HttpResponse.error()));
-
-    render(<GCodeViewerPage />);
-
-    expect(await screen.findByTitle('GCode Viewer')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
-    expect(screen.getByTitle('GCode Viewer')).toBeInTheDocument();
+    // The preview must still render; colours are a bonus, not a prerequisite.
+    expect(screen.getByTestId('toolpath-viewer')).toBeInTheDocument();
   });
 });

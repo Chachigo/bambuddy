@@ -1,8 +1,9 @@
 """Integration tests for security_headers_middleware (#1191).
 
 Default behaviour is strict: ``X-Frame-Options: SAMEORIGIN`` plus
-``frame-ancestors 'none'`` on the catch-all route, ``frame-ancestors 'self'``
-on /gcode-viewer/. Operators can opt into iframe embedding from trusted
+``frame-ancestors 'none'`` on the catch-all route, and ``frame-ancestors
+'self'`` on the streaming overlay, which the Settings URL builder previews
+same-origin. Operators can opt into iframe embedding from trusted
 origins (e.g. Home Assistant on a different port) via the
 ``TRUSTED_FRAME_ORIGINS`` env var; when set, X-Frame-Options is dropped and
 ``frame-ancestors`` includes the allowlist.

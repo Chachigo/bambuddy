@@ -1,95 +1,95 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, ShieldAlert } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { findFramingRefusal, type FrameProblem } from '../utils/framing';
 
+import { api } from '../api/client';
+import { GcodeToolpathViewer } from '../components/GcodeToolpathViewer';
+
+/**
+ * Full-page G-code preview.
+ *
+ * Previously an iframe onto a vendored copy of PrettyGCode served from
+ * `/gcode-viewer/`. That brought its own problems -- a second viewer to keep
+ * packaged and updated, no way to theme or translate it, and a whole
+ * frame-refusal probe to detect when a proxy blocked the embed -- and its
+ * output was the thing this page exists to show.
+ *
+ * It now renders Bambuddy's own toolpath viewer, which draws with OrcaSlicer's
+ * `libvgcode` and colours by feature. Same component as the file-manager
+ * preview, so the two surfaces cannot drift apart.
+ */
 export function GCodeViewerPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { t } = useTranslation();
-  const [problem, setProblem] = useState<FrameProblem | null>(null);
 
-  // Forward the outer page's query string (e.g. ?archive=82) to the iframe so
-  // the adapter inside can pick up the archive to load. The iframe itself must
-  // keep the trailing slash on /gcode-viewer/ so it hits the raw-viewer route;
-  // the outer SPA URL uses no trailing slash so a reload falls through to the
-  // SPA catch-all and keeps the Bambuddy layout shell.
-  const iframeSrc = `/gcode-viewer/${window.location.search}`;
-  const embedded = window !== window.top;
+  const archiveId = searchParams.get('archive');
+  const libraryFileId = searchParams.get('library_file');
+  const plate = searchParams.get('plate');
 
-  // A frame refused by X-Frame-Options / frame-ancestors still fires `onLoad` —
-  // the browser commits its own "refused to connect" error page — so the iframe
-  // itself cannot tell us anything. Ask for the same URL directly instead: it is
-  // same-origin, so every response header is readable, and it travels through
-  // whatever proxy the browser reaches Bambuddy by. The iframe is rendered
-  // straight away regardless and only replaced if this comes back refusing,
-  // which keeps the working case exactly as fast as before.
-  useEffect(() => {
-    if (embedded) return;
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const response = await fetch(iframeSrc, {
-          credentials: 'same-origin',
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          setProblem({ kind: 'unavailable', detail: `HTTP ${response.status}` });
-          return;
-        }
-        const refusal = findFramingRefusal(
-          response.headers.get('x-frame-options'),
-          response.headers.get('content-security-policy'),
-          window.location.origin,
-        );
-        if (refusal) setProblem({ kind: 'blocked', detail: refusal });
-      } catch {
-        // Aborted, offline, or the probe itself was blocked. The iframe stays;
-        // guessing at a cause we have no evidence for would be worse than the
-        // browser's own error page.
-      }
-    })();
-    return () => controller.abort();
-  }, [iframeSrc, embedded]);
+  // Filament colours, so a multi-material print opens on its own colours.
+  // The two sources differ: an archive reports them through its capabilities,
+  // while a library file carries them in its plate metadata, read straight out
+  // of the 3MF's slice info. Neither is worth blocking the preview over -- the
+  // viewer falls back to feature colouring -- hence no retry and no error path.
+  const archiveColorsQuery = useQuery({
+    queryKey: ['gcode-viewer-archive-colors', archiveId],
+    queryFn: () => api.getArchiveCapabilities(Number(archiveId)),
+    enabled: Boolean(archiveId),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
-  // Safety guard: if this React app is itself inside an iframe (e.g. the
-  // StaticFiles mount isn't registered and serve_spa returned us here),
-  // don't render another iframe — that would create an infinite loop.
-  if (embedded) {
-    return (
-      <div style={{ padding: 32, color: '#f88' }}>
-        GCode viewer static files not found. Check that the{' '}
-        <code>gcode_viewer/</code> directory exists and restart uvicorn.
-      </div>
-    );
-  }
+  const libraryPlatesQuery = useQuery({
+    queryKey: ['gcode-viewer-library-colors', libraryFileId],
+    queryFn: () => api.getLibraryFilePlates(Number(libraryFileId)),
+    enabled: Boolean(libraryFileId),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
 
-  const cameFromArchive = searchParams.has('archive');
-  const cameFromLibrary = searchParams.has('library_file');
-  const fallbackPath = cameFromArchive ? '/archives' : cameFromLibrary ? '/files' : '/';
-  const backLabel = cameFromArchive
-    ? t('gcodeViewer.backToArchives')
-    : cameFromLibrary
-    ? t('gcodeViewer.backToFiles')
-    : t('gcodeViewer.back');
+  const filamentColors = useMemo<string[] | undefined>(() => {
+    if (archiveId) return archiveColorsQuery.data?.filament_colors;
+
+    const plates = libraryPlatesQuery.data?.plates ?? [];
+    // Colours are per plate; use the one being previewed.
+    const wanted = plate ? Number(plate) : null;
+    const source = (wanted != null && plates.find((p) => p.index === wanted)) || plates[0];
+    if (!source?.filaments?.length) return undefined;
+
+    // slot_id is 1-based and the G-code's tool numbers are 0-based, so index
+    // by slot - 1 or every colour lands one filament out.
+    const colors: string[] = [];
+    for (const filament of source.filaments) {
+      const slot = Math.max(0, (filament.slot_id ?? 1) - 1);
+      if (filament.color) colors[slot] = filament.color;
+    }
+    return colors.length > 0 ? colors : undefined;
+  }, [archiveId, archiveColorsQuery.data, libraryPlatesQuery.data, plate]);
+
+  const gcodeUrl = useMemo(() => {
+    // Multi-plate sources need the plate carried through, or the viewer shows
+    // whichever plate the backend defaults to rather than the one picked.
+    const withPlate = (base: string) => (plate ? `${base}?plate=${encodeURIComponent(plate)}` : base);
+    if (archiveId) return withPlate(api.getArchiveGcode(Number(archiveId)));
+    if (libraryFileId) return withPlate(api.getLibraryFileGcodeUrl(Number(libraryFileId)));
+    return null;
+  }, [archiveId, libraryFileId, plate]);
 
   const handleBack = () => {
-    // Prefer browser history so we land where the user actually was (preserving
-    // scroll position, filters, etc.). Fall back to a sensible default route
-    // when the viewer was opened from a fresh tab / shared link.
-    if (window.history.length > 1) {
-      navigate(-1);
-    } else {
-      navigate(fallbackPath);
-    }
+    if (window.history.length > 1) navigate(-1);
+    else navigate(archiveId ? '/archives' : '/files');
   };
 
+  const backLabel = archiveId
+    ? t('gcodeViewer.backToArchives', 'Back to Archives')
+    : t('gcodeViewer.backToFiles', 'Back to File Manager');
+
   return (
-    // h-14 (3.5 rem) is the fixed header height defined in Layout.tsx.
-    // Subtracting it prevents a double scrollbar inside the layout shell.
-    <div style={{ height: 'calc(100vh - 3.5rem)', display: 'flex', flexDirection: 'column' }}>
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+    <div className="flex flex-col h-full">
+      <div className="flex-shrink-0 px-4 py-2 border-b border-bambu-dark-tertiary">
         <button
           type="button"
           onClick={handleBack}
@@ -99,49 +99,17 @@ export function GCodeViewerPage() {
           {backLabel}
         </button>
       </div>
-      {problem ? (
-        <div className="flex-1 overflow-y-auto p-6">
-          <div role="alert" className="max-w-2xl mx-auto p-4 rounded-lg border border-amber-500/40 bg-amber-500/10">
-            <div className="flex items-start gap-3">
-              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-amber-300">
-                  {problem.kind === 'blocked'
-                    ? t('gcodeViewer.blockedTitle')
-                    : t('gcodeViewer.unavailableTitle')}
-                </p>
-                <p className="text-xs text-bambu-gray mt-1">
-                  {problem.kind === 'blocked'
-                    ? t('gcodeViewer.blockedBody')
-                    : t('gcodeViewer.unavailableBody')}
-                </p>
-                <p className="text-xs text-bambu-gray mt-2 font-mono break-all">
-                  {t('gcodeViewer.problemDetail', { detail: problem.detail })}
-                </p>
-                <a
-                  href={iframeSrc}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-3 inline-flex items-center gap-1 text-xs text-bambu-green hover:underline"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  {t('gcodeViewer.openInNewTab')}
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <iframe
-          src={iframeSrc}
-          title="GCode Viewer"
-          style={{
-            display: 'block',
-            width: '100%',
-            flex: 1,
-            border: 'none',
-          }}
+
+      {gcodeUrl ? (
+        <GcodeToolpathViewer
+          gcodeUrl={gcodeUrl}
+          filamentColors={filamentColors}
+          className="flex-1 min-h-0"
         />
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-sm text-bambu-gray">
+          {t('gcodeViewer.noSource', 'No file was given to preview.')}
+        </div>
       )}
     </div>
   );

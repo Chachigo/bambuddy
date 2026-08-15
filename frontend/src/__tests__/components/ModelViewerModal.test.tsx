@@ -12,19 +12,11 @@ import { openInSlicer } from '../../utils/slicer';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
 
-// Mock ModelViewer and GcodeViewer to avoid WebGL/Three.js issues in tests
+// Mock ModelViewer to avoid WebGL/Three.js issues in tests
 vi.mock('../../components/ModelViewer', () => ({
   ModelViewer: ({ className }: { className?: string }) => (
     <div data-testid="model-viewer" className={className}>
       Model Viewer Mock
-    </div>
-  ),
-}));
-
-vi.mock('../../components/GcodeViewer', () => ({
-  GcodeViewer: ({ className }: { className?: string }) => (
-    <div data-testid="gcode-viewer" className={className}>
-      G-code Viewer Mock
     </div>
   ),
 }));

@@ -221,6 +221,7 @@ const FR_COGNATES = [
   'ntfy, Pushover, Discord, etc.',
   '{{filament}} @ {{temp}}°C',  // drying badge: filament code + universal °C
   'Simple', 'Expert',  // slicer settings visibility tiers — identical words in French
+  'Support',  // same word in French
 ];
 
 // Italian cognates.
@@ -255,6 +256,7 @@ const IT_COGNATES = [
   'Proxy', 'Designer',
   'Off',  // cam-wall status overlay mode — common loanword in Italian UI
   '{{filament}} @ {{temp}}°C',  // drying badge: filament code + universal °C
+  'Skirt / brim',  // Italian slicer UIs keep the English terms
 ];
 
 // Japanese: very few cognates because of script difference. Almost
