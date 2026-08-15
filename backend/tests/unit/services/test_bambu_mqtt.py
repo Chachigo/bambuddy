@@ -1987,6 +1987,99 @@ class TestRequestTopicFailSafe:
         assert BambuMQTTClient._request_topic_cache["TEST_REJECT"] is False
 
 
+class TestRequestTopicIsCaptured:
+    """The MQTT debug log has to show commands going *to* the printer.
+
+    Bambuddy subscribes to the request topic as well as the report topic, so
+    every command the printer is given crosses this client -- ours echoed back
+    by the broker, and whatever Bambu Studio sends. Those messages used to
+    return from _on_message before the logging block, which left a capture able
+    to prove only what the printer said and never what it was told. Answering
+    "what does Studio put in this field?" from a user's log depends on it
+    (#2774).
+    """
+
+    @pytest.fixture
+    def mqtt_client(self):
+        from backend.app.services.bambu_mqtt import BambuMQTTClient
+
+        client = BambuMQTTClient(
+            ip_address="192.168.1.100",
+            serial_number="TEST123",
+            access_code="12345678",
+        )
+        client.enable_logging(True)
+        return client
+
+    @staticmethod
+    def _deliver(client, topic, payload):
+        class _Msg:
+            pass
+
+        msg = _Msg()
+        msg.topic = topic
+        msg.payload = json.dumps(payload).encode()
+        client._on_message(None, None, msg)
+
+    def test_a_command_on_the_request_topic_is_logged(self, mqtt_client):
+        payload = {
+            "print": {
+                "command": "ams_filament_drying",
+                "ams_id": 128,
+                "temp": 45,
+                "duration": 12,
+                "filament": "PLA",
+            }
+        }
+        self._deliver(mqtt_client, mqtt_client.topic_publish, payload)
+
+        logs = mqtt_client.get_logs()
+        assert len(logs) == 1
+        assert logs[0].topic == mqtt_client.topic_publish
+        # Filed with the commands rather than with telemetry: the direction
+        # filter is how someone finds what was sent to the printer.
+        assert logs[0].direction == "out"
+        assert logs[0].payload == payload
+
+    def test_the_payload_is_kept_whole(self, mqtt_client):
+        """The point of the capture is the fields we don't parse."""
+        payload = {"print": {"command": "ams_filament_drying", "unparsed_field": "keep me"}}
+        self._deliver(mqtt_client, mqtt_client.topic_publish, payload)
+
+        assert mqtt_client.get_logs()[0].payload["print"]["unparsed_field"] == "keep me"
+
+    def test_request_topic_messages_are_still_parsed(self, mqtt_client):
+        """Logging is additive -- the ams_mapping capture must survive it."""
+        self._deliver(
+            mqtt_client,
+            mqtt_client.topic_publish,
+            {"print": {"command": "project_file", "ams_mapping": [0, 4, -1, -1]}},
+        )
+
+        assert mqtt_client._captured_ams_mapping == [0, 4, -1, -1]
+        assert len(mqtt_client.get_logs()) == 1
+
+    def test_nothing_is_logged_while_logging_is_off(self, mqtt_client):
+        mqtt_client.enable_logging(False)
+
+        self._deliver(
+            mqtt_client,
+            mqtt_client.topic_publish,
+            {"print": {"command": "project_file", "ams_mapping": [0, -1, -1, -1]}},
+        )
+
+        assert mqtt_client.get_logs() == []
+        assert mqtt_client._captured_ams_mapping == [0, -1, -1, -1]
+
+    def test_the_report_topic_is_still_logged_as_incoming(self, mqtt_client):
+        """Telemetry keeps its direction -- the two must stay distinguishable."""
+        self._deliver(mqtt_client, mqtt_client.topic_subscribe, {"print": {"gcode_state": "IDLE"}})
+
+        logs = mqtt_client.get_logs()
+        assert len(logs) == 1
+        assert logs[0].direction == "in"
+
+
 class TestRequestTopicAmsMapping:
     """Tests for capturing ams_mapping from the MQTT request topic."""
 

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { compareFwVersions } from '../utils/firmwareVersion';
 import { formatPrintName } from '../utils/printName';
 import { computePopoverPosition } from '../utils/popoverPosition';
+import { resolveDryingPresetKey, type DryingPreset } from '../utils/dryingPresets';
 import {
   isExternalSpoolHidden,
   setExternalSpoolHidden as persistExternalSpoolHidden,
@@ -1781,7 +1782,7 @@ export function AmsNameHoverCard({
 
 // AMS drying presets from BambuStudio filament profiles (idle mode temps)
 // Format: { n3f temp, n3s temp, n3f hours, n3s hours }
-const DRYING_PRESETS: Record<string, { n3f: number; n3s: number; n3f_hours: number; n3s_hours: number }> = {
+const DRYING_PRESETS: Record<string, DryingPreset> = {
   'PLA':   { n3f: 45, n3s: 45, n3f_hours: 12, n3s_hours: 12 },
   'PETG':  { n3f: 65, n3s: 65, n3f_hours: 12, n3s_hours: 12 },
   'TPU':   { n3f: 65, n3s: 75, n3f_hours: 12, n3s_hours: 18 },
@@ -1882,7 +1883,7 @@ function PrinterCard({
   cameraViewMode?: 'window' | 'embedded';
   onOpenEmbeddedCamera?: (printerId: number, printerName: string) => void;
   checkPrinterFirmware?: boolean;
-  dryingPresets?: Record<string, { n3f: number; n3s: number; n3f_hours: number; n3s_hours: number }>;
+  dryingPresets?: Record<string, DryingPreset>;
   requirePlateClear?: boolean;
   selectionMode?: boolean;
   isSelected?: boolean;
@@ -4879,8 +4880,9 @@ function PrinterCard({
                                           setDryingPopoverAmsId(null);
                                         } else {
                                           const firstTray = ams.tray.find(t => t.tray_type);
-                                          const filType = (firstTray?.tray_type || 'PLA').split(' ')[0].toUpperCase();
-                                          const preset = dryingPresets[filType] || dryingPresets['PLA'];
+                                          const filType = resolveDryingPresetKey(firstTray?.tray_type, dryingPresets);
+                                          // Only reachable if a custom preset set dropped PLA itself.
+                                          const preset = dryingPresets[filType] ?? DRYING_PRESETS['PLA'];
                                           const moduleType = ams.module_type as 'n3f' | 'n3s';
                                           setDryingFilament(filType);
                                           setDryingTemp(preset[moduleType] || preset.n3f);
@@ -5429,8 +5431,9 @@ function PrinterCard({
                                         setDryingPopoverAmsId(null);
                                       } else {
                                         const firstTray = ams.tray.find(t => t.tray_type);
-                                        const filType = (firstTray?.tray_type || 'PLA').split(' ')[0].toUpperCase();
-                                        const preset = dryingPresets[filType] || dryingPresets['PLA'];
+                                        const filType = resolveDryingPresetKey(firstTray?.tray_type, dryingPresets);
+                                        // Only reachable if a custom preset set dropped PLA itself.
+                                        const preset = dryingPresets[filType] ?? DRYING_PRESETS['PLA'];
                                         const moduleType = ams.module_type as 'n3f' | 'n3s';
                                         setDryingFilament(filType);
                                         setDryingTemp(preset[moduleType] || preset.n3f);
