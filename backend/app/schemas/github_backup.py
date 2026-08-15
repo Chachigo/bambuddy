@@ -218,10 +218,10 @@ REF_PATTERN = r"^(?:HEAD|[0-9a-fA-F]{7,40})$"
 class RestoreCategory(StrEnum):
     """Backup categories that can be restored.
 
-    Cloud profiles are deliberately absent: the backup collector never actually
-    writes ``cloud_profiles/*.json`` (it reads a "setting" list key the Bambu
-    Cloud API does not return), and the preset list it would collect carries no
-    setting payload to restore from. Tracked separately from #2656.
+    Cloud profiles are deliberately absent: restoring a preset means writing to
+    a Bambu or Orca Cloud account, which is a different operation from every
+    other category here — those land in the local database, or on a printer the
+    instance already owns. Tracked separately from #2656.
     """
 
     KPROFILES = "kprofiles"

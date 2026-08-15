@@ -23,9 +23,12 @@ Design notes worth knowing before editing:
 * **Categories are applied archives -> spools -> settings -> kprofiles.**
   Archives first because spool usage history references ``archive_id``;
   K-profiles last because they leave the database and talk to hardware.
-* **Cloud profiles are not restorable.** The backup collector never actually
-  writes ``cloud_profiles/*.json``, and the preset list it would write carries
-  no setting payload. Tracked separately from #2656.
+* **Cloud profiles are not restorable.** Restoring a preset means writing to a
+  Bambu or Orca Cloud account, which is a different operation from everything
+  else here — every other category lands in the local database or, for
+  K-profiles, on a printer the instance already owns. Tracked separately from
+  #2656. (The collector does write ``cloud_profiles/*.json`` as of #2717; the
+  earlier claim that it did not is no longer true.)
 """
 
 import asyncio
