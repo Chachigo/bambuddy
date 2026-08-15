@@ -4733,7 +4733,31 @@ function PrinterCard({
               const canHideExternalSpool = amsData.length > 0 && status.vt_tray.length > 0;
               const showExternalSpool = !(canHideExternalSpool && externalSpoolHidden);
               const isDualNozzle = printer.nozzle_count === 2 || status?.temperatures?.nozzle_2 !== undefined;
-              const filamentSlotClass = 'min-w-14';
+              const bodyScale = CARD_BODY_SCALE[cardSize] ?? 1;
+              // Rounded because 11 * 1.2 is 13.200000000000001 in binary
+              // floating point, and that lands verbatim in the DOM.
+              const scaledRem = (base: number) => `${Math.round(base * bodyScale * 1000) / 1000}rem`;
+              // Deliberately NOT scaled with the body (#1848). These AMS cards
+              // already grow to fill the row, so the 3.5rem is a floor they sit
+              // well above in practice -- raising it just costs a unit its place
+              // on the row. Losing one matters: a wrapped AMS-HT is then alone on
+              // its line, and flex-grow stretches its single slot across the whole
+              // card. The AMS-HT's own width does scale, below, because its
+              // readings sit beside the slot rather than under it.
+              const slotMinWidth = '3.5rem';
+              const filamentSlotStyle: React.CSSProperties = { minWidth: slotMinWidth };
+              // The AMS-HT holds a single spool, and its slot is the only thing
+              // on that row able to grow -- so it swallowed every spare pixel and
+              // shoved the temperature and humidity hard against the card's edge.
+              // Capping it at roughly two ordinary slots keeps the readings clear
+              // of the edge; the cap scales because the text inside the slot does.
+              const htSlotStyle: React.CSSProperties = {
+                minWidth: slotMinWidth,
+                maxWidth: scaledRem(7.25),
+              };
+              const slotGridStyle = (columns: number): React.CSSProperties => ({
+                gridTemplateColumns: `repeat(${columns}, minmax(${slotMinWidth}, 1fr))`,
+              });
               // #1762 (comment 2): while a print is running/paused, overlay a small
               // "P1 / P2 / P3" pill on each slot referenced by the active print's
               // mapping. Catches the reporter's scenario — "any X1C" queue job
@@ -4746,7 +4770,7 @@ function PrinterCard({
               const getAmsCardStyle = (slotCount: number): React.CSSProperties => {
                 const boundedSlotCount = Math.max(1, slotCount);
                 const gapCount = Math.max(0, boundedSlotCount - 1);
-                const minWidth = `calc(${boundedSlotCount} * 3.5rem + ${gapCount} * 0.25rem + 1rem)`;
+                const minWidth = `calc(${boundedSlotCount} * ${slotMinWidth} + ${gapCount} * 0.25rem + 1rem)`;
                 return {
                   flex: `1 1 ${minWidth}`,
                   minWidth,
@@ -4914,7 +4938,7 @@ function PrinterCard({
                               </div>
                             )}
                             {/* Slots grid: 4 columns - always render 4 slots */}
-                            <div className="grid w-full grid-cols-[repeat(4,minmax(3.5rem,1fr))] gap-1">
+                            <div className="grid w-full gap-1" style={slotGridStyle(4)}>
                               {[0, 1, 2, 3].map((slotIdx) => {
                                 // Find tray data for this slot (may be undefined if data incomplete)
                                 // Use array index if available, as tray.id may not always be set
@@ -5057,7 +5081,7 @@ function PrinterCard({
 
                                 // Wrapper with menu button, dropdown, and loading overlay (outside hover card)
                                 return (
-                                  <div key={slotIdx} className={`relative group w-full ${filamentSlotClass}`}>
+                                  <div key={slotIdx} className="relative group w-full" style={filamentSlotStyle}>
                                     {/* Loading overlay during RFID re-read */}
                                     {isRefreshing && (
                                       <div className="absolute inset-0 bg-bambu-dark-tertiary/80 rounded flex items-center justify-center z-20">
@@ -5351,7 +5375,19 @@ function PrinterCard({
                         // like regular AMS), so they need more horizontal room than a 1-slot basis.
                         // Without this override, the L view squishes HT into a sliver next to the
                         // 4-slot AMS neighbors.
-                        const htCardStyle: React.CSSProperties = { flex: '1 1 11rem', minWidth: '11rem' };
+                        // 11rem holds one slot plus the temperature/humidity
+                        // column beside it; both grow with the body scale.
+                        const htCardWidth = scaledRem(11);
+                        const htCardStyle: React.CSSProperties = {
+                          flex: `1 1 ${htCardWidth}`,
+                          minWidth: htCardWidth,
+                          // An AMS-HT is never wider than a full AMS. Without a
+                          // ceiling, a unit that wraps onto a line of its own is
+                          // the only flex item there and grow stretches its single
+                          // slot across the entire card, leaving the readings
+                          // stranded at the far edge.
+                          maxWidth: `calc(4 * ${slotMinWidth} + 3 * 0.25rem + 1rem)`,
+                        };
                         return (
                           <div key={ams.id} style={htCardStyle} className="min-w-0 p-2 bg-bambu-dark rounded-[10px] space-y-1">
                             {/* Row 1: Label + Nozzle + Drying */}
@@ -5442,7 +5478,7 @@ function PrinterCard({
                             {/* Row 2: Slot (left) + Stats (right stacked) */}
                             <div className="flex gap-1.5 max-[550px]:flex-col max-[550px]:items-start">
                               {/* Slot wrapper with loading overlay */}
-                              <div className="relative group min-w-14 flex-1">
+                              <div className="relative group flex-1" style={htSlotStyle}>
                                 {/* Loading overlay during RFID re-read */}
                                 {isHtRefreshing && (
                                   <div className="absolute inset-0 bg-bambu-dark-tertiary/80 rounded flex items-center justify-center z-20">
@@ -5629,7 +5665,7 @@ function PrinterCard({
                           <div className="flex w-full min-h-7 items-center gap-1.5 rounded-lg bg-bambu-dark-secondary px-2 py-1">
                             <span className="block min-w-0 flex-1 truncate text-[length:var(--pc-t10,10px)] text-white font-medium">{t('printers.external')}</span>
                           </div>
-                          <div className={`grid w-full ${status.vt_tray.length > 1 ? 'grid-cols-[repeat(2,minmax(3.5rem,1fr))]' : 'grid-cols-[minmax(3.5rem,1fr)]'} gap-1`}>
+                          <div className="grid w-full gap-1" style={slotGridStyle(status.vt_tray.length > 1 ? 2 : 1)}>
                             {[...status.vt_tray].sort((a, b) => (a.id ?? 254) - (b.id ?? 254)).map((extTray) => {
                               const extTrayId = extTray.id ?? 254;
                               // On dual-nozzle (H2C/H2D), tray_now=254 means "external spool"
@@ -5721,7 +5757,7 @@ function PrinterCard({
                               );
 
                               return (
-                                <div key={extTrayId} className={`relative group w-full ${filamentSlotClass}`}>
+                                <div key={extTrayId} className="relative group w-full" style={filamentSlotStyle}>
                                   {!isEmpty ? (
                                     <FilamentHoverCard
                                       data={extFilamentData}
