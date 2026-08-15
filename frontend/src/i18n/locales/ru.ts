@@ -3751,6 +3751,12 @@ export default {
     },
   },
   projects: {
+    parentLabel: "Родительский проект",
+    parentNone: "Нет (проект верхнего уровня)",
+    parentHint: "Вложите этот проект в другой, чтобы его показатели суммировались в главном проекте",
+    partOf: "Часть проекта {{name}}",
+    subProjectCount: "Подпроектов: {{count}}",
+    subProjectsOf: "Подпроекты проекта {{name}}",
     title: "Проекты",
     subtitle: "Организация и отслеживание проектов 3D-печати",
     newProject: "Новый проект",
@@ -3890,6 +3896,12 @@ export default {
     },
     subProjects: {
       title: "Подпроекты ({{count}})",
+      jobs: "Заданий: {{count}}",
+    },
+    rollup: {
+      title: "Включая подпроекты: {{count}}",
+      progress: "Общий прогресс",
+      percentComplete: "Завершено {{percent}}%",
     },
     notes: {
       title: "Заметки",

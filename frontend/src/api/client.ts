@@ -908,12 +908,21 @@ export interface ProjectStats {
   bom_cost: number;
 }
 
+// A sub-project as listed on its parent's page. The figures cover the child's
+// own subtree, so the listed rows add up to the parent's roll-up minus the
+// parent's own prints (#1264).
 export interface ProjectChildPreview {
   id: number;
   name: string;
   color: string | null;
   status: string;
   progress_percent: number | null;
+  descendant_count: number;
+  total_archives: number;
+  completed_prints: number;
+  total_print_time_hours: number;
+  total_filament_grams: number;
+  total_cost: number;  // Filament + energy + BOM, matching the parent's cost card
 }
 
 export interface Project {
@@ -936,9 +945,13 @@ export interface Project {
   parent_id: number | null;
   parent_name: string | null;
   children: ProjectChildPreview[];
+  descendant_count: number;  // Sub-projects at any depth beneath this one (#1264)
   created_at: string;
   updated_at: string;
   stats?: ProjectStats;
+  // This project's numbers combined with every sub-project's. Null when there
+  // are none, since it would only repeat `stats` (#1264).
+  rollup_stats?: ProjectStats | null;
   url: string | null;  // External link rendered next to project name on the card (#1155)
   cover_image_filename: string | null;  // Filename within project attachments dir (#1155)
 }
@@ -985,6 +998,8 @@ export interface ProjectListItem {
   failed_count: number;  // Sum of quantities for failed prints
   queue_count: number;
   progress_percent: number | null;  // Plates progress
+  parent_id: number | null;  // #1264 — set when this is a sub-project
+  child_count: number;  // #1264 — direct sub-projects only
   archives: ArchivePreview[];
   url: string | null;  // #1155
   cover_image_filename: string | null;  // #1155
