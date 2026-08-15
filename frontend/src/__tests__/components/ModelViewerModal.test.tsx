@@ -31,6 +31,10 @@ vi.mock('../../components/GcodeViewer', () => ({
 
 vi.mock('../../utils/slicer', () => ({
   openInSlicer: vi.fn(),
+  resolveDesktopSlicer: vi.fn(
+    (openInSlicer?: string, preferredSlicer?: string) =>
+      (openInSlicer ?? preferredSlicer ?? 'bambu_studio') as 'bambu_studio' | 'orcaslicer',
+  ),
 }));
 
 const mockCapabilities = {
@@ -517,12 +521,12 @@ describe('ModelViewerModal', () => {
       });
     });
 
-    it('disables Open in Slicer for non-3mf library files', async () => {
+    it('disables Open in Slicer for library files that cannot be handed to a slicer', async () => {
       render(
         <ModelViewerModal
           libraryFileId={1}
-          title="Model.stl"
-          fileType="stl"
+          title="Model.gcode"
+          fileType="gcode"
           onClose={mockOnClose}
         />
       );
@@ -649,12 +653,60 @@ describe('ModelViewerModal', () => {
       expect(screen.queryByText('Open in OrcaSlicer')).not.toBeInTheDocument();
     });
 
+    it('closes the split dropdown on Escape without closing the modal', async () => {
+      render(
+        <ModelViewerModal
+          archiveId={1}
+          title="Test Model"
+          onClose={mockOnClose}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Open in Slicer' })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'More slicer options' }));
+      await waitFor(() => {
+        expect(screen.getByRole('menu')).toBeInTheDocument();
+      });
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(mockOnClose).not.toHaveBeenCalled();
+    });
+
+    it('closes the split dropdown on an outside click without closing the modal', async () => {
+      render(
+        <ModelViewerModal
+          archiveId={1}
+          title="Test Model"
+          onClose={mockOnClose}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Open in Slicer' })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'More slicer options' }));
+      await waitFor(() => {
+        expect(screen.getByRole('menu')).toBeInTheDocument();
+      });
+
+      fireEvent.mouseDown(document.body);
+
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+      expect(mockOnClose).not.toHaveBeenCalled();
+    });
+
     it('does not render a split chevron when the file cannot open in a slicer', async () => {
       render(
         <ModelViewerModal
           libraryFileId={1}
-          title="Model.stl"
-          fileType="stl"
+          title="Model.gcode"
+          fileType="gcode"
           onClose={mockOnClose}
         />
       );
@@ -666,7 +718,28 @@ describe('ModelViewerModal', () => {
       expect(screen.queryByRole('button', { name: 'More slicer options' })).not.toBeInTheDocument();
     });
 
-    it('renders a plain Slice button without a split chevron for non-handoff files', async () => {
+    it('offers the desktop handoff for an STL library file', async () => {
+      render(
+        <ModelViewerModal
+          libraryFileId={1}
+          title="Model.stl"
+          fileType="stl"
+          onClose={mockOnClose}
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Open in Slicer' })).toBeEnabled();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: 'More slicer options' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Open in OrcaSlicer')).toBeInTheDocument();
+      });
+    });
+
+    it('offers the split Slice button for an STL when the slicer API is enabled', async () => {
       server.use(
         http.get('/api/v1/settings/', () => {
           return HttpResponse.json({ use_slicer_api: true });
@@ -687,7 +760,12 @@ describe('ModelViewerModal', () => {
         expect(screen.getByRole('button', { name: 'Slice' })).toBeInTheDocument();
       });
 
-      expect(screen.queryByRole('button', { name: 'More slicer options' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'More slicer options' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Open in Bambu Studio')).toBeInTheDocument();
+        expect(screen.getByText('Open in OrcaSlicer')).toBeInTheDocument();
+      });
     });
   });
 });

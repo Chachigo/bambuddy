@@ -29,6 +29,19 @@ export type SlicerType = 'bambu_studio' | 'orcaslicer';
 type Platform = 'windows' | 'macos' | 'linux' | 'unknown';
 
 /**
+ * Resolve the desktop "Open in Slicer" target. Prefers an explicit
+ * `open_in_slicer` override (#1329), then falls back to the API slicer's
+ * `preferred_slicer`, then Bambu Studio. This is ONLY the URI-handoff target;
+ * the in-app SliceModal keeps using `preferred_slicer` for the sidecar.
+ */
+export function resolveDesktopSlicer(
+  openInSlicer?: SlicerType | null,
+  preferredSlicer?: SlicerType,
+): SlicerType {
+  return openInSlicer ?? preferredSlicer ?? 'bambu_studio';
+}
+
+/**
  * Detect the user's operating system
  */
 export function detectPlatform(): Platform {

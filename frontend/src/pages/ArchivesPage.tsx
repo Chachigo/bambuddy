@@ -64,7 +64,7 @@ import {
 import { api } from '../api/client';
 import { SliceModal } from '../components/SliceModal';
 import { RunWithPipelineModal } from '../components/RunWithPipelineModal';
-import { openInSlicer, type SlicerType } from '../utils/slicer';
+import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 import { formatDateTime, formatDateOnly, parseUTCDate, type TimeFormat, formatDuration } from '../utils/date';
 import { getCurrencySymbol } from '../utils/currency';
 import { getBedTypeInfo } from '../utils/bedType';
@@ -2956,7 +2956,7 @@ export function ArchivesPage() {
   // user hasn't explicitly chosen a different desktop slicer (#1329). This is
   // ONLY the URI-handoff target; the in-app SliceModal still uses
   // preferred_slicer for the sidecar.
-  const preferredSlicer: SlicerType = settings?.open_in_slicer || settings?.preferred_slicer || 'bambu_studio';
+  const preferredSlicer: SlicerType = resolveDesktopSlicer(settings?.open_in_slicer, settings?.preferred_slicer);
   const useSlicerApi = settings?.use_slicer_api ?? false;
   const currency = getCurrencySymbol(settings?.currency || 'USD');
 

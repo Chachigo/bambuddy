@@ -3808,6 +3808,7 @@ export default {
     scanFolder: '掃描',
     toast: {
       folderCreated: '資料夾已建立',
+      openInSlicerFailed: '無法在切片軟體中開啟',
       folderDeleted: '資料夾已刪除',
       fileDeleted: '檔案已刪除',
       filesDeleted: '已刪除 {{count}} 個檔案',
@@ -5416,6 +5417,7 @@ export default {
     openInSlicer: '在切片軟體中開啟',
     openInSlicerWith: '用{{slicer}}開啟',
     moreSlicerOptions: '更多切片軟體選項',
+    openInSlicerFailed: '無法在切片軟體中開啟',
     tabs: {
       model: '3D 模型',
       gcode: 'G-code 預覽',

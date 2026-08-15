@@ -3631,6 +3631,7 @@ export default {
     scanFolder: '스캔',
     toast: {
       folderCreated: '폴더 생성됨',
+      openInSlicerFailed: '슬라이서에서 열 수 없습니다',
       folderDeleted: '폴더 삭제됨',
       fileDeleted: '파일 삭제됨',
       filesDeleted: '{{count}}개 파일 삭제됨',
@@ -5163,6 +5164,7 @@ export default {
     openInSlicer: '슬라이서에서 열기',
     openInSlicerWith: '{{slicer}}에서 열기',
     moreSlicerOptions: '슬라이서 옵션 더 보기',
+    openInSlicerFailed: '슬라이서에서 열 수 없습니다',
     tabs: {
       model: '3D 모델',
       gcode: 'G-code 미리보기'

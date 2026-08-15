@@ -3820,6 +3820,7 @@ export default {
     scanFolder: 'スキャン',
     toast: {
       folderCreated: 'フォルダを作成しました',
+      openInSlicerFailed: 'スライサーで開けませんでした',
       folderDeleted: 'フォルダを削除しました',
       fileDeleted: 'ファイルを削除しました',
       filesDeleted: '{{count}}件のファイルを削除しました',
@@ -5428,6 +5429,7 @@ export default {
     openInSlicer: 'スライサーで開く',
     openInSlicerWith: '{{slicer}}で開く',
     moreSlicerOptions: 'その他のスライサーオプション',
+    openInSlicerFailed: 'スライサーで開けませんでした',
     tabs: {
       model: '3Dモデル',
       gcode: 'G-codeプレビュー',

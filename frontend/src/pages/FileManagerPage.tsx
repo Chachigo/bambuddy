@@ -74,7 +74,7 @@ import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
-import { openInSlicer, type SlicerType } from '../utils/slicer';
+import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
 
 type SortField = 'name' | 'date' | 'size' | 'type' | 'prints';
 type SortDirection = 'asc' | 'desc';
@@ -764,6 +764,7 @@ interface FileCardProps {
   onOpenInSlicer?: (file: LibraryFileListItem) => void;
   onRunPipeline?: (file: LibraryFileListItem) => void;
   useSlicerApi?: boolean;
+  canSlice?: boolean;
   onPreview3d?: (file: LibraryFileListItem) => void;
   onRename?: (file: LibraryFileListItem) => void;
   onGenerateThumbnail?: (file: LibraryFileListItem) => void;
@@ -776,10 +777,8 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, canSlice, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
   const [showActions, setShowActions] = useState(false);
-
-  const sliceDisabled = useSlicerApi ? !hasPermission('library:upload') : !hasPermission('library:read');
 
   return (
     <div
@@ -904,19 +903,19 @@ function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, 
                   {t('common.print')}
                 </button>
               )}
-              {isSliceableFilename(file.filename) && (onSlice || onOpenInSlicer) && (
+              {isSliceableFilename(file.filename) && (useSlicerApi ? onSlice : onOpenInSlicer) && (
                 <button
                   className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    !sliceDisabled ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
+                    canSlice ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
                   }`}
                   onClick={() => {
-                    if (sliceDisabled) return;
+                    if (!canSlice) return;
                     if (useSlicerApi) onSlice?.(file);
                     else onOpenInSlicer?.(file);
                     setShowActions(false);
                   }}
-                  disabled={sliceDisabled}
-                  title={sliceDisabled ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined}
+                  disabled={!canSlice}
+                  title={!canSlice ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined}
                 >
                   {useSlicerApi ? <Cog className="w-3.5 h-3.5" /> : <ExternalLink className="w-3.5 h-3.5" />}
                   {t('slice.action')}
@@ -1156,7 +1155,7 @@ export function FileManagerPage() {
     queryFn: () => api.getSettings() as Promise<AppSettings>,
   });
 
-  const preferredSlicer: SlicerType = settings?.open_in_slicer || settings?.preferred_slicer || 'bambu_studio';
+  const preferredSlicer: SlicerType = resolveDesktopSlicer(settings?.open_in_slicer, settings?.preferred_slicer);
 
   const handleOpenInSlicer = useCallback(async (file: LibraryFileListItem) => {
     try {
@@ -1164,18 +1163,26 @@ export function FileManagerPage() {
       const path = api.getLibrarySlicerDownloadUrl(file.id, token, file.filename);
       openInSlicer(`${window.location.origin}${path}`, preferredSlicer);
     } catch {
+      // Fallback to direct URL (works when auth is disabled). With auth on the
+      // slicer may then hit a 401, so surface the failure instead of making a
+      // permission denial look identical to "no slicer installed".
+      showToast(t('fileManager.toast.openInSlicerFailed'), 'error');
       const path = api.getLibraryFileDownloadUrl(file.id);
       openInSlicer(`${window.location.origin}${path}`, preferredSlicer);
     }
-  }, [preferredSlicer]);
+  }, [preferredSlicer, showToast, t]);
 
   // Slice permission: API mode needs upload rights, desktop handoff is a download.
+  // The handoff mirrors the backend's ownership check on the slicer-token
+  // endpoint (library:read_all / library:read_own); `library:read` is a legacy
+  // permission default groups don't carry, so requiring it would disable the
+  // handoff for Operators and Viewers.
   const canSlice = useCallback(() => {
     if (settings?.use_slicer_api) {
       return hasPermission('library:upload');
     }
-    return hasPermission('library:read');
-  }, [settings?.use_slicer_api, hasPermission]);
+    return hasAnyPermission('library:read_all', 'library:read_own', 'library:read');
+  }, [settings?.use_slicer_api, hasPermission, hasAnyPermission]);
   const { data: folders, isLoading: foldersLoading } = useQuery({
     queryKey: ['library-folders'],
     queryFn: () => api.getLibraryFolders(),
@@ -2454,6 +2461,7 @@ export function FileManagerPage() {
                     onOpenInSlicer={handleOpenInSlicer}
                     onRunPipeline={setRunPipelineFile}
                     useSlicerApi={settings?.use_slicer_api ?? false}
+                    canSlice={canSlice()}
                     onPreview3d={(f) => {
                       // Sliced files (.gcode / .gcode.3mf) open the same
                       // full-page gcode viewer the archive card uses, so

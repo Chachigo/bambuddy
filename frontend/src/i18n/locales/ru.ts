@@ -3623,6 +3623,7 @@ export default {
     scanFolder: "Сканировать",
     toast: {
       folderCreated: "Папка создана",
+      openInSlicerFailed: "Не удалось открыть в слайсере",
       folderDeleted: "Папка удалена",
       fileDeleted: "Файл удалён",
       filesDeleted: "Удалено файлов: {{count}}",
@@ -5151,6 +5152,7 @@ export default {
     openInSlicer: "Открыть в слайсере",
     openInSlicerWith: "Открыть в {{slicer}}",
     moreSlicerOptions: "Другие варианты слайсера",
+    openInSlicerFailed: "Не удалось открыть в слайсере",
     tabs: {
       model: "3D-модель",
       gcode: "Предпросмотр G-code",
