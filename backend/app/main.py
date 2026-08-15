@@ -5230,6 +5230,50 @@ def _subtask_name_from_filename(filename: str) -> str:
     return name
 
 
+# How the printer marks a subtask name it had to cut short. Observed on real
+# hardware at ~100 characters, but the cut-off is not a fixed character count
+# (a name with multibyte characters came back at 98), so match the marker
+# rather than a length.
+_SUBTASK_TRUNCATION_MARKER = "..."
+
+
+def _normalise_subtask_name(name: str) -> str:
+    """Canonical form for comparing a dispatched name against MQTT's echo.
+
+    The printer does not echo the name back verbatim: it substitutes
+    underscores for spaces. ``H2D_Carbon_Filter_(V2)_Body & Solid Lid`` is
+    dispatched and ``H2D_Carbon_Filter_(V2)_Body_&_Solid_Lid`` comes back.
+
+    The 3MF lookup in this module has always known that -- it builds
+    space-to-underscore variants of every candidate filename, and its
+    directory search normalises both sides before comparing. This exists so
+    the completion check reads the same rule from the same place instead of
+    growing its own, which is exactly how it came to disagree (#2829).
+    """
+    return name.strip().replace(" ", "_").casefold()
+
+
+def _subtask_names_match(expected: str, observed: str) -> bool:
+    """Whether two subtask names describe the same print.
+
+    Beyond the space/underscore substitution, the printer truncates long names
+    and marks the cut with ``...``. A truncated echo has to count as a match or
+    every print with a long name strands its queue item the same way.
+    """
+    expected_n = _normalise_subtask_name(expected)
+    observed_n = _normalise_subtask_name(observed)
+    if expected_n == observed_n:
+        return True
+
+    # Either side can be the truncated one: the printer truncates what it
+    # echoes, and an archive whose own filename was recorded from a previous
+    # truncated echo carries the marker too.
+    for full, cut in ((expected_n, observed_n), (observed_n, expected_n)):
+        if cut.endswith(_SUBTASK_TRUNCATION_MARKER) and full.startswith(cut[: -len(_SUBTASK_TRUNCATION_MARKER)]):
+            return True
+    return False
+
+
 async def _completion_belongs_to_queue_item(db, item, data: dict) -> bool:
     """Whether this completion event is plausibly about *item*'s print.
 
@@ -5257,7 +5301,7 @@ async def _completion_belongs_to_queue_item(db, item, data: dict) -> bool:
         return True
 
     expected = _subtask_name_from_filename(archive.filename)
-    if not expected or expected.casefold() == observed.casefold():
+    if not expected or _subtask_names_match(expected, observed):
         return True
 
     logging.getLogger(__name__).warning(

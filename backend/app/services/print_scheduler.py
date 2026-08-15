@@ -114,6 +114,39 @@ _PREHEAT_CANCEL_CHECK_SECONDS = 10.0
 _AIRDUCT_MODE_COOLING = 0
 _AIRDUCT_MODE_HEATING = 1
 
+# How long a queue row may stay 'printing' while its printer sits in a terminal
+# state before the scheduler closes it itself (#2829).
+#
+# A real completion arrives within seconds of the printer going terminal, so
+# five minutes is far outside the normal path — this only ever sees a row whose
+# completion was refused or never delivered. It is the whole cost of the
+# failure to the user, though: a stranded row blocks every later job for that
+# printer, so it should not be raised without reason.
+_STRANDED_PRINTING_GRACE_SECONDS = 300.0
+
+# gcode_state values that mean the print is over, mapped to the queue status
+# they imply. Mirrors the mapping in bambu_mqtt's completion detection
+# (FINISH -> completed, FAILED -> failed, anything else terminal -> aborted,
+# which the queue calls cancelled) so a recovered row cannot disagree with one
+# closed by the normal path.
+_TERMINAL_STATE_QUEUE_STATUS = {
+    "FINISH": "completed",
+    "FAILED": "failed",
+    "IDLE": "cancelled",
+}
+
+
+def _terminal_queue_status(state) -> str | None:
+    """Queue status implied by *state*, or None if the print is not over.
+
+    None for a disconnected printer as well as a busy one: a printer we are not
+    talking to has a stale ``state`` field that proves nothing about what it is
+    doing now.
+    """
+    if state is None or not getattr(state, "connected", False):
+        return None
+    return _TERMINAL_STATE_QUEUE_STATUS.get(getattr(state, "state", None))
+
 
 @dataclass
 class _KeepWarmEntry:
@@ -639,6 +672,12 @@ class PrintScheduler:
         # `notify_dispatch_cancelled` from the queue routes, consumed by
         # `_preheat_sleep`, and cleared when the dispatch exits.
         self._cancelled_dispatches: set[int] = set()
+        # printer_id -> monotonic time it was first seen terminal while one of
+        # its queue rows was still 'printing'. Reset by any non-terminal
+        # observation, so it measures an unbroken run rather than a total.
+        # In-memory on purpose: a restart re-arms the grace period, which only
+        # delays a recovery that is already the exceptional path (#2829).
+        self._terminal_since: dict[int, float] = {}
 
     async def run(self):
         """Main loop - check queue every interval."""
@@ -656,6 +695,7 @@ class PrintScheduler:
                 # briefly unreachable), instead of leaving the row wedged until
                 # the next restart.
                 await self._clear_stale_dispatch_claims()
+                await self._close_stranded_printing_items()
                 dispatched = await self.check_queue()
             except Exception as e:
                 logger.error("Scheduler error: %s", e)
@@ -663,6 +703,90 @@ class PrintScheduler:
             # Re-check quickly after a productive pass so a draining batch does
             # not stall behind the idle interval; otherwise sleep normally (#2555).
             await asyncio.sleep(self._fast_check_interval if dispatched else self._check_interval)
+
+    async def _close_stranded_printing_items(self) -> None:
+        """Close a ``printing`` row the completion event never closed (#2829).
+
+        ``on_print_complete`` refuses to close a row when the completion's
+        subtask name disagrees with the file the row was dispatched with, so a
+        completion meant for something else (the printer's own
+        ``auto_pa_line_calib_mode`` run, say) cannot end someone's job early.
+        The refusal has no way back, though: nothing else ever closes the row,
+        and ``check_queue`` treats every ``printing`` row as a busy printer, so
+        one bad comparison wedges that printer's queue until a human presses
+        cancel. That is what #2829's reporters hit, and the guard's own
+        docstring already called stranding the worse of the two failures.
+
+        This is the way back. When a row has been ``printing`` while its
+        printer sat in a terminal state for the whole grace period, the print
+        is over however the event was read, and the row is closed with the
+        status the printer's own state implies.
+
+        Deliberately conservative:
+
+        * Only a connected printer counts. A disconnected one has a stale
+          ``state`` and proves nothing.
+        * The clock is reset by any non-terminal observation, so this cannot
+          fire on a printer that is merely between stages.
+        * The grace period is far longer than the gap between a printer
+          finishing and its completion arriving, so the normal path always
+          wins the race and this only ever sees genuine strandings.
+
+        What it does *not* do is replay the completion's side effects --
+        notifications, billing, auto-off. It restores the queue, which is the
+        harm being undone; the archive was updated by the normal path
+        regardless, since only the queue block refuses. A recovery that
+        silently re-fired notifications minutes late would be its own bug.
+        """
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(PrintQueueItem)
+                    .where(PrintQueueItem.status == "printing")
+                    .where(PrintQueueItem.printer_id.is_not(None))
+                )
+                items = list(result.scalars().all())
+                if not items:
+                    self._terminal_since.clear()
+                    return
+
+                now = time.monotonic()
+                seen_printers: set[int] = set()
+                closed = False
+                for item in items:
+                    printer_id = item.printer_id
+                    seen_printers.add(printer_id)
+                    state = printer_manager.get_status(printer_id)
+                    status = _terminal_queue_status(state)
+                    if status is None:
+                        self._terminal_since.pop(printer_id, None)
+                        continue
+                    since = self._terminal_since.setdefault(printer_id, now)
+                    if now - since < _STRANDED_PRINTING_GRACE_SECONDS:
+                        continue
+
+                    item.status = status
+                    item.completed_at = datetime.now(timezone.utc)
+                    closed = True
+                    logger.warning(
+                        "Queue item %s was still 'printing' after printer %s reported %s for %.0fs — "
+                        "closing it as %s. Its completion event was never matched to it, which blocks "
+                        "every later job for this printer (#2829).",
+                        item.id,
+                        printer_id,
+                        getattr(state, "state", None),
+                        now - since,
+                        status,
+                    )
+                if closed:
+                    await db.commit()
+                for printer_id in list(self._terminal_since):
+                    if printer_id not in seen_printers:
+                        del self._terminal_since[printer_id]
+        except Exception as e:
+            # Best-effort, same as the claim sweep beside it: a recovery path
+            # that can itself break the scheduler loop is worse than the strand.
+            logger.error("Stranded-item sweep failed: %s", e)
 
     async def _clear_stale_dispatch_claims(self, *, at_startup: bool = False) -> None:
         """Clear dispatch claims with no live dispatch coroutine behind them (#2615).
