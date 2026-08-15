@@ -497,10 +497,11 @@ describe('SettingsPage', () => {
     // users never see the in-app Install button (which would no-op).
     const renderWithUpdateCheck = async (
       checkBody: Record<string, unknown>,
+      settingsOverrides: Record<string, unknown> = {},
     ) => {
       server.use(
         http.get('/api/v1/settings/', () =>
-          HttpResponse.json({ ...mockSettings, check_updates: true }),
+          HttpResponse.json({ ...mockSettings, check_updates: true, ...settingsOverrides }),
         ),
         http.get('/api/v1/updates/check', () => HttpResponse.json(checkBody)),
       );
@@ -553,6 +554,80 @@ describe('SettingsPage', () => {
       });
       expect(screen.queryByText(/Home Assistant Supervisor/i)).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /install update/i })).not.toBeInTheDocument();
+    });
+
+    // #2664: the bare command only works if the user is already standing in
+    // the directory holding their compose file, which is exactly the thing
+    // they came to the page not knowing.
+    const DOCKER_CHECK = {
+      update_available: true,
+      current_version: '0.2.4',
+      latest_version: '0.2.5',
+      release_name: '0.2.5',
+      release_notes: '',
+      release_url: 'https://example.invalid/r',
+      published_at: '2099-01-01T00:00:00Z',
+      is_docker: true,
+      is_ha_addon: false,
+      update_method: 'docker',
+    };
+
+    it('prefixes the command with cd when the backend detected a compose directory', async () => {
+      await renderWithUpdateCheck({ ...DOCKER_CHECK, compose_dir_detected: '/opt/bambuddy' });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('cd /opt/bambuddy && docker compose pull && docker compose up -d'),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('prefers the saved directory over the detected one', async () => {
+      await renderWithUpdateCheck(
+        { ...DOCKER_CHECK, compose_dir_detected: '/opt/guessed' },
+        { docker_compose_dir: '/srv/stacks/bambuddy' },
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('cd /srv/stacks/bambuddy && docker compose pull && docker compose up -d'),
+        ).toBeInTheDocument();
+      });
+      expect(screen.queryByText(/\/opt\/guessed/)).not.toBeInTheDocument();
+    });
+
+    it('quotes a directory containing a space so the cd does not split', async () => {
+      await renderWithUpdateCheck(DOCKER_CHECK, { docker_compose_dir: '/srv/bambu buddy' });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText('cd "/srv/bambu buddy" && docker compose pull && docker compose up -d'),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('copies the full command including the cd', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+      Object.defineProperty(window, 'isSecureContext', { value: true, configurable: true });
+
+      await renderWithUpdateCheck({ ...DOCKER_CHECK, compose_dir_detected: '/opt/bambuddy' });
+
+      const copy = await screen.findByRole('button', { name: /copy update command/i });
+      await userEvent.click(copy);
+
+      expect(writeText).toHaveBeenCalledWith(
+        'cd /opt/bambuddy && docker compose pull && docker compose up -d',
+      );
+    });
+
+    it('offers an editable compose directory field seeded with the detected path', async () => {
+      await renderWithUpdateCheck({ ...DOCKER_CHECK, compose_dir_detected: '/opt/bambuddy' });
+
+      const field = await screen.findByPlaceholderText('/opt/bambuddy');
+      // Placeholder, not value — the detected path is a guess the user has
+      // not accepted, so saving must not silently adopt it.
+      expect(field).toHaveValue('');
     });
 
     it('shows the installer-download link for Windows installer installs', async () => {

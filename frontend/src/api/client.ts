@@ -1260,6 +1260,8 @@ export interface AppSettings {
   mqtt_use_tls: boolean;
   // External URL for notifications
   external_url: string;
+  // Directory holding docker-compose.yml, shown in the update instructions (#2664)
+  docker_compose_dir: string;
   // Home Assistant integration
   ha_enabled: boolean;
   ha_url: string;
@@ -3229,6 +3231,10 @@ export interface UpdateCheckResult {
   is_windows_installer?: boolean;
   update_method?: 'docker' | 'git' | 'ha_addon' | 'windows_installer';
   installer_download_url?: string | null;
+  // Best-effort guess at the compose directory (#2664). Prefill only — the
+  // value the user saved lives on AppSettings.docker_compose_dir, so clearing
+  // that field falls back to this guess instead of resurrecting the old value.
+  compose_dir_detected?: string | null;
 }
 
 export interface UpdateStatus {

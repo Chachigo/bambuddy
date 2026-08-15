@@ -17,6 +17,7 @@ import { SlicerBundlesPanel } from '../components/SlicerBundlesPanel';
 import { SlicerPipelinesPanel } from '../components/SlicerPipelinesPanel';
 import { CameraTokensSection } from './CameraTokensPage';
 import { Collapsible } from '../components/Collapsible';
+import { CopyButton } from '../components/CopyButton';
 import { Button } from '../components/Button';
 import { SmartPlugCard } from '../components/SmartPlugCard';
 import { AddSmartPlugModal } from '../components/AddSmartPlugModal';
@@ -1347,6 +1348,21 @@ export function SettingsPage() {
       }
     }, 50);
   };
+
+  // #2664 (reporter pchulpjoost): `docker compose pull` only works from the
+  // directory holding the compose file, so the bare command the update box
+  // printed could not be pasted anywhere useful. The saved setting wins; when
+  // it is blank we fall back to whatever the backend could infer, and when
+  // that is blank too we print the command without a `cd` rather than a made-up
+  // path that would fail on paste.
+  const composeDir =
+    (localSettings?.docker_compose_dir ?? '').trim() || (updateCheck?.compose_dir_detected ?? '');
+  // Quoted only when it has to be. The backend restricts this field to path
+  // characters, so quotes, $ and backticks cannot be in it and double-quoting
+  // a path with a space is safe.
+  const composeUpdateCommand = composeDir
+    ? `cd ${/\s/.test(composeDir) ? `"${composeDir}"` : composeDir} && docker compose pull && docker compose up -d`
+    : 'docker compose pull && docker compose up -d';
 
   return (
     <CardDensityProvider density="dense">
@@ -2706,9 +2722,33 @@ export function SettingsPage() {
                         <p className="text-sm text-bambu-gray mb-2">
                           {t('settings.updateViaDocker')}
                         </p>
-                        <code className="block text-xs bg-bambu-dark p-2 rounded text-bambu-green font-mono">
-                          docker compose pull && docker compose up -d
-                        </code>
+                        <div className="flex items-start gap-1">
+                          <code className="flex-1 block text-xs bg-bambu-dark p-2 rounded text-bambu-green font-mono break-all select-all">
+                            {composeUpdateCommand}
+                          </code>
+                          <CopyButton
+                            value={composeUpdateCommand}
+                            titleKey="settings.copyUpdateCommand"
+                            copiedTitleKey="printers.copied"
+                            className="ml-0 p-2 rounded hover:bg-bambu-dark text-bambu-gray hover:text-white transition-colors flex-shrink-0"
+                            iconClassName="w-4 h-4"
+                          />
+                        </div>
+                        <label className="block mt-3">
+                          <span className="block text-xs text-bambu-gray mb-1">
+                            {t('settings.composeDirectory')}
+                          </span>
+                          <input
+                            type="text"
+                            value={localSettings?.docker_compose_dir ?? ''}
+                            onChange={(e) => updateSetting('docker_compose_dir', e.target.value)}
+                            placeholder={updateCheck?.compose_dir_detected || '/opt/bambuddy'}
+                            className="w-full px-3 py-2 bg-bambu-dark border border-bambu-dark-tertiary rounded text-sm text-white font-mono placeholder:text-bambu-gray/60 focus:outline-none focus:border-bambu-green"
+                          />
+                          <span className="block text-xs text-bambu-gray mt-1">
+                            {t('settings.composeDirectoryHint')}
+                          </span>
+                        </label>
                       </div>
                     ) : updateCheck?.update_method === 'windows_installer' ? (
                       <div className="mt-3 p-3 bg-bambu-dark-tertiary rounded-lg">
