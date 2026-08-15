@@ -108,9 +108,10 @@ _MQTT_SETTING_KEYS = {
 #   * bypass the lockout refusals ``update_settings`` enforces (a
 #     ``local_login_enabled=false`` with no enabled OIDC provider, or with no
 #     OIDC link on the caller, is a 400 there — #1589).
-#   * cross a permission boundary: /github-backup/restore is gated on
-#     GITHUB_RESTORE alone, so this would be a way to rewrite auth config
-#     without SETTINGS_UPDATE.
+#   * cross a permission boundary: a restore would be a way to rewrite auth
+#     config without SETTINGS_UPDATE. (The endpoint gates each category on the
+#     permission owning its rows now, but that is settings:update — still not
+#     the auth UI's own guards, which is what these keys actually need.)
 #
 # Auth is reconfigured through the auth UI, which has the guards. Restoring it
 # from a snapshot has no safe reading.
@@ -120,6 +121,25 @@ _PROTECTED_SETTING_KEYS = {
     "local_login_enabled",
     "setup_completed",
 }
+
+# The LDAP family, refused for the same reason and by prefix rather than by
+# name, so a key added to the schema later is refused by default.
+#
+# These are not "how the instance behaves" settings — together they name *which
+# directory server decides who you are*. auth.py reads them live from this table
+# on every login (see the ldap_keys list in _get_ldap_settings), so a restore
+# that writes them substitutes the authentication source wholesale:
+# ldap_server_url points at another directory, ldap_auto_provision creates a
+# local account for whoever it vouches for, and ldap_default_group decides what
+# that account gets — Administrators, if the backup says so.
+#
+# The companion rule does NOT cover this, which is the trap. ldap_enabled is
+# paired with ldap_bind_password there, but an *anonymous* bind is a working
+# config, so a backup that simply omits the password skips the refusal at the
+# _COMPANION_EXPOSURE_TOGGLES check and the toggle is written. Omitting a
+# credential is exactly what an attacker authoring this file would do — they own
+# the directory being pointed at, so they need no bind credential from us.
+_PROTECTED_SETTING_PREFIXES = ("ldap_",)
 
 # Nozzle diameters the backup collector iterates. A path outside this set means
 # the backup was written by a newer version, so accept it rather than dropping
@@ -175,7 +195,11 @@ def _is_blocked_setting_key(key: str) -> bool:
 
 
 def _is_protected_setting_key(key: str) -> bool:
-    return key in _PROTECTED_SETTING_KEYS
+    # Lowered for the prefix test for the same reason _is_blocked_setting_key
+    # lowers: the key comes from the backup's JSON, not from our own writer, so
+    # its casing is whatever the file says. An exact-match name stays exact —
+    # those four are ours and are only ever written lowercase.
+    return key in _PROTECTED_SETTING_KEYS or key.lower().startswith(_PROTECTED_SETTING_PREFIXES)
 
 
 # There used to be an ``_is_skipped_setting_key`` here, the union of the two
@@ -202,9 +226,16 @@ def _is_protected_setting_key(key: str) -> bool:
 # virtual_printer_enabled is largely vestigial post-migration — core/database.py
 # copies the rows into the virtual_printers table — but it is the same shape, and
 # refusing a vestigial toggle is a harmless no-op.
+#
+# ldap_enabled is deliberately NOT here. It was, paired with
+# ldap_bind_password — but this rule judges availability ("will the integration
+# work?"), and that is the wrong question for an authentication source. An
+# anonymous bind is a working config, so the pair let a backup omit the password
+# and have the toggle written; the whole LDAP family is refused by prefix above
+# instead. _is_protected_setting_key runs first in _plan_settings, so leaving the
+# entry here would be dead code that reads like coverage.
 _COMPANION_CREDENTIALS = {
     "prometheus_enabled": "prometheus_token",
-    "ldap_enabled": "ldap_bind_password",
     "mqtt_enabled": "mqtt_password",
     "ha_enabled": "ha_token",
     "virtual_printer_enabled": "virtual_printer_access_code",

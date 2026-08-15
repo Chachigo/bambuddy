@@ -109,9 +109,53 @@ class TestSettingKeyBlocklist:
         assert _is_blocked_setting_key(key) is False
         assert _is_protected_setting_key(key) is True
 
-    @pytest.mark.parametrize("key", ["currency", "ldap_enabled", "auth_secret_key"])
-    def test_protected_set_is_only_the_auth_policy_keys(self, key):
+    @pytest.mark.parametrize("key", ["currency", "auth_secret_key", "mqtt_enabled", "prometheus_enabled"])
+    def test_protected_set_does_not_swallow_ordinary_or_credential_keys(self, key):
         assert _is_protected_setting_key(key) is False
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "ldap_enabled",
+            "ldap_server_url",
+            "ldap_search_base",
+            "ldap_user_filter",
+            "ldap_security",
+            "ldap_group_mapping",
+            "ldap_auto_provision",
+            "ldap_ca_cert_path",
+            "ldap_default_group",
+            "ldap_bind_dn",
+            "LDAP_ENABLED",
+            "ldap_something_added_later",
+        ],
+    )
+    def test_the_whole_ldap_family_is_protected(self, key):
+        """Together these name *which directory decides who you are*.
+
+        ``auth.py`` reads them live from this table on every login, so a restore
+        that writes them substitutes the authentication source: point
+        ``ldap_server_url`` at another directory, set ``ldap_auto_provision``,
+        and ``ldap_default_group`` decides what the account it creates gets.
+
+        The companion rule did not cover this and could not: it pairs
+        ``ldap_enabled`` with ``ldap_bind_password`` and asks whether the
+        integration will *work*, and an anonymous bind works — so a payload that
+        simply omitted the password had its toggle written. Refused by prefix so
+        a key added to the LDAP schema later is refused by default, and matched
+        case-insensitively because the key comes from the backup's JSON rather
+        than from our own writer.
+        """
+        assert _is_protected_setting_key(key) is True
+
+    def test_ldap_enabled_is_not_also_a_companion_toggle(self):
+        """It was, and the pair is what let the family through.
+
+        Kept as a test rather than a comment because re-adding it would read as
+        tightening the rule while actually being dead code —
+        ``_is_protected_setting_key`` runs first in ``_plan_settings``.
+        """
+        assert "ldap_enabled" not in _COMPANION_CREDENTIALS
 
     def test_ha_token_from_env_is_deliberately_not_carved_out(self):
         """Recorded so the review's question about it is not re-litigated.
@@ -349,6 +393,39 @@ class TestCompanionCredentials:
         assert toggle not in await self._rows(db_session)
 
     @pytest.mark.asyncio
+    async def test_an_authored_ldap_payload_cannot_substitute_the_directory(self, db_session):
+        """The attack the companion rule could not see, refused end to end.
+
+        Anyone who can write to the backup repository can author this file, and
+        the shape that beat the old rule is the natural one for an attacker:
+        *omit* ``ldap_bind_password``. They own the directory being pointed at,
+        so they need no bind credential from us — and an anonymous bind is a
+        working config, which is exactly what the availability rule was built to
+        allow through.
+
+        Left unrefused, the next login against a fresh username binds to
+        ``ldap_server_url``, ``ldap_auto_provision`` creates the local account,
+        and ``ldap_default_group`` decides it is an Administrator. Overwrite-off
+        is enough on an instance that never configured LDAP: there are no rows
+        to skip.
+        """
+        tally = await self._restore(
+            db_session,
+            currency="EUR",
+            ldap_enabled="true",
+            ldap_server_url="ldaps://evil.example.com:636",
+            ldap_security="ldaps",
+            ldap_search_base="dc=evil,dc=com",
+            ldap_user_filter="(uid={username})",
+            ldap_auto_provision="true",
+            ldap_default_group="Administrators",
+        )
+
+        rows = await self._rows(db_session)
+        assert rows == {"currency": "EUR"}, "not one LDAP row may land"
+        assert any("authentication" in note.lower() for note in _messages(tally))
+
+    @pytest.mark.asyncio
     async def test_ha_toggle_is_refused_when_the_environment_has_no_token(self, db_session, monkeypatch):
         monkeypatch.delenv("HA_TOKEN", raising=False)
         await self._restore(db_session, ha_enabled="true", ha_token="s3cret", ha_url="http://ha.local")
@@ -508,14 +585,19 @@ class TestCompanionCredentials:
     async def test_the_availability_class_keeps_the_backup_credential_condition(self, db_session):
         """The other half of the same change: only Prometheus loses condition 2.
 
-        Absent is treated like blank here — an anonymous broker or bind is a
-        working config, so refusing it would be a false positive.
+        Absent is treated like blank here — an anonymous broker is a working
+        config, so refusing it would be a false positive.
+
+        LDAP used to be in this list and is not any more: the same reasoning that
+        makes an anonymous bind legitimate is what let an authored payload point
+        the instance at another directory, so the family is refused outright
+        rather than judged on availability. See
+        ``test_the_whole_ldap_family_is_protected``.
         """
-        await self._restore(db_session, mqtt_enabled="true", ldap_enabled="true", virtual_printer_enabled="true")
+        await self._restore(db_session, mqtt_enabled="true", virtual_printer_enabled="true")
 
         rows = await self._rows(db_session)
         assert rows["mqtt_enabled"] == "true"
-        assert rows["ldap_enabled"] == "true"
         assert rows["virtual_printer_enabled"] == "true"
 
     def test_every_exposure_toggle_is_a_companion_toggle(self):
@@ -564,12 +646,18 @@ class TestCompanionCredentials:
         assert not any("switched off" in note for note in _messages(tally))
 
     @pytest.mark.asyncio
-    async def test_an_anonymous_ldap_bind_is_not_a_false_positive(self, db_session):
-        """Same for a backup that carries the key with a blank value."""
-        tally = await self._restore(db_session, ldap_enabled="true", ldap_bind_password="   ")
+    async def test_a_blank_ldap_bind_password_no_longer_lets_the_toggle_through(self, db_session):
+        """The inverted control, and the reason the LDAP pair had to go.
 
-        assert (await self._rows(db_session))["ldap_enabled"] == "true"
-        assert not any("switched off" in note for note in _messages(tally))
+        A blank bind password used to read as "anonymous bind, a working config,
+        do not over-refuse". It reads the same way to an attacker authoring the
+        file, who wants no bind credential precisely because the directory is
+        theirs — so the availability question cannot be asked about an
+        authentication source at all.
+        """
+        await self._restore(db_session, ldap_enabled="true", ldap_bind_password="   ")
+
+        assert "ldap_enabled" not in await self._rows(db_session)
 
     @pytest.mark.asyncio
     async def test_turning_a_toggle_off_is_always_written(self, db_session):
