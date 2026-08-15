@@ -4869,6 +4869,7 @@ export default {
       confirmTitle: 'Yedekten geri yüklensin mi?',
       confirmMessage: 'Seçilen kategoriler bu commit\'ten geri yüklenecek. Eksik kayıtlar eklenir, mevcut kayıtlar olduğu gibi kalır.',
       confirmMessageOverwrite: 'Seçilen kategoriler bu commit\'ten geri yüklenecek ve yerelde bulunan kayıtların üzerine yazılacak. Bu işlem geri alınamaz.',
+      kprofilesOverwriteCaveat: 'K profilleri istisnadır: bir yuvaya yazmak yazıcıdaki kalibrasyonu her zaman değiştirir.',
       tally: '{{restored}} geri yüklendi, {{skipped}} atlandı, {{failed}} başarısız',
       reloadHint: 'Geri yüklenen verilerin her yerde görünmesi için Bambuddy\'yi yeniden yükleyin.',
       failed: 'Geri yükleme başarısız oldu.',

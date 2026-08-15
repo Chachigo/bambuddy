@@ -4891,6 +4891,7 @@ export default {
       confirmTitle: 'Aus Backup wiederherstellen?',
       confirmMessage: 'Die ausgewählten Kategorien werden aus diesem Commit wiederhergestellt. Fehlende Einträge werden ergänzt, vorhandene bleiben unverändert.',
       confirmMessageOverwrite: 'Die ausgewählten Kategorien werden aus diesem Commit wiederhergestellt und lokal vorhandene Einträge überschrieben. Dies kann nicht rückgängig gemacht werden.',
+      kprofilesOverwriteCaveat: 'K-Profile sind die Ausnahme: Das Schreiben eines Slots ersetzt immer die Kalibrierung auf dem Drucker.',
       tally: '{{restored}} wiederhergestellt, {{skipped}} übersprungen, {{failed}} fehlgeschlagen',
       reloadHint: 'Bambuddy neu laden, damit die wiederhergestellten Daten überall erscheinen.',
       failed: 'Wiederherstellung fehlgeschlagen.',

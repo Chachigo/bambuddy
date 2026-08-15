@@ -131,6 +131,16 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
   );
   const selectedCount = selectedCategories.length;
 
+  // Overwrite-off tells the user that existing entries stay as they are, and for
+  // three of the four categories it keeps that promise. K-profiles cannot:
+  // _restore_kprofiles takes no overwrite flag, because writing a slot is always
+  // an overwrite on the printer — resolving the live cali_idx and publishing
+  // extrusion_cali_set replaces whatever calibration that slot holds. The
+  // backend does say so, but as a note in the result panel, i.e. after the MQTT
+  // send has already happened and cannot be taken back. So the one screen that
+  // explains overwrite-off has to carry the exception too, before the click.
+  const warnKprofilesOverwrite = !overwriteExisting && selectedCategories.includes('kprofiles');
+
   const restoreMutation = useMutation({
     mutationFn: () =>
       api.restoreFromGitHub({
@@ -440,6 +450,11 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
                                 ) : null}
                               </div>
                               {info?.detail && <div className="text-xs text-bambu-gray">{info.detail}</div>}
+                              {category.id === 'kprofiles' && isChecked && warnKprofilesOverwrite && (
+                                <div className="text-xs text-yellow-700 dark:text-yellow-200">
+                                  {t('backup.restoreFromGit.kprofilesOverwriteCaveat')}
+                                </div>
+                              )}
                             </div>
                           </label>
                         );
@@ -525,7 +540,9 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
           message={
             overwriteExisting
               ? t('backup.restoreFromGit.confirmMessageOverwrite')
-              : t('backup.restoreFromGit.confirmMessage')
+              : warnKprofilesOverwrite
+                ? `${t('backup.restoreFromGit.confirmMessage')} ${t('backup.restoreFromGit.kprofilesOverwriteCaveat')}`
+                : t('backup.restoreFromGit.confirmMessage')
           }
           confirmText={t('backup.restore')}
           isLoading={isRestoring}

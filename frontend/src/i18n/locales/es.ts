@@ -4899,6 +4899,7 @@ export default {
       confirmTitle: '¿Restaurar desde la copia?',
       confirmMessage: 'Las categorías seleccionadas se restaurarán desde este commit. Se añaden las entradas que falten y las existentes se mantienen igual.',
       confirmMessageOverwrite: 'Las categorías seleccionadas se restaurarán desde este commit y se sobrescribirán las entradas que ya existan localmente. Esto no se puede deshacer.',
+      kprofilesOverwriteCaveat: 'Los perfiles K son la excepción: escribir una ranura siempre reemplaza la calibración en la impresora.',
       tally: '{{restored}} restaurados, {{skipped}} omitidos, {{failed}} fallidos',
       reloadHint: 'Recarga Bambuddy para que los datos restaurados aparezcan en todas partes.',
       failed: 'La restauración ha fallado.',

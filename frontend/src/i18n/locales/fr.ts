@@ -4880,6 +4880,7 @@ export default {
       confirmTitle: 'Restaurer depuis la sauvegarde ?',
       confirmMessage: 'Les catégories sélectionnées seront restaurées depuis ce commit. Les entrées manquantes sont ajoutées, les existantes restent inchangées.',
       confirmMessageOverwrite: 'Les catégories sélectionnées seront restaurées depuis ce commit et les entrées déjà présentes localement seront écrasées. Cette action est irréversible.',
+      kprofilesOverwriteCaveat: "Les profils K sont l'exception : écrire un emplacement remplace toujours la calibration sur l'imprimante.",
       tally: '{{restored}} restaurés, {{skipped}} ignorés, {{failed}} en échec',
       reloadHint: 'Rechargez Bambuddy pour que les données restaurées apparaissent partout.',
       failed: 'Échec de la restauration.',

@@ -63,6 +63,17 @@ const mockPreview = {
   ],
 };
 
+// The default fixture has no K-profiles in the commit, which is the one category
+// whose row cannot be selected there.
+const mockPreviewWithKprofiles = {
+  ...mockPreview,
+  categories: mockPreview.categories.map((c) =>
+    c.category === 'kprofiles'
+      ? { category: 'kprofiles', available: true, item_count: 3, detail: null, detail_code: null, detail_params: {} }
+      : c
+  ),
+};
+
 type JsonBody = Record<string, unknown>;
 
 function mockEndpoints(overrides: { preview?: JsonBody; commits?: JsonBody } = {}) {
@@ -327,6 +338,69 @@ describe('GitHubRestoreModal', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/This cannot be undone/)).toBeInTheDocument();
+    });
+  });
+
+  // Overwrite-off says existing entries stay as they are. K-profiles are the one
+  // category that cannot honour that — writing a slot always replaces the
+  // calibration on the printer — and the backend's note saying so only arrives
+  // in the result panel, after the MQTT send. So the disclosure has to be on the
+  // screen where the promise is made, before the user commits to it.
+  describe('the K-profile exception to overwrite-off', () => {
+    beforeEach(() => {
+      mockEndpoints({ preview: mockPreviewWithKprofiles as unknown as JsonBody });
+    });
+
+    it('appears beside the category as soon as it is selected', async () => {
+      render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+      const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
+      await userEvent.click(checkboxes[3]);
+
+      await waitFor(() => {
+        expect(screen.getByText(/K-profiles are the exception/)).toBeInTheDocument();
+      });
+
+      // And it goes once overwrite is on, where nothing is promising otherwise.
+      await userEvent.click(screen.getByRole('switch'));
+      expect(screen.queryByText(/K-profiles are the exception/)).not.toBeInTheDocument();
+    });
+
+    it('is part of the confirmation the user actually clicks through', async () => {
+      render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+      const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
+      await userEvent.click(checkboxes[3]);
+      await userEvent.click(screen.getByRole('button', { name: /Restore$/ }));
+
+      await waitFor(() => screen.getByText('Restore from backup?'));
+      expect(
+        screen.getByText(/existing entries stay as they are\. K-profiles are the exception/)
+      ).toBeInTheDocument();
+    });
+
+    it('stays out of the confirmation for the categories that do keep the promise', async () => {
+      render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+      const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
+      await userEvent.click(checkboxes[1]);
+      await userEvent.click(screen.getByRole('button', { name: /Restore$/ }));
+
+      await waitFor(() => screen.getByText('Restore from backup?'));
+      expect(screen.getByText(/existing entries stay as they are\.$/)).toBeInTheDocument();
+      expect(screen.queryByText(/K-profiles are the exception/)).not.toBeInTheDocument();
+    });
+
+    it('is redundant with overwrite on, so it is not shown there', async () => {
+      render(<GitHubRestoreModal onClose={vi.fn()} />);
+
+      const checkboxes = await waitFor(() => screen.getAllByRole('checkbox') as HTMLInputElement[]);
+      await userEvent.click(checkboxes[3]);
+      await userEvent.click(screen.getByRole('switch'));
+      await userEvent.click(screen.getByRole('button', { name: /Restore$/ }));
+
+      await waitFor(() => screen.getByText(/This cannot be undone/));
+      expect(screen.queryByText(/K-profiles are the exception/)).not.toBeInTheDocument();
     });
   });
 

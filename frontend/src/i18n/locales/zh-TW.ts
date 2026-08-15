@@ -4879,6 +4879,7 @@ export default {
       confirmTitle: '要從備份還原嗎？',
       confirmMessage: '將從此提交還原所選類別。缺少的項目會被新增，既有項目保持不變。',
       confirmMessageOverwrite: '將從此提交還原所選類別，並覆寫本機已存在的項目。此操作無法復原。',
+      kprofilesOverwriteCaveat: 'K 值設定檔是例外：寫入插槽一定會取代印表機上的校準資料。',
       tally: '已還原 {{restored}} 筆、略過 {{skipped}} 筆、失敗 {{failed}} 筆',
       reloadHint: '請重新載入 Bambuddy，讓還原的資料在各處生效。',
       failed: '還原失敗。',

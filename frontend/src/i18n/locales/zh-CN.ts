@@ -4879,6 +4879,7 @@ export default {
       confirmTitle: '要从备份恢复吗？',
       confirmMessage: '将从此提交恢复所选类别。缺失的条目会被添加，已有条目保持不变。',
       confirmMessageOverwrite: '将从此提交恢复所选类别，并覆盖本地已存在的条目。此操作无法撤销。',
+      kprofilesOverwriteCaveat: 'K 值配置是例外：写入插槽总会替换打印机上的校准数据。',
       tally: '已恢复 {{restored}} 项，跳过 {{skipped}} 项，失败 {{failed}} 项',
       reloadHint: '请重新加载 Bambuddy，以便恢复的数据在各处生效。',
       failed: '恢复失败。',

@@ -4879,6 +4879,7 @@ export default {
       confirmTitle: 'Restaurar do backup?',
       confirmMessage: 'As categorias selecionadas serão restauradas deste commit. As entradas ausentes são adicionadas e as existentes permanecem como estão.',
       confirmMessageOverwrite: 'As categorias selecionadas serão restauradas deste commit, sobrescrevendo as entradas que já existem localmente. Não é possível desfazer.',
+      kprofilesOverwriteCaveat: 'Os perfis K são a exceção: gravar um slot sempre substitui a calibração na impressora.',
       tally: '{{restored}} restaurados, {{skipped}} ignorados, {{failed}} com falha',
       reloadHint: 'Recarregue o Bambuddy para que os dados restaurados apareçam em todos os lugares.',
       failed: 'Falha na restauração.',

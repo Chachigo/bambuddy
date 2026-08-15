@@ -4934,6 +4934,7 @@ export default {
       confirmTitle: 'Restore from backup?',
       confirmMessage: 'The selected categories will be restored from this commit. Missing entries are added; existing entries stay as they are.',
       confirmMessageOverwrite: 'The selected categories will be restored from this commit, overwriting entries that already exist locally. This cannot be undone.',
+      kprofilesOverwriteCaveat: 'K-profiles are the exception: writing a slot always replaces the calibration on the printer.',
       tally: '{{restored}} restored, {{skipped}} skipped, {{failed}} failed',
       reloadHint: 'Reload Bambuddy so the restored data appears everywhere.',
       failed: 'Restore failed.',

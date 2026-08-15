@@ -4879,6 +4879,7 @@ export default {
       confirmTitle: 'Ripristinare dal backup?',
       confirmMessage: 'Le categorie selezionate verranno ripristinate da questo commit. Le voci mancanti vengono aggiunte, quelle esistenti restano invariate.',
       confirmMessageOverwrite: 'Le categorie selezionate verranno ripristinate da questo commit sovrascrivendo le voci già presenti in locale. Operazione non annullabile.',
+      kprofilesOverwriteCaveat: "I profili K sono l'eccezione: scrivere uno slot sostituisce sempre la calibrazione sulla stampante.",
       tally: '{{restored}} ripristinati, {{skipped}} saltati, {{failed}} non riusciti',
       reloadHint: 'Ricarica Bambuddy per vedere i dati ripristinati in tutte le sezioni.',
       failed: 'Ripristino non riuscito.',

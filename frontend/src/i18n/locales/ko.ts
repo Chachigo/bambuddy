@@ -4656,6 +4656,7 @@ export default {
       confirmTitle: '백업에서 복원하시겠습니까?',
       confirmMessage: '선택한 항목을 이 커밋에서 복원합니다. 없는 항목은 추가되고 기존 항목은 그대로 유지됩니다.',
       confirmMessageOverwrite: '선택한 항목을 이 커밋에서 복원하고 로컬에 이미 있는 항목을 덮어씁니다. 이 작업은 취소할 수 없습니다.',
+      kprofilesOverwriteCaveat: 'K 프로파일은 예외입니다. 슬롯에 쓰면 프린터의 캘리브레이션이 항상 교체됩니다.',
       tally: '복원 {{restored}}개, 건너뜀 {{skipped}}개, 실패 {{failed}}개',
       reloadHint: '복원된 데이터가 모든 화면에 반영되도록 Bambuddy를 새로 고치세요.',
       failed: '복원에 실패했습니다.',

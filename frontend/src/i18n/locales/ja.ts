@@ -4891,6 +4891,7 @@ export default {
       confirmTitle: 'バックアップから復元しますか?',
       confirmMessage: '選択したカテゴリをこのコミットから復元します。不足しているエントリが追加され、既存のエントリはそのまま残ります。',
       confirmMessageOverwrite: '選択したカテゴリをこのコミットから復元し、ローカルに既存のエントリを上書きします。この操作は取り消せません。',
+      kprofilesOverwriteCaveat: 'Kプロファイルは例外です。スロットへの書き込みは、プリンター上のキャリブレーションを常に置き換えます。',
       tally: '復元 {{restored}} 件、スキップ {{skipped}} 件、失敗 {{failed}} 件',
       reloadHint: '復元したデータを全体に反映するには Bambuddy を再読み込みしてください。',
       failed: '復元に失敗しました。',
