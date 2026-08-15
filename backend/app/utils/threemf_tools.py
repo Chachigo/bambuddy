@@ -1099,6 +1099,24 @@ def expand_to_project_slots(zf: zipfile.ZipFile, used: list[dict]) -> list[dict]
     return out
 
 
+# BambuStudio serialises bool config options as string "1"/"0" in
+# project_settings.config, but forks / older versions occasionally write real
+# booleans or ints — accept anything that isn't unambiguously falsy. A missing
+# key counts as off: a 3MF that never declares `enable_support` gives us no
+# support intent to act on.
+_SUPPORTS_DISABLED_VALUES = (False, 0, "0", "false", "False", "", None)
+
+
+def supports_enabled_in_config(cfg: dict[str, object]) -> bool:
+    """Whether a 3MF's ``project_settings.config`` has supports switched on.
+
+    Shared by the callers that read support intent out of a source file so
+    they agree on what "on" means: the slot extractor below and the slice
+    route's process-preset support carry-over (#1881 / #2820).
+    """
+    return cfg.get("enable_support") not in _SUPPORTS_DISABLED_VALUES
+
+
 def extract_support_filament_slots_from_3mf(zf: zipfile.ZipFile) -> set[int]:
     """Slots referenced by the process settings for support material.
 
@@ -1124,12 +1142,7 @@ def extract_support_filament_slots_from_3mf(zf: zipfile.ZipFile) -> set[int]:
         return set()
     if not isinstance(cfg, dict):
         return set()
-    # BambuStudio serialises bool config options as string "1"/"0" in
-    # project_settings.config, but forks / older versions occasionally
-    # write real booleans or ints — accept anything that isn't
-    # unambiguously falsy.
-    enable = cfg.get("enable_support")
-    if enable in (False, 0, "0", "false", "False", "", None):
+    if not supports_enabled_in_config(cfg):
         return set()
     out: set[int] = set()
     for key in ("support_filament", "support_interface_filament"):

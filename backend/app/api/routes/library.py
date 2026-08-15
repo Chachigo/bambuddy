@@ -81,6 +81,7 @@ from backend.app.utils.threemf_tools import (
     extract_nozzle_mapping_from_3mf,
     extract_project_filaments_from_3mf,
     select_plate_gcode_name,
+    supports_enabled_in_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -3622,6 +3623,16 @@ _SOURCE_PROCESS_SUPPORT_KEYS_TO_PRESERVE = (
 def _patch_process_support_settings(process_json: str, source_3mf_bytes: bytes) -> str:
     """Overlay the source 3MF's support configuration onto the process JSON.
 
+    The carry is deliberately one-way: a source can switch supports *on*,
+    never off (#2820). The original #1881 rule was "source wins in both
+    directions", which quietly stripped supports from every custom process
+    preset that enabled them — a MakerWorld download nearly always ships
+    `enable_support: 0`, so the reporter's own preset (supports on, normal
+    (auto)) came back out of the slicer disabled and set to tree(auto).
+    Nothing is lost by not carrying the off direction: a process preset
+    with supports *on* is by definition a deliberate user preset, since
+    Bambu's shipped ones all ship them off.
+
     Only fires on 3MF sources — STL / STEP don't carry `project_settings.
     config`. Silently no-ops when the source doesn't have the config, has
     a malformed one, or when the process JSON isn't parseable — the slice
@@ -3639,6 +3650,8 @@ def _patch_process_support_settings(process_json: str, source_3mf_bytes: bytes) 
         return process_json
     if not isinstance(src_cfg, dict):
         return process_json
+    if not supports_enabled_in_config(src_cfg):
+        return process_json
 
     try:
         process_cfg = json.loads(process_json)
@@ -3647,9 +3660,15 @@ def _patch_process_support_settings(process_json: str, source_3mf_bytes: bytes) 
     if not isinstance(process_cfg, dict):
         return process_json
 
-    for key in _SOURCE_PROCESS_SUPPORT_KEYS_TO_PRESERVE:
-        if key in src_cfg:
-            process_cfg[key] = src_cfg[key]
+    carried = {key: src_cfg[key] for key in _SOURCE_PROCESS_SUPPORT_KEYS_TO_PRESERVE if key in src_cfg}
+    process_cfg.update(carried)
+    # Logged because this is the one layer of the process JSON the user
+    # can't see coming: the slice modal shows the picked preset's values,
+    # so a carried key silently disagrees with what was on screen.
+    logger.info(
+        "Carried support settings from the source 3MF onto the process preset: %s",
+        dict(sorted(carried.items())),
+    )
 
     return json.dumps(process_cfg)
 
