@@ -2397,12 +2397,6 @@ export default {
     slicerStallTimeout: 'Dilimleyici duraklama zaman asimi (dakika)',
     slicerStallTimeoutDescription: 'Sidecar bu sure boyunca ilerleme bildirmezse dilimleme iptal edilir. Ilerleme bildirmeye devam eden agir modeller ne kadar surerse sursun kesilmez. Ilerleme bildirmeyen sidecar surumleri bu degeri toplam sure siniri olarak kullanir.',
     slicerApiUrlDescription: 'Dilimleyici-API yardımcı bileşen konteynerinin URL\'si. SLICER_API_URL / BAMBU_STUDIO_API_URL ortam değişkeni varsayılanlarını kullanmak için boş bırakın.',
-    slicerBundlesRemoved: {
-      title: 'Dilimleyici Paketleri (kaldırıldı)',
-      description: 'Yazıcı Ön Ayar Paketi (.bbscfg) içe aktarma kaldırıldı. BambuStudio\'nun paket dışa aktarması yalnızca kullanıcı tarafından özelleştirilmiş ön ayarları içerir, bu nedenle içe aktarma hiçbir zaman standart süreçleri / filamentleri sağlamadı ve dilimleme gömülü ayarlara geri döndü.',
-      alternatives: 'Bireysel özelleştirmeler için Tekli Ön Ayar İçe Aktarma\'yı kullanın veya Bambu Cloud / Orca Cloud üzerinden senkronize edin. Standart ön ayarlar otomatik olarak dilimleyici sidecar\'ından gelir.',
-      lookupOrder: 'Dilimleme sırasında ön ayar arama sırası: 1) İçe aktarılmış (yerel), 2) Orca Cloud, 3) Bambu Cloud, 4) Standart (sidecar yedeği).',
-    },
     externalCameras: 'Harici Kameralar',
     costTracking: 'Maliyet Takibi',
     billingEnabled: 'Faturalandırmayı etkinleştir',

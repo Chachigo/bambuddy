@@ -2392,12 +2392,6 @@ export default {
     slicerStallTimeout: 'スライサー停止タイムアウト（分）',
     slicerStallTimeoutDescription: 'サイドカーからの進捗がこの時間なければスライスを中止します。進捗を報告し続ける重いモデルは、どれだけ時間がかかっても中断されません。進捗を報告しないサイドカーでは、この値が合計時間の上限になります。',
     slicerApiUrlDescription: 'slicer-APIサイドカーコンテナのURL。空のままにすると SLICER_API_URL / BAMBU_STUDIO_API_URL 環境変数のデフォルト値が使用されます。',
-    slicerBundlesRemoved: {
-      title: 'スライサーバンドル（削除済み）',
-      description: 'プリンタープリセットバンドル（.bbscfg）のインポートは削除されました。BambuStudioのバンドルエクスポートはユーザーがカスタマイズしたプリセットのみを含むため、インポートでは標準プロセス／フィラメントが提供されず、スライスは埋め込み設定にフォールバックしていました。',
-      alternatives: '個別カスタマイズには単一プリセットインポートを使うか、Bambu Cloud / Orca Cloudで同期してください。標準プリセットはスライサーサイドカーから自動的に提供されます。',
-      lookupOrder: 'スライス時のプリセット検索順: 1) インポート済み（ローカル）、2) Orca Cloud、3) Bambu Cloud、4) 標準（サイドカーのフォールバック）。',
-    },
     externalCameras: '外部カメラ',
     costTracking: 'コスト追跡',
     printsOnly: '印刷のみ',

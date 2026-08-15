@@ -2396,12 +2396,6 @@ export default {
     slicerStallTimeout: 'Tiempo de espera por inactividad del laminador (minutos)',
     slicerStallTimeoutDescription: 'Abandona un laminado tras este tiempo sin progreso del sidecar. Los modelos pesados que siguen informando progreso nunca se interrumpen, por mucho que tarden. Los sidecars que no informan progreso usan este valor como limite de tiempo total.',
     slicerApiUrlDescription: 'URL del contenedor auxiliar de la API del laminador. Déjelo en blanco para usar los valores predeterminados de las variables de entorno SLICER_API_URL / BAMBU_STUDIO_API_URL.',
-    slicerBundlesRemoved: {
-      title: 'Paquetes del laminador (eliminado)',
-      description: 'Se eliminó la importación de paquetes de preajustes de impresora (.bbscfg). La exportación de paquetes de BambuStudio solo incluye preajustes personalizados, por lo que la importación nunca entregaba procesos / filamentos estándar y el laminado recurría a la configuración incrustada.',
-      alternatives: 'Usa Importación de preajuste individual para personalizaciones, o sincroniza vía Bambu Cloud / Orca Cloud. Los preajustes estándar vienen del sidecar del laminador automáticamente.',
-      lookupOrder: 'Orden de búsqueda de preajustes al laminar: 1) Importado (local), 2) Orca Cloud, 3) Bambu Cloud, 4) Estándar (sidecar de respaldo).',
-    },
     externalCameras: 'Cámaras externas',
     costTracking: 'Seguimiento de costes',
     billingEnabled: 'Activar facturación',

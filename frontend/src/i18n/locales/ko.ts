@@ -2265,12 +2265,6 @@ export default {
     slicerStallTimeout: '슬라이서 정지 시간 제한(분)',
     slicerStallTimeoutDescription: '사이드카에서 이 시간 동안 진행 상황이 없으면 슬라이싱을 중단합니다. 진행 상황을 계속 보고하는 무거운 모델은 아무리 오래 걸려도 중단되지 않습니다. 진행 상황을 보고하지 않는 사이드카에서는 이 값이 전체 시간 제한으로 사용됩니다.',
     slicerApiUrlDescription: '슬라이서 API 사이드카 컨테이너의 URL. SLICER_API_URL / BAMBU_STUDIO_API_URL 환경 변수 기본값을 사용하려면 비워두세요.',
-    slicerBundlesRemoved: {
-      title: '슬라이서 번들 (제거됨)',
-      description: '프린터 프리셋 번들 (.bbscfg) 가져오기가 제거되었습니다. BambuStudio의 번들 내보내기에는 사용자 정의 프리셋만 포함되므로, 가져오기로는 표준 프로세스 / 필라멘트가 제공되지 않았고 슬라이싱은 임베디드 설정으로 되돌아갔습니다.',
-      alternatives: '개별 사용자 정의는 단일 프리셋 가져오기를, 또는 Bambu Cloud / Orca Cloud를 통해 동기화하세요. 표준 프리셋은 슬라이서 사이드카에서 자동으로 제공됩니다.',
-      lookupOrder: '슬라이스 시점의 프리셋 조회 순서: 1) 가져옴 (로컬), 2) Orca Cloud, 3) Bambu Cloud, 4) 표준 (사이드카 폴백).',
-    },
     externalCameras: '외부 카메라',
     costTracking: '비용 추적',
     billingEnabled: '결제 기능 사용',

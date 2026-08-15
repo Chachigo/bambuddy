@@ -2394,12 +2394,6 @@ export default {
     slicerStallTimeout: '切片器停滞超时（分钟）',
     slicerStallTimeoutDescription: '若 sidecar 在此时长内没有任何进度，则放弃本次切片。持续报告进度的复杂模型无论耗时多久都不会被中断。不报告进度的 sidecar 则将此值作为总时长上限。',
     slicerApiUrlDescription: 'slicer-API sidecar 容器的 URL。留空以使用 SLICER_API_URL / BAMBU_STUDIO_API_URL 环境变量默认值。',
-    slicerBundlesRemoved: {
-      title: '切片器捆绑包（已移除）',
-      description: '打印机预设包 (.bbscfg) 导入已移除。BambuStudio 的包导出仅包含用户自定义的预设，因此导入从未提供标准工艺 / 耗材，切片会回退到嵌入设置。',
-      alternatives: '对于单独的自定义，请使用单个预设导入，或通过 Bambu Cloud / Orca Cloud 同步。标准预设自动来自切片器侧车。',
-      lookupOrder: '切片时的预设查找顺序：1) 已导入（本地），2) Orca Cloud，3) Bambu Cloud，4) 标准（侧车回退）。',
-    },
     externalCameras: '外部摄像头',
     costTracking: '成本追踪',
     printsOnly: '仅打印',
