@@ -1486,12 +1486,19 @@ class GitHubRestoreService:
 
                 profile_dicts = []
                 unmatched = 0
+                # A live profile can only stand in for one backed-up entry. Two
+                # entries resolving to the same cali_idx both go into the batch,
+                # the second overwrites the first on the printer, and the tally
+                # counts two restored where one landed.
+                claimed: set[int] = set()
                 for p in profiles:
                     if not isinstance(p, dict):
                         continue
-                    match = self._match_kprofile(p, current)
+                    match = self._match_kprofile(p, current, claimed)
                     if match is None:
                         unmatched += 1
+                    else:
+                        claimed.add(match.slot_id)
                     profile_dicts.append(
                         {
                             "filament_id": p.get("filament_id", ""),
@@ -1554,7 +1561,7 @@ class GitHubRestoreService:
             return []
 
     @staticmethod
-    def _match_kprofile(entry: dict, current: list):
+    def _match_kprofile(entry: dict, current: list, claimed: set[int]):
         """Find the live profile a backed-up entry corresponds to.
 
         ``setting_id`` is the filament preset the profile was calibrated for and
@@ -1562,30 +1569,43 @@ class GitHubRestoreService:
         back to the display name, which Bambuddy's own editor preserves.
         Both are scoped by ``filament_id`` — the same preset on a different
         filament is a different profile.
+
+        ``claimed`` holds the slot ids already taken by earlier entries in this
+        nozzle's loop, and no live profile may be claimed twice. Without it, two
+        backed-up entries sharing a ``filament_id`` and matching on neither
+        ``setting_id`` nor ``name`` both fell through to the single-candidate
+        arm and both took the same slot — reachable whenever the user has since
+        deleted one of a pair, because the delete-then-add re-key is what strips
+        the ``setting_id`` match. Returning None for the displaced entry means
+        ``cali_idx: -1``, i.e. add-as-new, which is the safe outcome.
         """
         filament_id = entry.get("filament_id")
         if not filament_id:
             return None
 
         candidates = [c for c in current if c.filament_id == filament_id]
-        if not candidates:
+        available = [c for c in candidates if c.slot_id not in claimed]
+        if not available:
             return None
 
         setting_id = entry.get("setting_id")
         if setting_id:
-            for c in candidates:
+            for c in available:
                 if c.setting_id == setting_id:
                     return c
 
         name = entry.get("name")
         if name:
-            for c in candidates:
+            for c in available:
                 if c.name == name:
                     return c
 
         # Exactly one profile for this filament and no better discriminator:
-        # treat it as the same profile rather than duplicating it.
-        return candidates[0] if len(candidates) == 1 else None
+        # treat it as the same profile rather than duplicating it. Judged
+        # against every candidate rather than the unclaimed ones, because two
+        # live profiles for one filament are ambiguous whether or not another
+        # entry has already taken one of them.
+        return available[0] if len(candidates) == 1 else None
 
 
 # Singleton instance

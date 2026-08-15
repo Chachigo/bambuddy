@@ -1341,6 +1341,106 @@ class TestRestoreKprofiles:
         assert profiles[0]["cali_idx"] == -1, "two candidates and nothing to tell them apart"
 
     @pytest.mark.asyncio
+    async def test_two_entries_cannot_claim_the_same_live_slot(self, db_session, printer_factory):
+        """One live profile cannot stand in for two backed-up ones (#2656).
+
+        Both entries fell through to the single-candidate arm, both took
+        cali_idx 4606, both went into the batch — so the second overwrote the
+        first on the printer while the tally counted two restored. Reachable
+        whenever the user has deleted one of a pair since the backup, because
+        the delete-then-add re-key is what strips the setting_id match.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entries = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"]
+        entries[0].update(setting_id="PFGONE1", name="PLA Basic")
+        entries.append({**entries[0], "setting_id": "PFGONE2", "name": "PLA Matte"})
+        client = self._client(live=[self._live(slot_id=4606, setting_id="PFUS123", name="Bambu PLA")])
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert [p["cali_idx"] for p in profiles] == [4606, -1], "the displaced entry has to be added, not aliased"
+        assert sum(1 for p in profiles if p["cali_idx"] == 4606) == 1
+        assert any("added as new profiles" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_the_displaced_entry_does_not_inherit_the_claimed_setting_id(self, db_session, printer_factory):
+        """An add-as-new keeps its own preset, or it lands on top of the match anyway.
+
+        cali_idx -1 is only safe if the rest of the payload doesn't point at the
+        profile the first entry just claimed — the generated-setting_id fallback
+        reads setting_id when cali_idx is -1.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entries = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"]
+        entries[0].update(setting_id="PFGONE1", name="PLA Basic")
+        entries.append({**entries[0], "setting_id": "PFGONE2", "name": "PLA Matte"})
+        client = self._client(live=[self._live(slot_id=4606, setting_id="PFUS123", name="Bambu PLA")])
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, _CategoryTally())
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert profiles[0]["setting_id"] == "PFUS123", "the match prefers the live preset"
+        assert profiles[1]["setting_id"] == "PFGONE2", "the displaced entry keeps its own"
+
+    @pytest.mark.asyncio
+    async def test_two_entries_matching_two_live_profiles_keep_their_own_slots(self, db_session, printer_factory):
+        """Control: the guard must not displace a legitimate second match."""
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entries = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"]
+        entries.append({**entries[0], "setting_id": "PFUS456", "name": "Bambu PETG"})
+        client = self._client(
+            live=[
+                self._live(slot_id=4606, setting_id="PFUS123", name="Bambu PLA"),
+                self._live(slot_id=4607, setting_id="PFUS456", name="Bambu PETG"),
+            ]
+        )
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert [p["cali_idx"] for p in profiles] == [4606, 4607]
+        assert not any("added as new profiles" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_a_claimed_slot_does_not_make_an_ambiguous_pair_matchable(self, db_session, printer_factory):
+        """Two live profiles for one filament stay ambiguous after one is taken.
+
+        The single-candidate fallback is judged against every candidate, not the
+        unclaimed ones — otherwise claiming the first would leave exactly one
+        "available" and turn a guess the code deliberately refuses into a match.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        entries = payload["kprofiles/00M09A123456789/0.4.json"]["profiles"]
+        entries[0].update(setting_id="PFUS123", name="Bambu PLA")
+        entries.append({**entries[0], "setting_id": None, "name": ""})
+        client = self._client(
+            live=[
+                self._live(slot_id=1, setting_id="PFUS123", name="Bambu PLA"),
+                self._live(slot_id=2, setting_id="PFOTHER", name="Renamed"),
+            ]
+        )
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, _CategoryTally())
+
+        profiles, _ = client.set_kprofiles_batch.call_args.args
+        assert [p["cali_idx"] for p in profiles] == [1, -1]
+
+    @pytest.mark.asyncio
     async def test_unknown_serial_is_skipped_with_reason(self, db_session):
         tally = _CategoryTally()
 
