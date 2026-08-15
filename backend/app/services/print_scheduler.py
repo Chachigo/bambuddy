@@ -474,6 +474,23 @@ class PrintScheduler:
         self._fast_check_interval = 3  # seconds
         self._power_on_wait_time = 180  # seconds to wait for printer after power on (3 min)
         self._power_on_check_interval = 10  # seconds between connection checks
+        # Printers whose class-target power-on failed, mapped to the monotonic
+        # time their cool-off expires (#2786).
+        #
+        # Without this, one printer with an unreachable plug starves every
+        # sibling of its model forever: the wake step walks candidates in id
+        # order, spends the pass's single attempt on the same broken printer
+        # every time, and the healthy one two slots down is never reached. It
+        # also costs a full ``_power_on_wait_time`` out of every 30 s pass,
+        # which delays the whole queue, not just this job.
+        #
+        # Entries expire on read rather than being cleared on success: a printer
+        # inside its cool-off is skipped before the power-on is reached, so a
+        # live entry can never be overwritten by a success anyway. A printer
+        # that comes back by any other route stops being a wake candidate the
+        # moment it connects.
+        self._wake_failures: dict[int, float] = {}
+        self._wake_failure_cooloff = 600  # seconds
         # Track which printers are currently auto-drying (printer_id -> start timestamp)
         self._drying_in_progress: dict[int, float] = {}
         # Defensive in-memory dispatch hold (#1157): a printer that just received
@@ -739,6 +756,17 @@ class PrintScheduler:
                 logger.warning("Home Assistant interlock check failed: %s", e)
                 interlocked = {}
 
+            # Printers a smart plug can bring back, read once for the whole pass
+            # (#2786). Used by the model-based branch both to word "Offline" in
+            # the waiting reason and to decide what the wake step may switch on.
+            wakeable_printer_ids = await self._wakeable_printer_ids(db)
+
+            # At most one power-on per queue check. Each one blocks this loop
+            # for the boot wait, so a queue of ten class-targeted jobs must not
+            # switch on ten printers inside a single pass — the next pass wakes
+            # the next one (#2786).
+            power_on_attempted = False
+
             # Log skip reasons once per queue check (not per item)
             skip_reasons: dict[str, int] = {}
 
@@ -962,6 +990,11 @@ class PrintScheduler:
                     printer_id = None
                     chosen: _ModelCandidate | None = None
                     per_model_reasons: list[tuple[str | None, str]] = []
+                    # Candidates that cleared the cross-model gate below. The
+                    # smart-plug wake step may only consider these — waking a
+                    # printer for a file that can never legally run on it is
+                    # worse than not waking at all (#2786).
+                    wakeable_candidates: list[_ModelCandidate] = []
 
                     if not candidates:
                         # Every candidate file has been deleted or trashed out from
@@ -1015,6 +1048,7 @@ class PrintScheduler:
                             skip_reasons["sliced_model_mismatch"] = skip_reasons.get("sliced_model_mismatch", 0) + 1
                             continue
 
+                        wakeable_candidates.append(candidate)
                         match_id, match_reason = await self._find_idle_printer_for_model(
                             db,
                             candidate.target_model,
@@ -1026,12 +1060,41 @@ class PrintScheduler:
                             item.target_location,
                             filament_overrides=filament_overrides,
                             require_plate_clear=require_plate_clear,
+                            wakeable_ids=wakeable_printer_ids,
                         )
                         if match_id:
                             printer_id = match_id
                             chosen = candidate
                             break
                         per_model_reasons.append((candidate.target_model, match_reason or ""))
+
+                    # Nothing is available and nothing has been woken this pass:
+                    # switch one matching printer on. Assignment is left to the
+                    # next pass, which sees the booted printer's live state
+                    # instead of guessing at it seconds after connect (#2786).
+                    if printer_id is None and not power_on_attempted and wakeable_candidates:
+                        woken_id, attempted_id = await self._wake_printer_for_model(
+                            db,
+                            wakeable_candidates,
+                            item.target_location,
+                            busy_printers | interlocked.keys(),
+                            wakeable_printer_ids,
+                            require_plate_clear,
+                        )
+                        # An attempt spends the pass's one wake whether or not
+                        # it worked: it has already blocked the queue loop for
+                        # the boot wait. A failed printer is held out of later
+                        # passes by its own cool-off, deliberately NOT by
+                        # busy_printers — it is off, not busy, and labelling it
+                        # busy would both misdescribe it in every later item's
+                        # waiting reason and suppress the notification, since
+                        # an all-busy reason is treated as needing no action.
+                        power_on_attempted = attempted_id is not None
+                        if woken_id is not None:
+                            # Hold this item back rather than dispatching onto a
+                            # printer whose AMS has not reported yet.
+                            skip_reasons["powered_on_printer"] = skip_reasons.get("powered_on_printer", 0) + 1
+                            continue
 
                     waiting_reason = None if printer_id else _collapse_waiting_reasons(per_model_reasons)
 
@@ -1414,6 +1477,149 @@ class PrintScheduler:
                     return
                 await asyncio.sleep(0.5 * attempt)
 
+    async def _printers_for_model(
+        self,
+        db: AsyncSession,
+        model: str,
+        target_location: str | None = None,
+    ) -> list[Printer]:
+        """Active printers of *model*, optionally narrowed to one location.
+
+        Shared by the matcher and by the smart-plug wake step (#2786) so both
+        answer "which printers can this job run on" from one query — a job can
+        only be woken onto a printer the matcher would also have considered.
+        """
+        normalized_model = normalize_printer_model(model) or model
+        query = (
+            select(Printer)
+            .where(func.lower(Printer.model) == normalized_model.lower())
+            .where(Printer.is_active == True)  # noqa: E712
+        )
+        if target_location:
+            query = query.where(Printer.location == target_location)
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
+    async def _wakeable_printer_ids(self, db: AsyncSession) -> set[int]:
+        """Printer IDs that at least one enabled ``auto_on`` plug can power on.
+
+        Read once per queue check rather than per printer: it decides both
+        whether the wake step has anything to do and how an offline printer is
+        worded in the waiting reason — "Offline" and "offline with no Auto On
+        plug" are different problems, and the second is the one the user has to
+        fix themselves (#2786).
+        """
+        result = await db.execute(
+            select(SmartPlug.printer_id)
+            .where(SmartPlug.printer_id.is_not(None))
+            .where(SmartPlug.enabled == True)  # noqa: E712
+            .where(SmartPlug.auto_on == True)  # noqa: E712
+        )
+        return {pid for (pid,) in result.all() if pid is not None}
+
+    def _wake_recently_failed(self, printer_id: int) -> bool:
+        """True while this printer's failed power-on is still cooling off (#2786)."""
+        deadline = self._wake_failures.get(printer_id)
+        if deadline is None:
+            return False
+        if time.monotonic() >= deadline:
+            del self._wake_failures[printer_id]
+            return False
+        return True
+
+    async def _wake_printer_for_model(
+        self,
+        db: AsyncSession,
+        candidates: list[_ModelCandidate],
+        target_location: str | None,
+        exclude_ids: set[int],
+        wakeable_ids: set[int],
+        require_plate_clear: bool,
+    ) -> tuple[int | None, int | None]:
+        """Power on one offline printer a model-based item could run on (#2786).
+
+        The fixed-printer branch has powered a printer on since smart plugs
+        existed. The model-based branch never could: its matcher drops an
+        offline printer into the "Offline:" waiting reason and nothing looks at
+        its plugs, so a class-targeted job with every matching printer switched
+        off sat pending forever. The reporter's log is the controlled
+        experiment — the same item, same plug, same Auto On setting, dispatched
+        the moment they edited it onto a specific printer.
+
+        Returns ``(woken_id, attempted_id)``. ``attempted_id`` is set whenever a
+        power-on was actually tried, so the caller can tell "nothing here was
+        wakeable" (both None — cheap, other items may still find something)
+        from "we tried and it did not come up" (only ``attempted_id`` — the
+        boot timeout has already been spent).
+
+        Deliberately does NOT go on to match the job: AMS trays arrive with the
+        first status push after connect, so a filament check against a printer
+        that booted seconds ago can reject the printer we just woke. The next
+        queue pass matches it with live state.
+
+        At most one printer per pass. Each wake blocks the queue loop for the
+        boot wait, and a queue of ten class-targeted jobs must not switch on
+        ten printers inside one check.
+        """
+        for candidate in candidates:
+            if not candidate.target_model:
+                continue
+            printers = await self._printers_for_model(db, candidate.target_model, target_location)
+            for printer in sorted(printers, key=lambda p: p.id):
+                if printer.id in exclude_ids or printer.id not in wakeable_ids:
+                    continue
+                if printer_manager.is_connected(printer.id):
+                    continue
+                if self._wake_recently_failed(printer.id):
+                    # Its plug did not bring it back a moment ago. Move on to a
+                    # sibling instead of spending this pass — and every pass —
+                    # on the same printer.
+                    continue
+                if require_plate_clear and printer_manager.is_awaiting_plate_clear(printer.id):
+                    # Waking this one buys nothing: it would boot into IDLE and
+                    # then be held by the plate-clear gate, which is exactly
+                    # what the reporter's log shows happening for 80 minutes
+                    # after a fixed-printer wake. The flag is Bambuddy-side and
+                    # persisted, so it is readable while the printer is off.
+                    logger.info(
+                        "Not powering on printer %s for a %s job: it is awaiting plate-clear acknowledgment",
+                        printer.id,
+                        candidate.target_model,
+                    )
+                    continue
+
+                plugs = await self._get_smart_plugs(db, printer.id)
+                auto_on_plugs = [p for p in plugs if p.auto_on and p.enabled]
+                if not auto_on_plugs:
+                    # wakeable_ids said otherwise — the plug changed under us
+                    # mid-pass. Nothing to do but move on.
+                    continue
+
+                logger.info(
+                    "No %s printer available for a queued job; powering on offline printer %s via smart plug(s)",
+                    candidate.target_model,
+                    printer.id,
+                )
+                primary_plug = self._pick_power_plug(auto_on_plugs)
+                if not await self._power_on_and_wait(primary_plug, printer.id, db):
+                    logger.warning(
+                        "Could not power on printer %s via smart plug; not trying it again for %ss",
+                        printer.id,
+                        self._wake_failure_cooloff,
+                    )
+                    self._wake_failures[printer.id] = time.monotonic() + self._wake_failure_cooloff
+                    return None, printer.id
+
+                for extra_plug in [p for p in auto_on_plugs if p.id != primary_plug.id]:
+                    try:
+                        service = await smart_plug_manager.get_service_for_plug(extra_plug, db)
+                        await service.turn_on(extra_plug)
+                        logger.info("Also powered on plug '%s' for printer %s", extra_plug.name, printer.id)
+                    except Exception as e:
+                        logger.warning("Failed to power on extra plug '%s': %s", extra_plug.name, e)
+                return printer.id, printer.id
+        return None, None
+
     async def _find_idle_printer_for_model(
         self,
         db: AsyncSession,
@@ -1423,6 +1629,7 @@ class PrintScheduler:
         target_location: str | None = None,
         filament_overrides: list[dict] | None = None,
         require_plate_clear: bool = True,
+        wakeable_ids: set[int] | None = None,
     ) -> tuple[int | None, str | None]:
         """Find an idle, connected printer matching the model with compatible filaments.
 
@@ -1437,26 +1644,17 @@ class PrintScheduler:
                                  ``force_color_match: true`` to require an exact type+color match
                                  on the printer for that slot. Without the flag the existing
                                  colour-preference logic applies.
+            wakeable_ids: Printers a smart plug can power on (#2786). Only changes how an
+                          offline printer is worded: one Bambuddy will switch on reads
+                          differently from one the user has to go and switch on themselves.
 
         Returns:
             Tuple of (printer_id, waiting_reason):
             - (printer_id, None) if a matching printer was found
             - (None, reason) if no printer is available, with explanation
         """
-        # Normalize model name and use case-insensitive matching
         normalized_model = normalize_printer_model(model) or model
-        query = (
-            select(Printer)
-            .where(func.lower(Printer.model) == normalized_model.lower())
-            .where(Printer.is_active == True)  # noqa: E712
-        )
-
-        # Add location filter if specified
-        if target_location:
-            query = query.where(Printer.location == target_location)
-
-        result = await db.execute(query)
-        printers = list(result.scalars().all())
+        printers = await self._printers_for_model(db, model, target_location)
 
         location_suffix = f" in {target_location}" if target_location else ""
         if not printers:
@@ -1469,6 +1667,7 @@ class PrintScheduler:
         # Track reasons for skipping printers
         printers_busy = []
         printers_offline = []
+        printers_offline_no_plug = []
         printers_missing_filament: list[tuple[str, list[str]]] = []
         candidates: list[tuple[int, int]] = []  # (printer_id, color_match_count)
 
@@ -1490,7 +1689,10 @@ class PrintScheduler:
             is_idle = self._is_printer_idle(printer.id, require_plate_clear) if is_connected else False
 
             if not is_connected:
-                printers_offline.append(printer.name)
+                if wakeable_ids is not None and printer.id not in wakeable_ids:
+                    printers_offline_no_plug.append(printer.name)
+                else:
+                    printers_offline.append(printer.name)
                 continue
 
             if not is_idle:
@@ -1590,6 +1792,11 @@ class PrintScheduler:
             reasons.append(f"Busy: {', '.join(printers_busy)}")
         if printers_offline:
             reasons.append(f"Offline: {', '.join(printers_offline)}")
+        if printers_offline_no_plug:
+            # Named separately because it is the one entry on this list the
+            # user has to act on: no enabled Auto On plug means Bambuddy will
+            # never power this printer on for the queue (#2786).
+            reasons.append(f"Offline, no Auto On smart plug: {', '.join(printers_offline_no_plug)}")
 
         return None, " | ".join(reasons) if reasons else f"No available {model} printers{location_suffix}"
 
