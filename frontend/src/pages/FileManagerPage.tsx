@@ -1305,10 +1305,10 @@ export function FileManagerPage() {
     queryFn: () => api.getLibraryStats(),
   });
 
-  // Get users for the username filter autocomplete
+  // Get users for the username filter autocomplete -- names only (#1894)
   const { data: users } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => api.getUsers(),
+    queryKey: ['users', 'slim'],
+    queryFn: () => api.getUsersSlim(),
   });
 
   // Get unique file types for filter dropdown
