@@ -3,6 +3,7 @@ import json
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from backend.app.schemas.print_queue import TriState
+from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
 
 # Outbound service URLs validated on save, so a bad value is rejected at
 # configuration time with a clear message rather than failing opaquely at
@@ -430,7 +431,7 @@ class AppSettings(BaseModel):
     )
     chamber_temp_presets: str = Field(
         default="",
-        description="JSON array of 3 chamber-temperature preset values in C (0-60). Empty = use defaults [35, 45, 60]",
+        description="JSON array of 3 chamber-temperature preset values in C (0-65). Empty = use defaults [35, 45, 60]",
     )
     fan_speed_presets: str = Field(
         default="",
@@ -759,7 +760,7 @@ class AppSettingsUpdate(BaseModel):
     @field_validator("chamber_temp_presets")
     @classmethod
     def validate_chamber_temp_presets(cls, v: str | None) -> str | None:
-        return cls._validate_preset_triple(v, "chamber_temp_presets", 0, 60)
+        return cls._validate_preset_triple(v, "chamber_temp_presets", 0, MAX_CHAMBER_TEMP_C)
 
     @field_validator("fan_speed_presets")
     @classmethod

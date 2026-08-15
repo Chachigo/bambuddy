@@ -264,6 +264,16 @@ def uses_exhaust_fan_label(model: str | None) -> bool:
     return normalized in EXHAUST_FAN_LABEL_MODELS
 
 
+# Ceiling for every chamber-temperature target the UI and API accept (manual
+# M141, the preheat filament map, the per-item preheat override, the chamber
+# quick-select presets). The H2 series (H2C / H2D / H2D Pro / H2S) and X2D
+# heat the chamber to 65 °C; X1E tops out at 60. We validate against the
+# highest of those and let the firmware clamp on the lower-ceiling models —
+# the preheat filament map is global rather than per printer, so a per-model
+# maximum could not be expressed there anyway.
+MAX_CHAMBER_TEMP_C = 65
+
+
 def has_ethernet(model: str | None) -> bool:
     """Return True if the printer model has an ethernet port."""
     if not model:

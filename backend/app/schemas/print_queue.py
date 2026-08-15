@@ -3,6 +3,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer, model_validator
 
+from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C
+
 
 # Custom serializer to ensure UTC datetimes have Z suffix
 def serialize_utc_datetime(dt: datetime | None) -> str | None:
@@ -82,7 +84,7 @@ class PrintQueueItemCreate(BaseModel):
     # preheat_enabled setting; 'on' / 'off' force the decision. The chamber
     # target falls through: this override → max(filament-map[loaded tray]) → 0.
     preheat_override: Literal["inherit", "on", "off"] = "inherit"
-    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=60)
+    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
     # Auto-print G-code injection
     gcode_injection: bool = False
     # Batch: create multiple copies (creates a batch if > 1)
@@ -119,7 +121,7 @@ class PrintQueueItemUpdate(BaseModel):
     use_ams: bool | None = None
     nozzle_offset_cali: TriState | None = None
     preheat_override: Literal["inherit", "on", "off"] | None = None
-    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=60)
+    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
     # Auto-print G-code injection
     gcode_injection: bool | None = None
     # H2C dual-nozzle-rack slicer pick (#1780). list[int] per-filament
@@ -277,7 +279,7 @@ class PrintQueueBulkUpdate(BaseModel):
     use_ams: bool | None = None
     nozzle_offset_cali: TriState | None = None
     preheat_override: Literal["inherit", "on", "off"] | None = None
-    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=60)
+    preheat_chamber_target_override: int | None = Field(default=None, ge=0, le=MAX_CHAMBER_TEMP_C)
     # Auto-print G-code injection
     gcode_injection: bool | None = None
 
