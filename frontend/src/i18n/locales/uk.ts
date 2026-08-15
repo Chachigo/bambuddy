@@ -622,6 +622,10 @@ export default {
     },
     // Filaments section
     filaments: "Філаменти",
+    externalSpool: {
+      hide: "Сховати зовнішню котушку",
+      show: "Показати зовнішню котушку",
+    },
     // Camera
     openCameraOverlay: "Відкрити накладання камери",
     openCameraWindow: "Відкрити камеру в новому вікні",

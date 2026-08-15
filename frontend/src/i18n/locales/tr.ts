@@ -618,6 +618,10 @@ export default {
     },
     // Filamentler bölümü
     filaments: 'Filamentler',
+    externalSpool: {
+      hide: 'Harici makarayı gizle',
+      show: 'Harici makarayı göster',
+    },
     // Kamera
     openCameraOverlay: 'Kamera bindirmesini aç',
     openCameraWindow: 'Kamerayı yeni pencerede aç',

@@ -585,6 +585,10 @@ export default {
       external: "Внешняя катушка",
     },
     filaments: "Филаменты",
+    externalSpool: {
+      hide: "Скрыть внешнюю катушку",
+      show: "Показать внешнюю катушку",
+    },
     openCameraOverlay: "Открыть камеру поверх интерфейса",
     openCameraWindow: "Открыть камеру в новом окне",
     firmwareUpdateAvailable: "Доступно обновление прошивки: {{current}} → {{latest}}",

@@ -4,6 +4,10 @@ import { compareFwVersions } from '../utils/firmwareVersion';
 import { formatPrintName } from '../utils/printName';
 import { computePopoverPosition } from '../utils/popoverPosition';
 import {
+  isExternalSpoolHidden,
+  setExternalSpoolHidden as persistExternalSpoolHidden,
+} from '../utils/printerCardPrefs';
+import {
   BED_TEMP_DEFAULTS,
   CHAMBER_TEMP_DEFAULTS,
   FAN_SPEED_DEFAULTS,
@@ -42,6 +46,8 @@ import {
   Zap,
   Wrench,
   ChevronDown,
+  Eye,
+  EyeOff,
   Filter,
   Pencil,
   ArrowLeft,
@@ -743,6 +749,37 @@ function AmsBackupBadge({ state, onClick }: AmsBackupBadgeProps) {
       aria-label={title}
     >
       {known ? <Repeat className="w-3 h-3" /> : <span>?</span>}
+    </button>
+  );
+}
+
+// Hide/show the external spool in the filament row (#1782). Sized and shaped
+// like AmsBackupBadge so the two sit together in the section header, but
+// pinned to the right-hand end of the rule: this is a view preference for the
+// row, not a property of the printer.
+interface ExternalSpoolToggleProps {
+  hidden: boolean;
+  onClick: () => void;
+}
+
+function ExternalSpoolToggle({ hidden, onClick }: ExternalSpoolToggleProps) {
+  const { t } = useTranslation();
+  const title = hidden ? t('printers.externalSpool.show') : t('printers.externalSpool.hide');
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={hidden}
+      className={`flex items-center justify-center w-[18px] h-[18px] rounded transition-colors cursor-pointer ${
+        hidden
+          ? 'bg-bambu-green/20 text-bambu-green hover:bg-bambu-green/30'
+          : 'bg-bambu-dark text-bambu-gray hover:text-white hover:bg-bambu-dark/80'
+      }`}
+      title={title}
+      aria-label={title}
+    >
+      {hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
     </button>
   );
 }
@@ -1849,6 +1886,18 @@ function PrinterCard({
   const [showAiModal, setShowAiModal] = useState(false);
   // #1762: AMS Filament Backup status / control modal — opens from the badge.
   const [amsBackupModalOpen, setAmsBackupModalOpen] = useState(false);
+  // External spool visibility (#1782) — browser-local, per printer. Read once
+  // per card; the toggle that writes it is the only thing that changes it.
+  const [externalSpoolHidden, setExternalSpoolHidden] = useState(() =>
+    isExternalSpoolHidden(printer.id),
+  );
+  const toggleExternalSpool = useCallback(() => {
+    setExternalSpoolHidden((prev) => {
+      const next = !prev;
+      persistExternalSpoolHidden(printer.id, next);
+      return next;
+    });
+  }, [printer.id]);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const [showPauseConfirm, setShowPauseConfirm] = useState(false);
   const [showSpeedMenu, setShowSpeedMenu] = useState<number | null>(null);
@@ -4635,6 +4684,13 @@ function PrinterCard({
               // Separate regular AMS (4-tray) from HT AMS (1-tray)
               const regularAms = amsData.filter(ams => ams.tray.length > 1);
               const htAms = amsData.filter(ams => ams.tray.length === 1);
+              // The external spool can only be hidden while some AMS remains to
+              // fill the row (#1782). On an A1 Mini or a bare P1P it is the whole
+              // filament section, so the toggle is not offered there and a stored
+              // preference from a printer that later lost its AMS cannot blank the
+              // row either — both read through canHideExternalSpool.
+              const canHideExternalSpool = amsData.length > 0 && status.vt_tray.length > 0;
+              const showExternalSpool = !(canHideExternalSpool && externalSpoolHidden);
               const isDualNozzle = printer.nozzle_count === 2 || status?.temperatures?.nozzle_2 !== undefined;
               const filamentSlotClass = 'min-w-14';
               // #1762 (comment 2): while a print is running/paused, overlay a small
@@ -4668,6 +4724,18 @@ function PrinterCard({
                       onClick={() => setAmsBackupModalOpen(true)}
                     />
                     <div className="flex-1 h-[2px] bg-bambu-dark-tertiary" />
+                    {/* Offered only when an AMS is present: on a printer that
+                        feeds from the external spool alone, hiding it would
+                        empty the row entirely (#1782). */}
+                    {canHideExternalSpool && (
+                      <>
+                        <ExternalSpoolToggle
+                          hidden={externalSpoolHidden}
+                          onClick={toggleExternalSpool}
+                        />
+                        <div className="w-3 h-[2px] bg-bambu-dark-tertiary" />
+                      </>
+                    )}
                   </div>
 
                   {/* AMS Content */}
@@ -5515,7 +5583,7 @@ function PrinterCard({
                         );
                       })}
                       {/* External spool(s) - grouped in one card like regular AMS */}
-                      {status.vt_tray.length > 0 && (
+                      {status.vt_tray.length > 0 && showExternalSpool && (
                         <div style={getAmsCardStyle(status.vt_tray.length)} className="min-w-0 p-2 bg-bambu-dark rounded-[10px] space-y-1">
                           <div className="flex w-full min-h-7 items-center gap-1.5 rounded-lg bg-bambu-dark-secondary px-2 py-1">
                             <span className="block min-w-0 flex-1 truncate text-[10px] text-white font-medium">{t('printers.external')}</span>

@@ -617,6 +617,10 @@ export default {
     },
     // Filaments section
     filaments: 'フィラメント',
+    externalSpool: {
+      hide: '外部スプールを非表示にする',
+      show: '外部スプールを表示する',
+    },
     // Camera
     openCameraOverlay: 'カメラオーバーレイを開く',
     openCameraWindow: 'カメラを新しいウィンドウで開く',

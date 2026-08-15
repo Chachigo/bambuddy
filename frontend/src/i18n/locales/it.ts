@@ -618,6 +618,10 @@ export default {
     },
     // Filaments section
     filaments: 'Filamenti',
+    externalSpool: {
+      hide: 'Nascondi bobina esterna',
+      show: 'Mostra bobina esterna',
+    },
     // Camera
     openCameraOverlay: 'Apri overlay camera',
     openCameraWindow: 'Apri camera in nuova finestra',

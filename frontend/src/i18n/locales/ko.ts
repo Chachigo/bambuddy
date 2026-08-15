@@ -580,6 +580,10 @@ export default {
       external: '외부 스풀',
     },
     filaments: '필라멘트',
+    externalSpool: {
+      hide: '외부 스풀 숨기기',
+      show: '외부 스풀 표시',
+    },
     openCameraOverlay: '카메라 오버레이 열기',
     openCameraWindow: '새 창에서 카메라 열기',
     firmwareUpdateAvailable: '펌웨어 업데이트 가능: {{current}} → {{latest}}',

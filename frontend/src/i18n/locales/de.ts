@@ -618,6 +618,10 @@ export default {
     },
     // Filaments section
     filaments: 'Filamente',
+    externalSpool: {
+      hide: 'Externe Spule ausblenden',
+      show: 'Externe Spule einblenden',
+    },
     // Camera
     openCameraOverlay: 'Kamera-Overlay öffnen',
     openCameraWindow: 'Kamera in neuem Fenster öffnen',

@@ -618,6 +618,10 @@ export default {
     },
     // Filaments section
     filaments: '耗材',
+    externalSpool: {
+      hide: '隱藏外部料卷',
+      show: '顯示外部料卷',
+    },
     // Camera
     openCameraOverlay: '開啟攝影機疊加層',
     openCameraWindow: '在新視窗中開啟攝影機',
