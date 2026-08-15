@@ -31,7 +31,9 @@ Design notes worth knowing before editing:
 import asyncio
 import json
 import logging
+import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
@@ -135,9 +137,93 @@ def _is_protected_setting_key(key: str) -> bool:
     return key in _PROTECTED_SETTING_KEYS
 
 
-def _is_skipped_setting_key(key: str) -> bool:
-    """True for any key ``_restore_settings`` refuses to write, for either reason."""
-    return _is_blocked_setting_key(key) or _is_protected_setting_key(key)
+# There used to be an ``_is_skipped_setting_key`` here, the union of the two
+# predicates above, shared by the preview and the restore so neither could drift
+# from the other. It is gone because a name is no longer enough to decide: the
+# third refusal below depends on the payload's *other* values and on local
+# database state. ``_plan_settings`` is the shared classifier now, and it covers
+# all three reasons.
+
+
+# Toggles whose *safety* depends on a companion credential that the blocklist
+# above refuses to restore. Writing the toggle alone is not a partial restore,
+# it is a downgrade:
+#
+#   * prometheus_enabled with no token opens /api/v1/metrics. The route is on
+#     PUBLIC_API_ROUTES and its own gate is ``if token:`` (api/routes/metrics.py),
+#     so an empty or absent token means no authentication at all — a full,
+#     unauthenticated dump of the instance to anyone who can reach the port. On
+#     an instance that never enabled Prometheus there is no token row, so
+#     overwrite-off alone is enough to do it.
+#   * the other four switch an integration on with no way to authenticate to it,
+#     which breaks the login path (LDAP) or the connection (MQTT, HA).
+#
+# virtual_printer_enabled is largely vestigial post-migration — core/database.py
+# copies the rows into the virtual_printers table — but it is the same shape, and
+# refusing a vestigial toggle is a harmless no-op.
+_COMPANION_CREDENTIALS = {
+    "prometheus_enabled": "prometheus_token",
+    "ldap_enabled": "ldap_bind_password",
+    "mqtt_enabled": "mqtt_password",
+    "ha_enabled": "ha_token",
+    "virtual_printer_enabled": "virtual_printer_access_code",
+}
+
+# Companion credentials a reader takes from the environment rather than from a
+# Settings row. ha_token is the only one: get_homeassistant_settings prefers
+# HA_TOKEN over the row, and auto-enables ha_enabled when HA_URL and HA_TOKEN are
+# both set, so an env-configured instance has a usable credential and no row.
+_COMPANION_CREDENTIAL_ENV = {"ha_token": "HA_TOKEN"}
+
+
+def _setting_value_is_true(value: object) -> bool:
+    """True if a settings *payload* value would be stored as "on".
+
+    Deliberately as narrow as ``api.routes.settings.setting_is_true``: a restore
+    writes ``str(value)`` verbatim and no reader in the codebase treats "1",
+    "on" or "yes" as on, so restoring one of those cannot switch anything on.
+    Bool-tolerant because a backup's JSON can carry a real boolean.
+    """
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() == "true"
+
+
+def _is_usable_credential(value: object) -> bool:
+    """True if a credential value is present and not blank.
+
+    A present-but-*blank* ``prometheus_token`` row counts as unusable, because an
+    empty token is exactly the ``if token:`` hole the companion rule exists to
+    stop a restore from opening.
+    """
+    return value is not None and bool(str(value).strip())
+
+
+@dataclass(frozen=True)
+class _SettingsPlan:
+    """Which keys of a settings payload will not be written, and why.
+
+    Built once, before anything is added to the session, and shared by the
+    preview and the restore so the two cannot disagree about what a commit will
+    change. The companion bucket is why this needs a session at all: unlike the
+    two name-based buckets it depends on local database state.
+
+    The three buckets are disjoint — a key is classified once, in order.
+    """
+
+    blocked: tuple[str, ...] = ()
+    protected: tuple[str, ...] = ()
+    companion: tuple[str, ...] = ()
+
+    @property
+    def refused(self) -> frozenset[str]:
+        return frozenset(self.blocked) | frozenset(self.protected) | frozenset(self.companion)
+
+    @property
+    def refused_count(self) -> int:
+        return len(self.blocked) + len(self.protected) + len(self.companion)
 
 
 class _CategoryTally:
@@ -239,8 +325,88 @@ class GitHubRestoreService:
                 bad.append(path)
         return parsed, bad
 
-    async def preview(self, config: GitHubBackupConfig, ref: str = "HEAD") -> dict:
-        """Report which categories a commit contains, and how much is in each."""
+    @staticmethod
+    async def _plan_settings(db: AsyncSession, values: dict) -> _SettingsPlan:
+        """Classify every key of a settings payload into its refusal bucket.
+
+        Keys with an unusable name land in no bucket: they are the restore's
+        ``failed``, not a refusal, and the preview counts them because the run
+        will still report on them.
+
+        Reads local state, so it must run before anything is added to the
+        session — otherwise "does this instance already have a credential" would
+        see the restore's own writes.
+        """
+        blocked: list[str] = []
+        protected: list[str] = []
+        # Toggle -> credential for the pairs that survived the payload-only
+        # conditions and still need local state to judge.
+        candidates: dict[str, str] = {}
+
+        for key, value in values.items():
+            if not isinstance(key, str) or not key:
+                continue
+            if _is_blocked_setting_key(key):
+                blocked.append(key)
+                continue
+            if _is_protected_setting_key(key):
+                protected.append(key)
+                continue
+
+            credential = _COMPANION_CREDENTIALS.get(key)
+            if credential is None:
+                continue
+            # Turning something *off* is always safe to write.
+            if not _setting_value_is_true(value):
+                continue
+            # Expressed as the predicate rather than assumed, so the map cannot
+            # go quietly inert if _SECRET_KEY_HINTS is ever edited: a credential
+            # the restore is willing to write travels with its toggle.
+            if not _is_blocked_setting_key(credential):
+                continue
+            # The backup itself carried no credential here. An anonymous MQTT
+            # broker and an anonymous LDAP bind are both legitimate configs
+            # (mqtt_relay.py and ldap_service.py pass empty credentials straight
+            # through), so refusing this toggle would be a false positive — the
+            # restore is not producing anything weaker than the backup.
+            if not _is_usable_credential(values.get(credential)):
+                continue
+            candidates[key] = credential
+
+        if not candidates:
+            return _SettingsPlan(blocked=tuple(blocked), protected=tuple(protected))
+
+        # One SELECT covering both halves of every candidate pair.
+        wanted = set(candidates) | set(candidates.values())
+        rows = await db.execute(select(Settings).where(Settings.key.in_(wanted)))
+        local = {row.key: row.value for row in rows.scalars().all()}
+
+        companion: list[str] = []
+        for toggle, credential in candidates.items():
+            if _is_usable_credential(local.get(credential)):
+                continue
+            env_name = _COMPANION_CREDENTIAL_ENV.get(credential)
+            if env_name and _is_usable_credential(os.environ.get(env_name)):
+                continue
+            # Already on locally with no credential: the exposure pre-dates this
+            # restore, so refusing changes nothing and "left switched off" would
+            # be a lie.
+            if _setting_value_is_true(local.get(toggle)):
+                continue
+            companion.append(toggle)
+
+        return _SettingsPlan(
+            blocked=tuple(blocked),
+            protected=tuple(protected),
+            companion=tuple(companion),
+        )
+
+    async def preview(self, db: AsyncSession, config: GitHubBackupConfig, ref: str = "HEAD") -> dict:
+        """Report which categories a commit contains, and how much is in each.
+
+        Takes a session because the settings count depends on local state — see
+        ``_plan_settings``. ``ref`` stays keyword-friendly for callers.
+        """
         resolved, error = await self._resolve_ref(config, ref)
         if resolved is None:
             return {"success": False, "message": error, "ref": ref, "categories": []}
@@ -298,7 +464,7 @@ class GitHubRestoreService:
                     }
                 )
                 continue
-            count, detail = self._count_items(category, parsed)
+            count, detail = await self._count_items(db, category, parsed)
             categories.append({"category": category, "available": True, "item_count": count, "detail": detail})
 
         commit_info = None
@@ -317,22 +483,28 @@ class GitHubRestoreService:
             "categories": categories,
         }
 
-    @staticmethod
-    def _count_items(category: RestoreCategory, parsed: dict) -> tuple[int, str | None]:
+    async def _count_items(self, db: AsyncSession, category: RestoreCategory, parsed: dict) -> tuple[int, str | None]:
         """Count restorable items for ``category`` and describe any caveat."""
         if category == RestoreCategory.SETTINGS:
             payload = parsed.get(SETTINGS_PATH)
             values = payload.get("settings") if isinstance(payload, dict) else None
             if not isinstance(values, dict):
                 return 0, "No settings in payload"
-            # Both refusals are counted the same way here so the preview's item
-            # count matches what the restore actually writes; the wording only
-            # calls out the credential ones, which are what a user might expect
-            # to come back.
-            blocked = sum(1 for key in values if _is_blocked_setting_key(key))
-            skipped = sum(1 for key in values if _is_skipped_setting_key(key))
-            detail = f"{blocked} credential-like keys will be skipped" if blocked else None
-            return len(values) - skipped, detail
+            # Every refusal is subtracted so the count matches what the restore
+            # actually writes. The wording calls out the credential ones (what a
+            # user might expect to come back) and the companion ones (a
+            # behaviour change worth explaining before it happens); the auth
+            # policy keys stay unmentioned on purpose.
+            plan = await self._plan_settings(db, values)
+            detail = None
+            if plan.companion:
+                detail = (
+                    f"{len(plan.blocked)} credential-like key(s) will be skipped, and "
+                    f"{len(plan.companion)} switch(es) that depend on them will be left off"
+                )
+            elif plan.blocked:
+                detail = f"{len(plan.blocked)} credential-like keys will be skipped"
+            return len(values) - plan.refused_count, detail
 
         if category == RestoreCategory.SPOOLS:
             payload = parsed.get(SPOOLS_PATH)
@@ -938,19 +1110,23 @@ class GitHubRestoreService:
             tally.note("No settings data in this backup")
             return
 
-        blocked = 0
-        protected = 0
+        # Planned before the first write, so the companion rule reads genuinely
+        # pre-restore local state, and so the preview and this run classify the
+        # payload identically.
+        plan = await self._plan_settings(db, values)
+        refused = plan.refused
+
         for key, value in values.items():
             if not isinstance(key, str) or not key:
                 tally.failed += 1
                 continue
-            if _is_blocked_setting_key(key):
-                blocked += 1
-                tally.skipped += 1
-                continue
-            if _is_protected_setting_key(key):
-                protected += 1
-                tally.skipped += 1
+            if key in refused:
+                # Refusals are reported in the notes and nowhere else. They are
+                # already outside the preview's item count, and the preview is
+                # the number the user was shown, so counting them here would
+                # make restored + skipped + failed exceed it. The two skips
+                # below stay counted because they depend on this run's flags,
+                # which the preview cannot see.
                 continue
             if value is None:
                 tally.skipped += 1
@@ -973,12 +1149,18 @@ class GitHubRestoreService:
             if keys_written is not None:
                 keys_written.add(key)
 
-        if blocked:
-            tally.note(f"{blocked} credential-like key(s) skipped — re-enter secrets manually")
-        if protected:
+        if plan.blocked:
+            tally.note(f"{len(plan.blocked)} credential-like key(s) skipped — re-enter secrets manually")
+        if plan.protected:
             tally.note(
-                f"{protected} authentication setting(s) skipped — change those in Settings > "
+                f"{len(plan.protected)} authentication setting(s) skipped — change those in Settings > "
                 "Authentication so the lockout checks still run"
+            )
+        if plan.companion:
+            tally.note(
+                f"{', '.join(sorted(plan.companion))} left switched off — the credential each one needs "
+                "cannot be restored from a backup and this instance has none stored, so switching them "
+                "on would leave the integration unauthenticated"
             )
 
     async def _reconfigure_mqtt_relay(self, db: AsyncSession, keys_written: set[str], tally: _CategoryTally) -> None:

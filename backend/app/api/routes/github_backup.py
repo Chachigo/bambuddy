@@ -432,7 +432,7 @@ async def preview_restore(
     if not config:
         raise HTTPException(status_code=404, detail="No configuration found. Configure backup first.")
 
-    preview = await github_restore_service.preview(config, ref=ref)
+    preview = await github_restore_service.preview(db, config, ref=ref)
     return GitHubRestorePreview(**preview)
 
 

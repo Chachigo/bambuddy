@@ -19,6 +19,8 @@ from backend.app.models.spool import Spool
 from backend.app.models.spool_usage_history import SpoolUsageHistory
 from backend.app.schemas.github_backup import GitHubRestoreRequest, RestoreCategory
 from backend.app.services.github_restore import (
+    _COMPANION_CREDENTIAL_ENV,
+    _COMPANION_CREDENTIALS,
     ARCHIVES_PATH,
     SETTINGS_PATH,
     SPOOL_USAGE_PATH,
@@ -27,8 +29,10 @@ from backend.app.services.github_restore import (
     _CategoryTally,
     _is_blocked_setting_key,
     _is_protected_setting_key,
-    _is_skipped_setting_key,
+    _is_usable_credential,
     _parse_dt,
+    _setting_value_is_true,
+    _SettingsPlan,
 )
 
 
@@ -81,7 +85,6 @@ class TestSettingKeyBlocklist:
         # Not credential-shaped, so the secret hints never catch them.
         assert _is_blocked_setting_key(key) is False
         assert _is_protected_setting_key(key) is True
-        assert _is_skipped_setting_key(key) is True
 
     @pytest.mark.parametrize("key", ["currency", "ldap_enabled", "auth_secret_key"])
     def test_protected_set_is_only_the_auth_policy_keys(self, key):
@@ -177,7 +180,10 @@ class TestRestoreSettings:
 
         keys = {s.key for s in (await db_session.execute(select(Settings))).scalars().all()}
         assert keys == {"currency"}
-        assert tally.skipped == 2
+        # Refusals are notes, not tally rows: the preview never counted these
+        # keys, so counting them here would put the total above what the user
+        # was shown before they pressed Restore.
+        assert tally.skipped == 0
         assert any("credential-like" in note for note in tally.notes)
 
     @pytest.mark.asyncio
@@ -207,7 +213,9 @@ class TestRestoreSettings:
         assert "setup_completed" not in rows
         assert rows["currency"] == "EUR"
         assert tally.restored == 1
-        assert tally.skipped == 4
+        # As above: refused keys are outside the preview's count, so outside the
+        # tally too.
+        assert tally.skipped == 0
         assert any("authentication setting" in note for note in tally.notes)
 
     @pytest.mark.asyncio
@@ -216,6 +224,229 @@ class TestRestoreSettings:
         await _service()._restore_settings(db_session, None, overwrite=True, tally=tally)
         assert tally.restored == 0
         assert tally.notes
+
+
+class TestSettingValueIsTrue:
+    """Only the spellings a reader actually treats as "on" count as on."""
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", " True ", True])
+    def test_on(self, value):
+        assert _setting_value_is_true(value) is True
+
+    @pytest.mark.parametrize("value", ["false", "1", "on", "yes", "", None, False, 0])
+    def test_off(self, value):
+        # "1"/"on"/"yes" are deliberately off: no reader in the codebase treats
+        # them as on, so restoring one cannot switch anything on either.
+        assert _setting_value_is_true(value) is False
+
+
+class TestUsableCredential:
+    @pytest.mark.parametrize("value", ["s3cret", " x "])
+    def test_present_values_are_usable(self, value):
+        assert _is_usable_credential(value) is True
+
+    @pytest.mark.parametrize("value", [None, "", "   "])
+    def test_absent_or_blank_is_not(self, value):
+        # A present-but-blank prometheus_token row is exactly the `if token:`
+        # hole in the metrics route, so it must not count as protection.
+        assert _is_usable_credential(value) is False
+
+
+class TestCompanionCredentials:
+    """Toggles whose safety depends on a credential the restore refuses to write.
+
+    ``prometheus_enabled`` is the sharp one. ``/api/v1/metrics`` is a public
+    route whose only gate is a non-empty ``prometheus_token``, so restoring the
+    toggle onto an instance that has no token row publishes the entire metrics
+    body to anyone who can reach the port — and with overwrite *off*, since the
+    row is missing rather than present. The other four break an integration
+    rather than open one, but they are the same shape.
+    """
+
+    async def _restore(self, db, tally=None, overwrite=False, **settings) -> _CategoryTally:
+        tally = tally or _CategoryTally()
+        await _service()._restore_settings(db, {"settings": settings}, overwrite=overwrite, tally=tally)
+        await db.commit()
+        return tally
+
+    async def _rows(self, db) -> dict:
+        return {s.key: s.value for s in (await db.execute(select(Settings))).scalars().all()}
+
+    # --- The refusal itself ------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_prometheus_toggle_is_refused_when_its_token_was_skipped(self, db_session):
+        """The headline case: overwrite off, empty database, endpoint stays shut."""
+        tally = await self._restore(db_session, currency="EUR", prometheus_enabled="true", prometheus_token="s3cret")
+
+        rows = await self._rows(db_session)
+        assert rows == {"currency": "EUR"}
+        assert any("prometheus_enabled" in note and "switched off" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("toggle,credential", sorted(_COMPANION_CREDENTIALS.items()))
+    async def test_every_pair_refuses_its_toggle(self, db_session, toggle, credential, monkeypatch):
+        monkeypatch.delenv("HA_TOKEN", raising=False)
+        await self._restore(db_session, **{toggle: "true", credential: "s3cret"})
+        assert toggle not in await self._rows(db_session)
+
+    @pytest.mark.asyncio
+    async def test_ha_toggle_is_refused_when_the_environment_has_no_token(self, db_session, monkeypatch):
+        monkeypatch.delenv("HA_TOKEN", raising=False)
+        await self._restore(db_session, ha_enabled="true", ha_token="s3cret", ha_url="http://ha.local")
+
+        rows = await self._rows(db_session)
+        assert "ha_enabled" not in rows
+        assert rows["ha_url"] == "http://ha.local"
+
+    @pytest.mark.asyncio
+    async def test_a_blank_local_credential_row_is_not_usable(self, db_session):
+        db_session.add(Settings(key="prometheus_token", value=""))
+        await db_session.commit()
+
+        await self._restore(db_session, prometheus_enabled="true", prometheus_token="s3cret")
+
+        assert "prometheus_enabled" not in await self._rows(db_session)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["TRUE", " True ", True])
+    async def test_true_is_refused_however_it_is_spelled(self, db_session, value):
+        await self._restore(db_session, prometheus_enabled=value, prometheus_token="s3cret")
+        assert "prometheus_enabled" not in await self._rows(db_session)
+
+    # --- Ruling 3: the tally counts what the preview counted ---------------
+
+    @pytest.mark.asyncio
+    async def test_refusals_are_not_counted_in_the_tally(self, db_session):
+        tally = await self._restore(db_session, currency="EUR", prometheus_enabled="true", prometheus_token="s3cret")
+        assert (tally.restored, tally.skipped, tally.failed) == (1, 0, 0)
+
+    @pytest.mark.asyncio
+    async def test_tally_total_equals_the_preview_item_count(self, db_session):
+        """The ruling, encoded: the user is shown a number, and it has to hold.
+
+        Off by three before this change — the two name-based refusals and the
+        companion one were all counted as ``skipped`` despite never being in the
+        preview's count.
+        """
+        db_session.add(Settings(key="theme", value="light"))
+        await db_session.commit()
+
+        values = {
+            "currency": "EUR",  # inserted    -> restored
+            "theme": "dark",  # exists, overwrite off -> skipped
+            "low_stock_threshold": None,  # no value    -> skipped
+            "": "junk",  # unusable key -> failed
+            "bambu_cloud_token": "x",  # blocked     -> refused
+            "auth_enabled": "false",  # protected   -> refused
+            "prometheus_enabled": "true",  # companion   -> refused
+            "prometheus_token": "s3cret",  # blocked     -> refused
+        }
+        item_count, _ = await _service()._count_items(
+            db_session, RestoreCategory.SETTINGS, {SETTINGS_PATH: {"settings": values}}
+        )
+
+        tally = _CategoryTally()
+        await _service()._restore_settings(db_session, {"settings": values}, overwrite=False, tally=tally)
+        await db_session.commit()
+
+        assert tally.restored + tally.skipped + tally.failed == item_count
+        assert (tally.restored, tally.skipped, tally.failed) == (1, 2, 1)
+
+    @pytest.mark.asyncio
+    async def test_preview_count_drops_by_one_when_the_local_credential_is_missing(self, db_session):
+        parsed = {
+            SETTINGS_PATH: {"settings": {"currency": "EUR", "prometheus_enabled": "true", "prometheus_token": "s3cret"}}
+        }
+
+        refused_count, refused_detail = await _service()._count_items(db_session, RestoreCategory.SETTINGS, parsed)
+
+        db_session.add(Settings(key="prometheus_token", value="already-set"))
+        await db_session.commit()
+        allowed_count, allowed_detail = await _service()._count_items(db_session, RestoreCategory.SETTINGS, parsed)
+
+        assert refused_count == allowed_count - 1
+        assert "switch(es)" in refused_detail
+        assert "switch(es)" not in allowed_detail
+
+    # --- Controls: over-refusal is the real risk here ----------------------
+
+    @pytest.mark.asyncio
+    async def test_a_usable_local_credential_lets_the_toggle_through(self, db_session):
+        db_session.add(Settings(key="prometheus_token", value="already-set"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, prometheus_enabled="true", prometheus_token="s3cret")
+
+        assert (await self._rows(db_session))["prometheus_enabled"] == "true"
+        assert not any("switched off" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_an_anonymous_broker_is_not_a_false_positive(self, db_session):
+        """mqtt_relay passes an empty password straight through — a real config."""
+        tally = await self._restore(db_session, mqtt_enabled="true", mqtt_broker="10.0.0.5")
+
+        assert (await self._rows(db_session))["mqtt_enabled"] == "true"
+        assert not any("switched off" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_an_anonymous_ldap_bind_is_not_a_false_positive(self, db_session):
+        """Same for a backup that carries the key with a blank value."""
+        tally = await self._restore(db_session, ldap_enabled="true", ldap_bind_password="   ")
+
+        assert (await self._rows(db_session))["ldap_enabled"] == "true"
+        assert not any("switched off" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_turning_a_toggle_off_is_always_written(self, db_session):
+        await self._restore(db_session, prometheus_enabled="false", prometheus_token="s3cret")
+        assert (await self._rows(db_session))["prometheus_enabled"] == "false"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["1", "on", "yes"])
+    async def test_spellings_no_reader_treats_as_on_are_written(self, db_session, value):
+        await self._restore(db_session, prometheus_enabled=value, prometheus_token="s3cret")
+        assert (await self._rows(db_session))["prometheus_enabled"] == value
+
+    @pytest.mark.asyncio
+    async def test_ha_token_in_the_environment_counts_as_usable(self, db_session, monkeypatch):
+        monkeypatch.setenv("HA_TOKEN", "from-env")
+        await self._restore(db_session, ha_enabled="true", ha_token="s3cret")
+        assert (await self._rows(db_session))["ha_enabled"] == "true"
+
+    @pytest.mark.asyncio
+    async def test_a_toggle_already_on_locally_is_written(self, db_session):
+        """The exposure pre-dates the restore, so "left switched off" would be a lie."""
+        db_session.add(Settings(key="prometheus_enabled", value="true"))
+        await db_session.commit()
+
+        tally = await self._restore(db_session, overwrite=True, prometheus_enabled="true", prometheus_token="s3cret")
+
+        assert (await self._rows(db_session))["prometheus_enabled"] == "true"
+        assert not any("switched off" in note for note in tally.notes)
+
+    # --- The map itself ----------------------------------------------------
+
+    def test_every_companion_credential_is_blocked_and_no_toggle_is(self):
+        """Guards the rule against a future edit to _SECRET_KEY_HINTS.
+
+        If a credential stopped being blocked, its toggle would travel with it
+        and the refusal would be pointless; if a toggle started being blocked,
+        the pair would never be reached at all.
+        """
+        for toggle, credential in _COMPANION_CREDENTIALS.items():
+            assert _is_blocked_setting_key(credential) is True, credential
+            assert _is_blocked_setting_key(toggle) is False, toggle
+            assert _is_protected_setting_key(toggle) is False, toggle
+
+    def test_every_environment_override_names_a_companion_credential(self):
+        assert set(_COMPANION_CREDENTIAL_ENV) <= set(_COMPANION_CREDENTIALS.values())
+
+    @pytest.mark.asyncio
+    async def test_plan_leaves_unusable_key_names_in_no_bucket(self, db_session):
+        """They are the restore's ``failed``, not a refusal."""
+        plan = await _service()._plan_settings(db_session, {"": "x", 7: "y", "currency": "EUR"})
+        assert plan == _SettingsPlan()
 
 
 class TestRestoreSpools:
@@ -1225,6 +1456,27 @@ class TestMqttRelayReconfigure:
         )
 
         assert written == set()
+
+    @pytest.mark.asyncio
+    async def test_a_refused_mqtt_enabled_is_not_reported_as_written(self, db_session):
+        """So the relay reconfigures from the *local* mqtt_enabled, not the backup's.
+
+        The companion rule refuses ``mqtt_enabled`` when the backup's password
+        cannot come across and there is none stored locally. It must not then
+        appear in ``keys_written``, or _reconfigure_mqtt_relay would be asked to
+        bring up a broker connection the restore deliberately declined to enable.
+        """
+        written: set[str] = set()
+
+        await _service()._restore_settings(
+            db_session,
+            {"settings": {"mqtt_enabled": "true", "mqtt_password": "refused", "mqtt_broker": "new.local"}},
+            overwrite=True,
+            tally=_CategoryTally(),
+            keys_written=written,
+        )
+
+        assert written == {"mqtt_broker"}
 
 
 class TestApplyOrdering:

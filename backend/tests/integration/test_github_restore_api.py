@@ -274,3 +274,66 @@ class TestStatusExposesRestoreState:
         response = await async_client.get("/api/v1/github-backup/status")
         assert response.status_code == 200
         assert response.json()["restore_running"] is False
+
+
+class TestRestoreDoesNotOpenTheMetricsEndpoint:
+    """The companion-credential rule, proved against the endpoint it protects.
+
+    ``/api/v1/metrics`` is on ``PUBLIC_API_ROUTES`` and its only gate is
+    ``if token:``, so writing ``prometheus_enabled`` onto an instance with no
+    ``prometheus_token`` row hands the entire metrics body to anyone who can
+    reach the port. The restore refuses that token as credential-shaped, so
+    before this change the pair came apart and the endpoint opened — with
+    overwrite *off*, since the local row is missing rather than present.
+
+    Driven through the real service and the real endpoint against one database:
+    the unit tests can show the toggle is not written, only this can show what
+    that means.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_restoring_prometheus_enabled_leaves_the_endpoint_shut(self, async_client: AsyncClient, db_session):
+        from backend.app.services.github_restore import _CategoryTally, github_restore_service
+
+        # An instance that never enabled Prometheus: no toggle row, no token row.
+        assert (await async_client.get("/api/v1/metrics")).status_code == 404
+
+        tally = _CategoryTally()
+        await github_restore_service._restore_settings(
+            db_session,
+            {"settings": {"prometheus_enabled": "true", "prometheus_token": "s3cret", "currency": "EUR"}},
+            overwrite=False,
+            tally=tally,
+        )
+        await db_session.commit()
+
+        response = await async_client.get("/api/v1/metrics")
+        assert response.status_code == 404, "a settings restore opened the metrics endpoint"
+        assert "bambuddy_build_info" not in response.text
+        assert any("switched off" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_an_instance_with_its_own_token_still_gets_the_toggle_back(
+        self, async_client: AsyncClient, db_session
+    ):
+        """Control. The rule must not break a legitimate Prometheus restore."""
+        from backend.app.services.github_restore import _CategoryTally, github_restore_service
+
+        await async_client.put(
+            "/api/v1/settings/", json={"prometheus_enabled": False, "prometheus_token": "local-token"}
+        )
+
+        await github_restore_service._restore_settings(
+            db_session,
+            {"settings": {"prometheus_enabled": "true", "prometheus_token": "s3cret"}},
+            overwrite=True,
+            tally=_CategoryTally(),
+        )
+        await db_session.commit()
+
+        assert (await async_client.get("/api/v1/metrics")).status_code == 401
+        authorised = await async_client.get("/api/v1/metrics", headers={"Authorization": "Bearer local-token"})
+        assert authorised.status_code == 200
+        assert "bambuddy_build_info" in authorised.text
