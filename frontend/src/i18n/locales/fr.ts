@@ -5001,7 +5001,7 @@ export default {
         settingsCredentialsWillSkip: '{{count}} clés ressemblant à des identifiants seront ignorées',
         settingsCompanionWillSkip: '{{count}} clés ressemblant à des identifiants seront ignorées, et {{companion}} interrupteurs qui en dépendent resteront désactivés',
         settingsCompanionOnlyWillSkip: '{{companion}} interrupteurs resteront désactivés - les identifiants dont chacun a besoin ne peuvent pas être restaurés depuis une sauvegarde',
-        spoolsUsageCount: 'plus {{count}} enregistrements de consommation',
+        spoolsUsageCount: 'dont {{count}} enregistrements de consommation',
         archivesMetadataOnly: 'Métadonnées uniquement - les fichiers 3MF et les miniatures ne sont pas dans une sauvegarde Git',
         kprofilesPrinterCount: 'sur {{count}} imprimantes',
       },

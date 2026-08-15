@@ -412,6 +412,39 @@ class TestCompanionCredentials:
         assert (tally.restored, tally.skipped, tally.failed) == (1, 2, 1)
 
     @pytest.mark.asyncio
+    async def test_the_spools_tally_holds_the_same_invariant(self, db_session):
+        """Spools broke it the other way: the tally counted more than the preview.
+
+        ``_restore_spool_usage`` increments this category's tally, but the
+        preview counted only the spools and mentioned the usage records in the
+        detail — so a backup with any usage history reported a total larger than
+        the number the user was shown.
+        """
+        spools = {
+            "spools": [
+                {"id": 1, "material": "PLA", "brand": "Bambu Lab", "created_at": "2026-01-05 12:00:00"},
+                {"id": 2, "material": "PETG", "brand": "Bambu Lab", "created_at": "2026-01-05 12:00:00"},
+            ]
+        }
+        usage = {
+            "usage_history": [
+                {"id": 9, "spool_id": 1, "grams_used": 12.5, "created_at": "2026-01-06 09:00:00"},
+                {"id": 10, "spool_id": 2, "grams_used": 4.0, "created_at": "2026-01-06 10:00:00"},
+                {"id": 11, "spool_id": 404, "grams_used": 1.0, "created_at": "2026-01-06 11:00:00"},
+            ]
+        }
+        item_count, _ = await _service()._count_items(
+            db_session, RestoreCategory.SPOOLS, {SPOOLS_PATH: spools, SPOOL_USAGE_PATH: usage}
+        )
+
+        tally = _CategoryTally()
+        await _service()._restore_spools(db_session, spools, usage, False, tally, {})
+        await db_session.commit()
+
+        assert item_count == 5, "two spools plus three usage records, all of which the tally counts"
+        assert tally.restored + tally.skipped + tally.failed == item_count
+
+    @pytest.mark.asyncio
     async def test_preview_count_drops_by_one_when_the_local_credential_is_missing(self, db_session):
         parsed = {
             SETTINGS_PATH: {"settings": {"currency": "EUR", "prometheus_enabled": "true", "prometheus_token": "s3cret"}}
@@ -1877,6 +1910,46 @@ class TestRestoreKprofiles:
         assert tally.skipped == 1
         assert tally.failed == 0
         assert any("not connected" in note for note in _messages(tally))
+
+    @pytest.mark.asyncio
+    async def test_a_non_dict_profile_is_counted_failed_not_dropped(self, db_session, printer_factory):
+        """The online path was the one place an entry left the tally entirely.
+
+        ``_kprofile_profile_count`` counts it, so the offline and
+        printer-missing paths already count the same entry skipped and the
+        failure path counts it outstanding — only the connected path skipped it
+        silently, so restored + skipped + failed came up short of the number the
+        preview showed.
+        """
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        path = next(iter(payload))
+        payload[path]["profiles"] = [payload[path]["profiles"][0], "nonsense"]
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=self._client())
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        assert tally.failed == 1
+        assert tally.restored + tally.skipped + tally.failed == 2
+
+    @pytest.mark.asyncio
+    async def test_the_offline_path_counts_the_same_entry(self, db_session, printer_factory):
+        """Control for the above: the two paths have to agree on the total."""
+        await printer_factory(serial_number="00M09A123456789")
+        payload = self._payload()
+        path = next(iter(payload))
+        payload[path]["profiles"] = [payload[path]["profiles"][0], "nonsense"]
+        client = MagicMock()
+        client.state.connected = False
+        tally = _CategoryTally()
+
+        with patch("backend.app.services.github_restore.printer_manager") as manager:
+            manager.get_client = MagicMock(return_value=client)
+            await _service()._restore_kprofiles(db_session, payload, tally)
+
+        assert tally.restored + tally.skipped + tally.failed == 2
 
     @pytest.mark.asyncio
     async def test_no_client_at_all_is_skipped(self, db_session, printer_factory):

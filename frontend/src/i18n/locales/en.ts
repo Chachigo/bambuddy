@@ -5057,7 +5057,7 @@ export default {
         settingsCredentialsWillSkip: '{{count}} credential-like key(s) will be skipped',
         settingsCompanionWillSkip: '{{count}} credential-like key(s) will be skipped, and {{companion}} switch(es) that depend on them will be left off',
         settingsCompanionOnlyWillSkip: '{{companion}} switch(es) will be left off - the credential each one needs cannot be restored from a backup',
-        spoolsUsageCount: 'plus {{count}} usage record(s)',
+        spoolsUsageCount: 'including {{count}} usage record(s)',
         archivesMetadataOnly: 'Metadata only - 3MF files and thumbnails are not in a Git backup',
         kprofilesPrinterCount: 'across {{count}} printer(s)',
       },

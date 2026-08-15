@@ -5012,7 +5012,7 @@ export default {
         settingsCredentialsWillSkip: '{{count}} zugangsdatenähnliche Schlüssel werden übersprungen',
         settingsCompanionWillSkip: '{{count}} zugangsdatenähnliche Schlüssel werden übersprungen und {{companion}} davon abhängige Schalter bleiben aus',
         settingsCompanionOnlyWillSkip: '{{companion}} Schalter bleiben aus - die dafür nötigen Zugangsdaten können nicht aus einem Backup wiederhergestellt werden',
-        spoolsUsageCount: 'zzgl. {{count}} Verbrauchseinträge',
+        spoolsUsageCount: 'davon {{count}} Verbrauchseinträge',
         archivesMetadataOnly: 'Nur Metadaten - 3MF-Dateien und Vorschaubilder sind nicht im Git-Backup enthalten',
         kprofilesPrinterCount: 'über {{count}} Drucker',
       },

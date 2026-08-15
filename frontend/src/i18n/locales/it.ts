@@ -5000,7 +5000,7 @@ export default {
         settingsCredentialsWillSkip: '{{count}} chiavi simili a credenziali verranno saltate',
         settingsCompanionWillSkip: '{{count}} chiavi simili a credenziali verranno saltate e {{companion}} interruttori che dipendono da esse resteranno disattivati',
         settingsCompanionOnlyWillSkip: '{{companion}} interruttori resteranno disattivati - le credenziali necessarie a ciascuno non possono essere ripristinate da un backup',
-        spoolsUsageCount: 'più {{count}} record di consumo',
+        spoolsUsageCount: 'inclusi {{count}} record di consumo',
         archivesMetadataOnly: 'Solo metadati - i file 3MF e le miniature non sono in un backup Git',
         kprofilesPrinterCount: 'su {{count}} stampanti',
       },

@@ -657,10 +657,16 @@ class GitHubRestoreService:
             spools = payload.get("spools") if isinstance(payload, dict) else None
             usage_payload = parsed.get(SPOOL_USAGE_PATH)
             usage = usage_payload.get("usage_history") if isinstance(usage_payload, dict) else None
+            # Usage records are counted here, not just described in the detail:
+            # _restore_spool_usage increments this category's tally, so counting
+            # only the spools broke restored + skipped + failed == item_count —
+            # the invariant the settings count is careful to hold. The detail
+            # breaks the total down rather than adding to it.
             count = len(spools) if isinstance(spools, list) else 0
             detail = None
             if isinstance(usage, list) and usage:
-                detail = _Detail("spoolsUsageCount", f"plus {len(usage)} usage records", {"count": len(usage)})
+                count += len(usage)
+                detail = _Detail("spoolsUsageCount", f"including {len(usage)} usage records", {"count": len(usage)})
             return count, detail
 
         if category == RestoreCategory.ARCHIVES:
@@ -1686,6 +1692,13 @@ class GitHubRestoreService:
                 claimed: set[int] = set()
                 for p in profiles:
                     if not isinstance(p, dict):
+                        # Counted, not dropped. _kprofile_profile_count includes
+                        # it, so the offline and printer-missing paths already
+                        # count the same entry skipped and the failure path
+                        # counts it outstanding — leaving the tally here was the
+                        # one place a profile could vanish from
+                        # restored + skipped + failed entirely.
+                        tally.failed += 1
                         continue
                     match = self._match_kprofile(p, current, claimed)
                     if match is None:

@@ -5019,7 +5019,7 @@ export default {
         settingsCredentialsWillSkip: 'Se omitirán {{count}} claves con aspecto de credencial',
         settingsCompanionWillSkip: 'Se omitirán {{count}} claves con aspecto de credencial y {{companion}} interruptores que dependen de ellas quedarán desactivados',
         settingsCompanionOnlyWillSkip: '{{companion}} interruptores quedarán desactivados - la credencial que necesita cada uno no se puede restaurar desde una copia de seguridad',
-        spoolsUsageCount: 'más {{count}} registros de consumo',
+        spoolsUsageCount: 'incluidos {{count}} registros de consumo',
         archivesMetadataOnly: 'Solo metadatos - los archivos 3MF y las miniaturas no están en una copia de Git',
         kprofilesPrinterCount: 'en {{count}} impresoras',
       },

@@ -4767,7 +4767,7 @@ export default {
         settingsCredentialsWillSkip: 'Ключей, похожих на учётные данные, будет пропущено: {{count}}',
         settingsCompanionWillSkip: 'Ключей, похожих на учётные данные, будет пропущено: {{count}}, а зависящие от них переключатели ({{companion}}) останутся выключенными',
         settingsCompanionOnlyWillSkip: 'Переключатели ({{companion}}) останутся выключенными - учётные данные, нужные каждому из них, нельзя восстановить из резервной копии',
-        spoolsUsageCount: 'плюс записей расхода: {{count}}',
+        spoolsUsageCount: 'включая записей расхода: {{count}}',
         archivesMetadataOnly: 'Только метаданные - файлы 3MF и миниатюры не входят в резервную копию Git',
         kprofilesPrinterCount: 'по {{count}} принтерам',
       },
