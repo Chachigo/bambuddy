@@ -18,8 +18,10 @@ const VECTOR_TYPES = new Set(['coBools', 'coFloats', 'coFloatsOrPercents']);
 export const isVectorOption = (option: ProcessOption): boolean => VECTOR_TYPES.has(option.type);
 
 /**
- * Numeric bound from the schema, or `undefined` when the extractor left an
- * unparsed C++ literal behind (`"0.3f"`, `"def_infill_anchor_min->sidetext"`).
+ * Numeric bound from the schema, or `undefined` when it isn't a number at all.
+ * Float literals are normalised by the generator, but a handful of bounds are
+ * unresolved C++ expressions the extractor could not follow, and those must not
+ * reach an input's `min`/`max`.
  */
 export function numericBound(bound: number | string | undefined): number | undefined {
   if (typeof bound === 'number') return Number.isFinite(bound) ? bound : undefined;
@@ -43,11 +45,10 @@ export function displaySidetext(option: ProcessOption): string | undefined {
 export function defaultForDisplay(option: ProcessOption): string {
   const d = option.default;
   if (d === undefined) return '';
-  if (Array.isArray(d)) {
-    // A handful of defaults were mis-extracted from C++ float literals —
-    // `0.f` became [0, "f"]. Drop the stray suffix token rather than render it.
-    return d.filter((v) => v !== 'f').map(String).join(', ');
-  }
+  // Per-extruder vectors render as a comma-separated list. C++ literal
+  // artefacts (`0.`, `0.3f`, `100.%`) are normalised by
+  // scripts/generate-slicer-schema.mjs, so nothing needs unpicking here.
+  if (Array.isArray(d)) return d.map(String).join(', ');
   if (typeof d === 'boolean') return d ? '1' : '0';
   return String(d);
 }
@@ -106,7 +107,7 @@ export function isModified(option: ProcessOption, value: SettingValue | undefine
   const d = option.default;
   if (d === undefined) return asString !== '';
 
-  const defaultSerialized = serializeSetting(option, Array.isArray(d) ? d.filter((v) => v !== 'f').map(String).join(', ') : (d as SettingValue));
+  const defaultSerialized = serializeSetting(option, Array.isArray(d) ? d.map(String).join(', ') : (d as SettingValue));
   const defaultString = Array.isArray(defaultSerialized) ? defaultSerialized.join(', ') : defaultSerialized;
 
   return asString !== defaultString;

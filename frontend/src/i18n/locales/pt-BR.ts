@@ -4267,6 +4267,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'Padrão',
+    fromFile: 'do arquivo',
+    fromFileHint: 'O designer alterou isto no arquivo de origem. O valor é {{value}}.',
+    fromFilePrinterCoupled: 'impressora do designer',
+    fromFilePrinterCoupledHint: 'Ajustado para a impressora para a qual este arquivo foi projetado — pode estar errado ou fora de faixa na sua.',
+    useFromFile: 'Usar o valor do arquivo de origem para {{option}}',
+    otherFromFile: 'Outras configurações deste arquivo',
     loading: 'Carregando configurações do fatiador…',
     mode: {
       simple: 'Simples',
@@ -4279,6 +4286,12 @@ export default {
     noMatches: 'Nenhuma configuração corresponde a esta busca.',
   },
   slice: {
+    filamentSlotUnset: 'não definido',
+    processSettingsEmbedded: 'Não é usado enquanto “Usar as configurações internas do arquivo” estiver ativo — as configurações do próprio arquivo conduzem este fatiamento.',
+    processSettingsInactive: 'Inativo',
+    presetsHidden: '{{count}} ocultos',
+    showAllPresets: 'Mostrar todos',
+    showFewerPresets: 'Mostrar menos',
     processSettings: 'Configurações de processo',
     processSettingsHint: 'Ajuste o perfil escolhido para este fatiamento. Tudo o que você não alterar permanece como o perfil define.',
     processSettingsChanged: '{{count}} alterados',
@@ -4312,11 +4325,6 @@ export default {
     autoOrientHint: 'O fatiador gira cada objeto para o lado que imprime melhor antes de fatiar. Substitui a orientação salva no arquivo.',
     autoArrange: 'Organizar automaticamente na mesa',
     autoArrangeHint: 'O fatiador posiciona os objetos para que não se sobreponham. Substitui a disposição do arquivo.',
-    designSettings: 'Manter as configurações do designer',
-    designSettingsHint: 'Este arquivo altera {{count}} configuração(ões) de impressão em relação ao perfil padrão.',
-    designSettingsSelected: '{{selected}} de {{total}} selecionadas',
-    designSettingsPrinterCoupled: 'específico da impressora',
-    designSettingsPrinterCoupledHint: 'Ajustado para a impressora para a qual o arquivo foi projetado — pode estar incorreto ou fora de faixa na sua.',
     enqueuing: 'Enviando trabalho de fatiamento…',
     queued: 'Na fila…',
     failed: 'Falha ao fatiar. Verifique os logs do sidecar.',

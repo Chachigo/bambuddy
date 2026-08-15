@@ -4279,6 +4279,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'Standard',
+    fromFile: 'aus Datei',
+    fromFileHint: 'Der Designer hat dies in der Quelldatei geändert. Wert: {{value}}.',
+    fromFilePrinterCoupled: 'Drucker des Designers',
+    fromFilePrinterCoupledHint: 'Auf den Drucker abgestimmt, für den diese Datei erstellt wurde – auf Ihrem kann der Wert falsch oder außerhalb des Bereichs sein.',
+    useFromFile: 'Wert aus der Quelldatei für {{option}} verwenden',
+    otherFromFile: 'Weitere Einstellungen aus dieser Datei',
     loading: 'Slicer-Einstellungen werden geladen…',
     mode: {
       simple: 'Einfach',
@@ -4291,6 +4298,12 @@ export default {
     noMatches: 'Keine Einstellungen passen zu dieser Suche.',
   },
   slice: {
+    filamentSlotUnset: 'nicht gewählt',
+    processSettingsEmbedded: 'Wird nicht verwendet, solange „Integrierte Einstellungen der Datei verwenden“ aktiv ist – die Einstellungen der Datei bestimmen diesen Slice.',
+    processSettingsInactive: 'Inaktiv',
+    presetsHidden: '{{count}} ausgeblendet',
+    showAllPresets: 'Alle anzeigen',
+    showFewerPresets: 'Weniger anzeigen',
     processSettings: 'Prozesseinstellungen',
     processSettingsHint: 'Passen Sie das gewählte Profil für diesen Slice an. Alles, was Sie nicht ändern, bleibt wie im Profil definiert.',
     processSettingsChanged: '{{count}} geändert',
@@ -4324,11 +4337,6 @@ export default {
     autoOrientHint: 'Der Slicer dreht jedes Objekt zuerst auf die am besten druckbare Seite. Überschreibt die Ausrichtung aus der Datei.',
     autoArrange: 'Automatisch auf dem Druckbett anordnen',
     autoArrangeHint: 'Der Slicer verteilt die Objekte so, dass sie sich nicht mehr überlappen. Ersetzt die Anordnung aus der Datei.',
-    designSettings: 'Einstellungen des Erstellers behalten',
-    designSettingsHint: 'Diese Datei ändert {{count}} Druckeinstellung(en) gegenüber dem Standardprofil.',
-    designSettingsSelected: '{{selected}} von {{total}} ausgewählt',
-    designSettingsPrinterCoupled: 'druckerspezifisch',
-    designSettingsPrinterCoupledHint: 'Auf den Drucker abgestimmt, für den die Datei erstellt wurde — auf deinem kann der Wert falsch oder unzulässig sein.',
     enqueuing: 'Slice-Auftrag wird übermittelt…',
     queued: 'In Warteschlange…',
     failed: 'Slicen fehlgeschlagen. Logs des Slicer-Sidecars prüfen.',

@@ -37,9 +37,9 @@ export interface ProcessOption {
   /** Unit shown after the input ("mm", "mm/s²", "%"). */
   sidetext?: string;
   /**
-   * Bounds as the extractor found them. Usually numeric, but a few carry
-   * unparsed C++ float literals ("0.3f") — callers must coerce and ignore what
-   * doesn't convert.
+   * Bounds, normalised out of their C++ source form by the generator. Typed as
+   * string too because the JSON carries both shapes; coerce with
+   * ``numericBound`` rather than assuming a number.
    */
   min?: number | string;
   max?: number | string;

@@ -4281,6 +4281,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'Predeterminado',
+    fromFile: 'del archivo',
+    fromFileHint: 'El diseñador cambió esto en el archivo de origen. Su valor es {{value}}.',
+    fromFilePrinterCoupled: 'impresora del diseñador',
+    fromFilePrinterCoupledHint: 'Ajustado para la impresora para la que se diseñó este archivo: en la tuya puede ser incorrecto o estar fuera de rango.',
+    useFromFile: 'Usar el valor del archivo de origen para {{option}}',
+    otherFromFile: 'Otros ajustes de este archivo',
     loading: 'Cargando ajustes del laminador…',
     mode: {
       simple: 'Simple',
@@ -4293,6 +4300,12 @@ export default {
     noMatches: 'Ningún ajuste coincide con esta búsqueda.',
   },
   slice: {
+    filamentSlotUnset: 'sin definir',
+    processSettingsEmbedded: 'No se usa mientras «Usar los ajustes integrados del archivo» está activo: los ajustes del propio archivo rigen este corte.',
+    processSettingsInactive: 'Inactivo',
+    presetsHidden: '{{count}} ocultos',
+    showAllPresets: 'Mostrar todos',
+    showFewerPresets: 'Mostrar menos',
     processSettings: 'Ajustes de proceso',
     processSettingsHint: 'Ajusta el perfil seleccionado para este corte. Todo lo que no toques se mantiene como lo define el perfil.',
     processSettingsChanged: '{{count}} cambiados',
@@ -4326,11 +4339,6 @@ export default {
     autoOrientHint: 'El laminador gira cada objeto hacia su mejor cara de impresión antes de laminar. Sustituye la orientación del archivo.',
     autoArrange: 'Organizar automáticamente en la base',
     autoArrangeHint: 'El laminador coloca los objetos para que dejen de solaparse. Sustituye la disposición del archivo.',
-    designSettings: 'Mantener los ajustes del diseñador',
-    designSettingsHint: 'Este archivo cambia {{count}} ajuste(s) de impresión respecto al perfil estándar.',
-    designSettingsSelected: '{{selected}} de {{total}} seleccionados',
-    designSettingsPrinterCoupled: 'específico de la impresora',
-    designSettingsPrinterCoupledHint: 'Ajustado para la impresora para la que se diseñó el archivo: puede ser incorrecto o quedar fuera de rango en la tuya.',
     enqueuing: 'Enviando el trabajo de laminado…',
     queued: 'En cola…',
     failed: 'Error al laminar. Consulte los registros del contenedor auxiliar del laminador.',

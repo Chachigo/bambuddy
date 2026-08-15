@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 
 import processSchema from '../../data/slicer/process-schema.json';
 import processToggles from '../../data/slicer/process-toggle-rules.json';
+import processTree from '../../data/slicer/process-ui-tree.json';
 import { disabledKeys, makeConfigReader } from '../../lib/slicerToggle';
-import type { ProcessSchema, SettingValue } from '../../types/slicerSettings';
+import type { ProcessSchema, ProcessUiTree, SettingValue } from '../../types/slicerSettings';
 
 const schema = processSchema as unknown as ProcessSchema;
+const tree = processTree as unknown as ProcessUiTree;
 const toggles = processToggles as { locals: Record<string, string>; rules: Array<{ fields: string[]; enable_if: string }> };
 
 const disabled = (settings: Record<string, SettingValue>) => disabledKeys(settings, schema, toggles);
@@ -91,5 +93,45 @@ describe('disabledKeys', () => {
     const b = disabled(off);
     const decided = toggles.rules.filter((rule) => rule.fields.some((f) => a.has(f) || b.has(f)));
     expect(decided.length).toBeGreaterThanOrEqual(Math.floor(toggles.rules.length * 0.6));
+  });
+});
+
+describe('vendored process schema', () => {
+  // The extractor reads defaults and bounds out of C++ initialisers, so float
+  // literals arrive in source form — `0.`, `0.3f`, `100.%`, and `0.f` split
+  // into [0, "f"]. Rendering those verbatim put a column of "0." in the Line
+  // width group. scripts/generate-slicer-schema.mjs normalises them; this
+  // guards a regeneration that drops that step.
+  const LITERAL_ARTEFACT = /^-?[\d]*\.$|\.%$|^-?[\d.]+f$/;
+
+  const offenders = (field: 'default' | 'min' | 'max') =>
+    Object.entries(schema)
+      .filter(([, opt]) => {
+        const v = opt[field];
+        if (Array.isArray(v)) return v.some((x) => x === 'f');
+        return typeof v === 'string' && LITERAL_ARTEFACT.test(v);
+      })
+      .map(([key]) => `${key}.${field}`);
+
+  it.each(['default', 'min', 'max'] as const)('carries no C++ literal artefacts in %s', (field) => {
+    expect(offenders(field)).toEqual([]);
+  });
+
+  it('renders the line-width defaults as plain numbers', () => {
+    // The reported symptom: every field in this group showed "0."
+    for (const key of ['line_width', 'outer_wall_line_width', 'inner_wall_line_width', 'support_line_width']) {
+      expect(schema[key].default).toBe('0');
+    }
+    expect(schema.bridge_line_width.default).toBe('100%');
+  });
+
+  it('keeps every option the UI tree references', () => {
+    // A trim that drops a referenced key renders a control with no type,
+    // label or default.
+    for (const page of tree) {
+      for (const group of page.groups) {
+        for (const key of group.options) expect(schema[key]).toBeDefined();
+      }
+    }
   });
 });

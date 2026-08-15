@@ -80,11 +80,37 @@ for (const k of CONDITION_KEYS) if (schema[k]) referenced.add(k);
 // options, most of it source-location bookkeeping we have no use for.
 const KEEP = ['type', 'mode', 'label', 'tooltip', 'sidetext', 'min', 'max', 'enum_values', 'enum_labels', 'default'];
 
+// The extractor reads defaults and bounds straight out of C++ initialisers, so
+// float literals arrive in source form: `0.` stays "0.", `0.3f` stays "0.3f",
+// `100.%` stays "100.%", and `0.f` even splits into [0, "f"]. Rendering those
+// verbatim put a column of "0." in the Line width group. They are literal
+// artefacts, not values, so they are cleaned here — once, in the data — rather
+// than worked around in every place that displays a default.
+function normaliseLiteral(value) {
+  if (Array.isArray(value)) {
+    // `0.f` split across two entries; the stray "f" is not a value.
+    const cleaned = value.filter((v) => v !== 'f').map(normaliseLiteral);
+    return cleaned.length > 0 ? cleaned : [0];
+  }
+  if (typeof value !== 'string') return value;
+
+  let s = value.trim();
+  s = s.replace(/^(-?[\d.]+)f$/, '$1');   // 0.3f -> 0.3,  0.f -> 0.
+  s = s.replace(/^(-?[\d.]*)\.%$/, '$1%'); // 100.% -> 100%
+  s = s.replace(/^(-?[\d.]*)\.$/, '$1');   // 0. -> 0
+  // A literal that was nothing but a dot carried no digits to keep.
+  if (s === '' || s === '-') return value;
+  return s;
+}
+
 const trimmedSchema = {};
 for (const key of [...referenced].sort()) {
   const opt = schema[key];
   const out = {};
-  for (const f of KEEP) if (opt[f] !== undefined) out[f] = opt[f];
+  for (const f of KEEP) {
+    if (opt[f] === undefined) continue;
+    out[f] = f === 'default' || f === 'min' || f === 'max' ? normaliseLiteral(opt[f]) : opt[f];
+  }
   trimmedSchema[key] = out;
 }
 

@@ -4,8 +4,9 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 
 import { render } from '../utils';
-import SlicerSettingsPanel from '../../components/SlicerSettingsPanel';
+import SlicerSettingsPanel, { type FilamentChoice } from '../../components/SlicerSettingsPanel';
 import type { SettingValue } from '../../types/slicerSettings';
+import type { DesignOverride } from '../../types/plates';
 
 /**
  * The panel is a controlled component: it renders from the `values` prop and
@@ -16,11 +17,18 @@ import type { SettingValue } from '../../types/slicerSettings';
 function Harness({
   initial,
   onChange,
+  sourceOverrides,
+  initialSelected,
+  filamentChoices,
 }: {
   initial: Record<string, SettingValue>;
   onChange: (v: Record<string, SettingValue>, s: Record<string, string | string[]>) => void;
+  sourceOverrides?: DesignOverride[];
+  initialSelected?: string[];
+  filamentChoices?: FilamentChoice[];
 }) {
   const [values, setValues] = useState(initial);
+  const [selected, setSelected] = useState(new Set(initialSelected ?? []));
   return (
     <SlicerSettingsPanel
       values={values}
@@ -28,14 +36,32 @@ function Harness({
         setValues(v);
         onChange(v, s);
       }}
+      filamentChoices={filamentChoices}
+      sourceOverrides={sourceOverrides}
+      sourceSelected={selected}
+      onToggleSource={(key, on) =>
+        setSelected((prev) => {
+          const next = new Set(prev);
+          if (on) next.add(key);
+          else next.delete(key);
+          return next;
+        })
+      }
     />
   );
 }
 
 /** Renders the panel and waits for its dynamically imported metadata. */
-async function renderPanel(initial: Record<string, SettingValue> = {}) {
+async function renderPanel(
+  initial: Record<string, SettingValue> = {},
+  extra: {
+    sourceOverrides?: DesignOverride[];
+    initialSelected?: string[];
+    filamentChoices?: FilamentChoice[];
+  } = {},
+) {
   const onChange = vi.fn();
-  render(<Harness initial={initial} onChange={onChange} />);
+  render(<Harness initial={initial} onChange={onChange} {...extra} />);
   await waitFor(() => expect(screen.getByPlaceholderText('Search settings')).toBeInTheDocument());
   return { onChange };
 }
@@ -175,5 +201,152 @@ describe('SlicerSettingsPanel', () => {
     const [values] = onChange.mock.calls.at(-1)!;
     expect(values).not.toHaveProperty('layer_height');
     expect(values.wall_loops).toBe(4);
+  });
+});
+
+describe('SlicerSettingsPanel — search', () => {
+  it('treats underscores and spaces alike so a key can be typed naturally', async () => {
+    // outer_wall_speed's label is only "Outer wall" — the Speed page supplies
+    // the rest — so the key is the only place the full phrase appears.
+    const user = userEvent.setup();
+    await renderPanel();
+    await user.click(screen.getByRole('button', { name: 'Expert' }));
+    await user.type(screen.getByPlaceholderText('Search settings'), 'outer wall speed');
+    await waitFor(() => expect(screen.getByLabelText(/^Outer wall/)).toBeInTheDocument());
+  });
+
+  it('matches a page or group name, not just option labels', async () => {
+    const user = userEvent.setup();
+    await renderPanel();
+    await user.click(screen.getByRole('button', { name: 'Expert' }));
+    await user.type(screen.getByPlaceholderText('Search settings'), 'ironing');
+    await waitFor(() => expect(screen.getByLabelText(/^Ironing type/)).toBeInTheDocument());
+  });
+});
+
+describe("SlicerSettingsPanel — the source file's own settings", () => {
+  const sourceOverrides: DesignOverride[] = [
+    { key: 'wall_loops', value: '5', printer_coupled: false },
+    { key: 'outer_wall_speed', value: '200', printer_coupled: true },
+    // A key the vendored schema has no entry for. It still applies, so it must
+    // not silently vanish from a panel that claims to show what will be used.
+    { key: 'some_unlisted_key', value: '7', printer_coupled: false },
+  ];
+
+  it("shows the designer's value against the option once switched on", async () => {
+    const user = userEvent.setup();
+    await renderPanel({}, { sourceOverrides, initialSelected: ['wall_loops'] });
+    const input = await showOption(user, 'Wall loops', 'wall loops');
+    expect(input).toHaveValue(5);
+    expect(screen.getByText('from file')).toBeInTheDocument();
+  });
+
+  it('falls back to the preset value when it is switched off', async () => {
+    const user = userEvent.setup();
+    await renderPanel({}, { sourceOverrides, initialSelected: [] });
+    // wall_loops defaults to 2 in the schema.
+    const input = await showOption(user, 'Wall loops', 'wall loops');
+    expect(input).toHaveValue(2);
+  });
+
+  it('flags a machine-coupled setting rather than applying it quietly', async () => {
+    const user = userEvent.setup();
+    await renderPanel({}, { sourceOverrides, initialSelected: ['wall_loops'] });
+    await user.click(screen.getByRole('button', { name: 'Expert' }));
+    await user.type(screen.getByPlaceholderText('Search settings'), 'outer wall speed');
+    await waitFor(() => expect(screen.getByText("designer's printer")).toBeInTheDocument());
+  });
+
+  it('lists source settings the schema has no entry for', async () => {
+    await renderPanel({}, { sourceOverrides, initialSelected: ['some_unlisted_key'] });
+    await waitFor(() => expect(screen.getByText('Other settings from this file')).toBeInTheDocument());
+    expect(screen.getByText('some_unlisted_key')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+  });
+
+  it('keeps a typed value ahead of the file\'s', async () => {
+    const user = userEvent.setup();
+    const { onChange } = await renderPanel({}, { sourceOverrides, initialSelected: ['wall_loops'] });
+
+    const input = await showOption(user, 'Wall loops', 'wall loops');
+    expect(input).toHaveValue(5);
+    await user.clear(input);
+    await user.type(input, '3');
+
+    // The typed value is what gets sent; the file's tick is unaffected and the
+    // backend applies it first, so last-write-wins leaves 3 in the process JSON.
+    await waitFor(() => {
+      const [, serialized] = onChange.mock.calls.at(-1)!;
+      expect(serialized.wall_loops).toBe('3');
+    });
+  });
+});
+
+describe('SlicerSettingsPanel — filament-slot options', () => {
+  const filamentChoices: FilamentChoice[] = [
+    { index: 1, label: 'Bambu PLA Basic', color: '#FF0000' },
+    { index: 2, label: 'Bambu Support for PLA', color: '#FFFFFF' },
+  ];
+
+  it("follows the slicer's own gating rather than being live regardless", async () => {
+    // The interface picker sits behind have_support_material, so it greys out
+    // with supports off — becoming a dropdown must not exempt it from the
+    // rules every other option obeys.
+    const user = userEvent.setup();
+    await renderPanel({}, { filamentChoices });
+    const off = await showOption(user, 'Support/raft interface', 'support_interface_filament');
+    expect(off).toBeDisabled();
+  });
+
+  it('is operable once supports are switched on', async () => {
+    const user = userEvent.setup();
+    await renderPanel({ enable_support: true }, { filamentChoices });
+    const on = await showOption(user, 'Support/raft interface', 'support_interface_filament');
+    expect(on).toBeEnabled();
+  });
+
+  it('offers the picked filaments instead of a bare number field', async () => {
+    const user = userEvent.setup();
+    await renderPanel({}, { filamentChoices });
+    const control = await showOption(user, 'Support/raft base', 'support_filament');
+
+    expect(control.tagName).toBe('SELECT');
+    const labels = Array.from((control as HTMLSelectElement).options).map((o) => o.textContent);
+    expect(labels).toEqual(['Default', '1: Bambu PLA Basic', '2: Bambu Support for PLA']);
+  });
+
+  it("defaults to the slicer's 0, meaning no specific filament", async () => {
+    const user = userEvent.setup();
+    await renderPanel({}, { filamentChoices });
+    const control = await showOption(user, 'Support/raft base', 'support_filament');
+    expect(control).toHaveValue('0');
+  });
+
+  it('sends the slot index the slicer expects', async () => {
+    const user = userEvent.setup();
+    const { onChange } = await renderPanel({ enable_support: true }, { filamentChoices });
+    const control = await showOption(user, 'Support/raft interface', 'support_interface_filament');
+
+    await user.selectOptions(control, '2');
+    await waitFor(() => {
+      const [, serialized] = onChange.mock.calls.at(-1)!;
+      expect(serialized.support_interface_filament).toBe('2');
+    });
+  });
+
+  it('stays a plain number field when no filaments have been picked', async () => {
+    // STL sources and the pre-plate-analysis window have no slot list yet;
+    // an empty dropdown would be worse than the number input it replaced.
+    const user = userEvent.setup();
+    await renderPanel({}, { filamentChoices: [] });
+    const control = await showOption(user, 'Support/raft base', 'support_filament');
+    expect(control.tagName).toBe('INPUT');
+  });
+
+  it('leaves unrelated integer options alone', async () => {
+    const user = userEvent.setup();
+    await renderPanel({}, { filamentChoices });
+    const control = await showOption(user, 'Wall loops', 'wall loops');
+    expect(control.tagName).toBe('INPUT');
   });
 });

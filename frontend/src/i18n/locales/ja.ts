@@ -4279,6 +4279,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: '既定',
+    fromFile: 'ファイル由来',
+    fromFileHint: 'この項目は元ファイルで設計者が変更しています。値は {{value}} です。',
+    fromFilePrinterCoupled: '設計者のプリンター',
+    fromFilePrinterCoupledHint: 'このファイルが設計されたプリンター向けの値です。お使いのプリンターでは不適切または範囲外になる場合があります。',
+    useFromFile: '{{option}} に元ファイルの値を使用する',
+    otherFromFile: 'このファイルのその他の設定',
     loading: 'スライサー設定を読み込んでいます…',
     mode: {
       simple: 'シンプル',
@@ -4291,6 +4298,12 @@ export default {
     noMatches: 'この検索に一致する設定はありません。',
   },
   slice: {
+    filamentSlotUnset: '未設定',
+    processSettingsEmbedded: '「ファイル内蔵の設定を使用」が有効な間は使用されません。このスライスはファイル自身の設定で実行されます。',
+    processSettingsInactive: '無効',
+    presetsHidden: '{{count}} 件を非表示',
+    showAllPresets: 'すべて表示',
+    showFewerPresets: '表示を減らす',
     processSettings: 'プロセス設定',
     processSettingsHint: 'このスライス用に選択したプリセットを調整します。変更しない項目はプリセットの定義のままです。',
     processSettingsChanged: '{{count}} 件変更',
@@ -4324,11 +4337,6 @@ export default {
     autoOrientHint: 'スライスする前に、各オブジェクトを印刷に適した面へ自動で回転させます。ファイルに保存された向きは上書きされます。',
     autoArrange: 'プレート上に自動配置',
     autoArrangeHint: 'オブジェクトが重ならないようにスライサーが並べ直します。ファイルの配置は置き換えられます。',
-    designSettings: '設計者の設定を保持',
-    designSettingsHint: 'このファイルは標準プロファイルから {{count}} 個の印刷設定を変更しています。',
-    designSettingsSelected: '{{total}} 個中 {{selected}} 個を選択',
-    designSettingsPrinterCoupled: 'プリンター固有',
-    designSettingsPrinterCoupledHint: 'このファイルが対象とするプリンター向けに調整された値です。お使いのプリンターでは不適切または範囲外になる場合があります。',
     enqueuing: 'スライスジョブを送信中…',
     queued: '待機中…',
     failed: 'スライスに失敗。サイドカーのログを確認してください。',

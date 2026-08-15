@@ -4267,6 +4267,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: '默认',
+    fromFile: '来自文件',
+    fromFileHint: '设计者在源文件中修改了此项，其值为 {{value}}。',
+    fromFilePrinterCoupled: '设计者的打印机',
+    fromFilePrinterCoupledHint: '针对该文件设计时所用的打印机调校，在你的打印机上可能不正确或超出范围。',
+    useFromFile: '对 {{option}} 使用源文件中的值',
+    otherFromFile: '此文件中的其他设置',
     loading: '正在加载切片设置…',
     mode: {
       simple: '简单',
@@ -4279,6 +4286,12 @@ export default {
     noMatches: '没有与搜索匹配的设置。',
   },
   slice: {
+    filamentSlotUnset: '未设置',
+    processSettingsEmbedded: '启用“使用文件内置设置”时不生效——本次切片由文件自身的设置决定。',
+    processSettingsInactive: '未启用',
+    presetsHidden: '已隐藏 {{count}} 项',
+    showAllPresets: '显示全部',
+    showFewerPresets: '显示较少',
     processSettings: '工艺设置',
     processSettingsHint: '为本次切片调整所选预设。未改动的项目仍按预设定义。',
     processSettingsChanged: '已更改 {{count}} 项',
@@ -4312,11 +4325,6 @@ export default {
     autoOrientHint: '切片前由切片器把每个模型转到最适合打印的一面，会覆盖文件中保存的朝向。',
     autoArrange: '自动排布在热床上',
     autoArrangeHint: '由切片器重新摆放模型，使其不再重叠，会替换文件自带的布局。',
-    designSettings: '保留设计者的设置',
-    designSettingsHint: '此文件相对标准配置修改了 {{count}} 项打印设置。',
-    designSettingsSelected: '已选择 {{selected}} / {{total}}',
-    designSettingsPrinterCoupled: '与打印机相关',
-    designSettingsPrinterCoupledHint: '该值是为此文件面向的打印机调校的，在你的打印机上可能不正确或超出范围。',
     enqueuing: '提交切片任务中…',
     queued: '已排队…',
     failed: '切片失败。请检查切片器 sidecar 日志。',

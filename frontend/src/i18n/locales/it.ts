@@ -4267,6 +4267,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'Predefinito',
+    fromFile: 'dal file',
+    fromFileHint: 'Il designer ha modificato questo parametro nel file di origine. Il valore è {{value}}.',
+    fromFilePrinterCoupled: 'stampante del designer',
+    fromFilePrinterCoupledHint: 'Tarato per la stampante per cui è stato progettato questo file: sulla tua può essere errato o fuori intervallo.',
+    useFromFile: 'Usa il valore del file di origine per {{option}}',
+    otherFromFile: 'Altre impostazioni da questo file',
     loading: 'Caricamento impostazioni dello slicer…',
     mode: {
       simple: 'Semplice',
@@ -4279,6 +4286,12 @@ export default {
     noMatches: 'Nessuna impostazione corrisponde a questa ricerca.',
   },
   slice: {
+    filamentSlotUnset: 'non impostato',
+    processSettingsEmbedded: 'Non utilizzato finché «Usa le impostazioni integrate del file» è attivo: sono le impostazioni del file a guidare questo slice.',
+    processSettingsInactive: 'Non attivo',
+    presetsHidden: '{{count}} nascosti',
+    showAllPresets: 'Mostra tutti',
+    showFewerPresets: 'Mostra meno',
     processSettings: 'Impostazioni di processo',
     processSettingsHint: 'Regola il profilo scelto per questo slice. Tutto ciò che non tocchi resta come definito dal profilo.',
     processSettingsChanged: '{{count}} modificate',
@@ -4312,11 +4325,6 @@ export default {
     autoOrientHint: "Lo slicer ruota ogni oggetto sul lato che si stampa meglio prima di affettare. Sostituisce l'orientamento salvato nel file.",
     autoArrange: 'Disponi automaticamente sul piatto',
     autoArrangeHint: 'Lo slicer dispone gli oggetti in modo che non si sovrappongano più. Sostituisce la disposizione del file.',
-    designSettings: 'Mantieni le impostazioni del progettista',
-    designSettingsHint: 'Questo file modifica {{count}} impostazione/i di stampa rispetto al profilo standard.',
-    designSettingsSelected: '{{selected}} di {{total}} selezionate',
-    designSettingsPrinterCoupled: 'specifico della stampante',
-    designSettingsPrinterCoupledHint: 'Tarato per la stampante per cui è stato progettato il file: sulla tua può essere errato o fuori intervallo.',
     enqueuing: 'Invio lavoro di slicing…',
     queued: 'In coda…',
     failed: 'Slicing fallito. Controlla i log del sidecar.',

@@ -20,11 +20,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, RotateCcw, Loader2 } from 'lucide-react';
+import { Search, RotateCcw, Loader2, ChevronDown } from 'lucide-react';
 
 import { disabledKeys, type ToggleRules } from '../lib/slicerToggle';
 import { defaultForDisplay, displaySidetext, isModified, numericBound, serializeOverrides } from '../lib/slicerSettings';
 import type { OptionMode, ProcessOption, ProcessSchema, ProcessUiTree, SettingValue } from '../types/slicerSettings';
+import type { DesignOverride } from '../types/plates';
 
 interface SlicerData {
   schema: ProcessSchema;
@@ -45,13 +46,73 @@ interface Props {
    */
   onChange: (values: Record<string, SettingValue>, serialized: Record<string, string | string[]>) => void;
   disabled?: boolean;
+  /**
+   * Process settings the source 3MF's designer moved off the stock preset
+   * (#2622), as recorded by BambuStudio in `different_settings_to_system`.
+   *
+   * These are shown inline against the options they belong to rather than in a
+   * list of their own, so there is one place to see what this slice will use.
+   * Their *values* are not routed through this component: the backend reads
+   * them straight out of the file, which keeps settings faithful even for keys
+   * outside the option schema we vendor. All this panel decides is which of
+   * them are switched on.
+   */
+  sourceOverrides?: DesignOverride[];
+  /** Which source-override keys are currently switched on. */
+  sourceSelected?: Set<string>;
+  onToggleSource?: (key: string, on: boolean) => void;
+  /**
+   * The filaments picked on the slice dialog's left-hand side, in slot order.
+   *
+   * A handful of options select *which filament* prints a given feature —
+   * supports, outer walls, infill. The slicer stores those as a plain integer
+   * where 0 means "whatever filament the region already uses" and 1..N is a
+   * slot. A bare number field makes the user count their own AMS slots, so
+   * when this is supplied those options become a dropdown of the actual
+   * picks instead.
+   */
+  filamentChoices?: FilamentChoice[];
 }
+
+export interface FilamentChoice {
+  /** 1-based slot index, matching the integer the slicer stores. */
+  index: number;
+  /** Preset name, or a fallback when the slot has no pick yet. */
+  label: string;
+  /** Slot colour from the source plate, for the swatch. */
+  color?: string;
+}
+
+/**
+ * Options whose integer value names a filament slot rather than a quantity.
+ * All use the same encoding: 0 = "default / current filament", 1..N = slot.
+ * Support base and interface are the pair on the Support page; the rest are
+ * the Multimaterial page's per-region pickers, which have the same wart.
+ */
+const FILAMENT_SLOT_OPTIONS = new Set([
+  'support_filament',
+  'support_interface_filament',
+  'outer_wall_filament_id',
+  'inner_wall_filament_id',
+  'top_surface_filament_id',
+  'bottom_surface_filament_id',
+  'internal_solid_filament_id',
+  'sparse_infill_filament_id',
+]);
 
 /** Visibility tiers, in increasing order of how much they reveal. */
 const MODES: OptionMode[] = ['simple', 'advanced', 'expert'];
 const MODE_RANK: Record<string, number> = { simple: 0, advanced: 1, expert: 2, develop: 3 };
 
-export default function SlicerSettingsPanel({ values, onChange, disabled = false }: Props) {
+export default function SlicerSettingsPanel({
+  values,
+  onChange,
+  disabled = false,
+  sourceOverrides = [],
+  sourceSelected,
+  onToggleSource,
+  filamentChoices,
+}: Props) {
   const { t } = useTranslation();
   const [data, setData] = useState<SlicerData | null>(null);
   const [mode, setMode] = useState<OptionMode>('simple');
@@ -84,6 +145,19 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
     [data, values],
   );
 
+  const sourceByKey = useMemo(
+    () => new Map(sourceOverrides.map((o) => [o.key, o])),
+    [sourceOverrides],
+  );
+
+  // Source overrides for keys the vendored schema doesn't cover. They still
+  // apply — the backend reads their values from the file — so they get a group
+  // of their own rather than being dropped from view.
+  const unlistedSource = useMemo(() => {
+    if (!data) return [];
+    return sourceOverrides.filter((o) => !data.schema[o.key]);
+  }, [data, sourceOverrides]);
+
   const emit = (next: Record<string, SettingValue>) => {
     if (!data) return;
     // Only genuine deviations are worth sending: an override that equals the
@@ -106,19 +180,30 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
   // Search cuts across every page; without a query we show the selected page.
   const visiblePages = useMemo(() => {
     if (!data) return [];
-    const needle = query.trim().toLowerCase();
+    // Underscores and spaces are interchangeable so "outer wall speed" finds
+    // `outer_wall_speed`. That matters more than it looks: several labels are
+    // only meaningful with their group ("Outer wall" under Speed), so the key
+    // is often the only place the full phrase appears.
+    const flatten = (s: string) => s.toLowerCase().replace(/[_\s]+/g, ' ').trim();
+    const needle = flatten(query);
     const withinMode = (key: string) => MODE_RANK[data.schema[key]?.mode ?? 'expert'] <= MODE_RANK[mode];
-    const matches = (key: string) => {
+    const matches = (key: string, group: string, page: string) => {
       if (!needle) return true;
       const opt = data.schema[key];
-      return key.includes(needle) || opt?.label?.toLowerCase().includes(needle) || opt?.tooltip?.toLowerCase().includes(needle);
+      // Group and page are matched too, so "speed" lists the Speed page's
+      // options rather than only the handful with "speed" in their label.
+      const haystack = [key, opt?.label ?? '', opt?.tooltip ?? '', group, page];
+      return haystack.some((h) => flatten(h).includes(needle));
     };
 
     return data.tree
       .map((p) => ({
         ...p,
         groups: p.groups
-          .map((g) => ({ ...g, options: g.options.filter((k) => withinMode(k) && matches(k)) }))
+          .map((g) => ({
+            ...g,
+            options: g.options.filter((k) => withinMode(k) && matches(k, g.group, p.page)),
+          }))
           .filter((g) => g.options.length > 0),
       }))
       .filter((p) => p.groups.length > 0);
@@ -149,7 +234,7 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex rounded overflow-hidden border border-white/10">
+        <div className="flex overflow-hidden rounded border border-bambu-dark-tertiary">
           {MODES.map((m) => (
             <button
               key={m}
@@ -157,7 +242,7 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
               onClick={() => setMode(m)}
               disabled={disabled}
               className={`px-2.5 py-1 text-xs capitalize transition-colors ${
-                mode === m ? 'bg-bambu-green text-black' : 'text-bambu-gray hover:text-white'
+                mode === m ? 'bg-bambu-green text-white' : 'text-bambu-gray hover:text-white'
               }`}
             >
               {t(`slicerSettings.mode.${m}`, m)}
@@ -173,7 +258,7 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
             onChange={(e) => setQuery(e.target.value)}
             disabled={disabled}
             placeholder={t('slicerSettings.searchPlaceholder', 'Search settings')}
-            className="w-full bg-black/30 border border-white/10 rounded pl-7 pr-2 py-1 text-xs text-white placeholder:text-bambu-gray/60"
+            className="w-full rounded border border-bambu-dark-tertiary bg-bambu-dark pl-7 pr-2 py-1 text-xs text-white placeholder:text-bambu-gray/60 focus:border-bambu-green focus:outline-none disabled:opacity-40"
           />
         </div>
 
@@ -199,7 +284,7 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
               onClick={() => setPage(p.page)}
               disabled={disabled}
               className={`px-2 py-1 text-xs rounded transition-colors ${
-                activePage?.page === p.page ? 'bg-white/10 text-white' : 'text-bambu-gray hover:text-white'
+                activePage?.page === p.page ? 'bg-bambu-dark-tertiary text-white' : 'text-bambu-gray hover:text-white'
               }`}
             >
               {p.page}
@@ -221,7 +306,7 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
               {query.trim() && <p className="text-[0.7rem] uppercase tracking-wide text-bambu-gray/70">{p.page}</p>}
               {p.groups.map((g) => (
                 <fieldset key={`${p.page}:${g.group}`} className="flex flex-col gap-1.5">
-                  <legend className="text-xs font-medium text-white/80 mb-1">{g.group}</legend>
+                  <legend className="mb-1 text-xs font-medium text-white">{g.group}</legend>
                   {g.options.map((key) => (
                     <OptionRow
                       key={key}
@@ -231,12 +316,48 @@ export default function SlicerSettingsPanel({ values, onChange, disabled = false
                       onChange={(v) => setValue(key, v)}
                       disabled={disabled || off.has(key)}
                       disabledBySlicer={off.has(key)}
+                      source={sourceByKey.get(key)}
+                      sourceOn={sourceSelected?.has(key) ?? false}
+                      onToggleSource={onToggleSource}
+                      filamentChoices={FILAMENT_SLOT_OPTIONS.has(key) ? filamentChoices : undefined}
                     />
                   ))}
                 </fieldset>
               ))}
             </div>
           ))}
+
+          {/* Source-file settings the vendored schema has no entry for: they
+              still apply (the backend reads their values from the file), so
+              they get a plain key/value group rather than disappearing from a
+              panel that claims to show what this slice will use. */}
+          {unlistedSource.length > 0 && !query.trim() && (
+            <fieldset className="flex flex-col gap-1.5">
+              <legend className="mb-1 text-xs font-medium text-white">
+                {t('slicerSettings.otherFromFile', 'Other settings from this file')}
+              </legend>
+              {unlistedSource.map((o) => (
+                <label key={o.key} className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sourceSelected?.has(o.key) ?? false}
+                    disabled={disabled || !onToggleSource}
+                    onChange={(e) => onToggleSource?.(o.key, e.target.checked)}
+                    className="shrink-0 cursor-pointer disabled:opacity-40"
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="font-mono text-bambu-gray">{o.key}</span>
+                    <span className="ml-1.5 text-white">{formatSourceValue(o.value)}</span>
+                  </span>
+                  {o.printer_coupled && (
+                    <span className="shrink-0 rounded bg-amber-100 px-1 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-400">
+                      {t('slicerSettings.fromFilePrinterCoupled', "designer's printer")}
+                    </span>
+                  )}
+                </label>
+              ))}
+            </fieldset>
+          )}
         </div>
       )}
     </div>
@@ -251,13 +372,37 @@ interface RowProps {
   disabled: boolean;
   /** Greyed because the slicer's own rules turn it off, not because the form is busy. */
   disabledBySlicer: boolean;
+  /** Set when the source file's designer moved this option off the stock preset. */
+  source?: DesignOverride;
+  sourceOn?: boolean;
+  onToggleSource?: (key: string, on: boolean) => void;
+  /** Set only for options whose integer value names a filament slot. */
+  filamentChoices?: FilamentChoice[];
 }
 
-function OptionRow({ optionKey, option, value, onChange, disabled, disabledBySlicer }: RowProps) {
+function OptionRow({
+  optionKey,
+  option,
+  value,
+  onChange,
+  disabled,
+  disabledBySlicer,
+  source,
+  sourceOn = false,
+  onToggleSource,
+  filamentChoices,
+}: RowProps) {
   const { t } = useTranslation();
   const modified = isModified(option, value);
   const unit = displaySidetext(option);
-  const current = value === undefined ? defaultForDisplay(option) : String(value);
+  // What this slice will actually use, in precedence order: a value typed here
+  // wins, then the designer's value if it is switched on, then the preset's.
+  const current =
+    value !== undefined
+      ? String(value)
+      : sourceOn && source
+        ? formatSourceValue(source.value)
+        : defaultForDisplay(option);
 
   return (
     <div className="flex items-center gap-2 group" title={option.tooltip}>
@@ -267,6 +412,24 @@ function OptionRow({ optionKey, option, value, onChange, disabled, disabledBySli
       >
         {option.label || optionKey}
         {modified && <span className="ml-1 text-bambu-green" aria-hidden="true">•</span>}
+        {source && (
+          <span
+            className={`ml-1.5 rounded px-1 py-0.5 text-[10px] ${
+              source.printer_coupled
+                ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400'
+                : 'bg-bambu-green/15 text-bambu-green'
+            }`}
+            title={
+              source.printer_coupled
+                ? t('slicerSettings.fromFilePrinterCoupledHint', "Tuned for the printer this file was designed for -- may be wrong or out of range on yours.")
+                : t('slicerSettings.fromFileHint', "The designer changed this in the source file. Its value is {{value}}.", { value: formatSourceValue(source.value) })
+            }
+          >
+            {source.printer_coupled
+              ? t('slicerSettings.fromFilePrinterCoupled', "designer's printer")
+              : t('slicerSettings.fromFile', 'from file')}
+          </span>
+        )}
       </label>
 
       <div className="flex items-center gap-1 shrink-0">
@@ -276,8 +439,24 @@ function OptionRow({ optionKey, option, value, onChange, disabled, disabledBySli
           current={current}
           onChange={onChange}
           disabled={disabled}
+          filamentChoices={filamentChoices}
         />
         {unit && <span className="text-[0.65rem] text-bambu-gray/60 w-10 truncate">{unit}</span>}
+        {source && onToggleSource && (
+          <input
+            type="checkbox"
+            checked={sourceOn}
+            disabled={disabled}
+            onChange={(e) => onToggleSource(optionKey, e.target.checked)}
+            aria-label={t('slicerSettings.useFromFile', "Use the source file's value for {{option}}", {
+              option: option.label || optionKey,
+            })}
+            title={t('slicerSettings.useFromFile', "Use the source file's value for {{option}}", {
+              option: option.label || optionKey,
+            })}
+            className="w-3 h-3 cursor-pointer disabled:opacity-40"
+          />
+        )}
         <button
           type="button"
           onClick={() => onChange(undefined)}
@@ -292,16 +471,63 @@ function OptionRow({ optionKey, option, value, onChange, disabled, disabledBySli
   );
 }
 
+/**
+ * Render a value read out of the source file. Bambu's process config stores
+ * everything as strings or arrays of strings, so this only has to flatten
+ * arrays — no unit or type interpretation, which would rot against every
+ * slicer release.
+ */
+function formatSourceValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
+  if (value == null) return '';
+  return String(value);
+}
+
 interface ControlProps {
   id: string;
   option: ProcessOption;
   current: string;
   onChange: (value: SettingValue | undefined) => void;
   disabled: boolean;
+  filamentChoices?: FilamentChoice[];
 }
 
-function OptionControl({ id, option, current, onChange, disabled }: ControlProps) {
-  const inputClass = 'bg-black/30 border border-white/10 rounded px-1.5 py-0.5 text-xs text-white disabled:opacity-40 w-24';
+function OptionControl({ id, option, current, onChange, disabled, filamentChoices }: ControlProps) {
+  const { t } = useTranslation();
+  // Theme tokens rather than raw black/white: bambu-dark and
+  // bambu-dark-tertiary are CSS variables that follow the active theme, and
+  // `text-white` is remapped to --text-primary in index.css.
+  const inputClass =
+    'w-24 rounded border border-bambu-dark-tertiary bg-bambu-dark px-1.5 py-0.5 text-xs text-white focus:border-bambu-green focus:outline-none disabled:opacity-40';
+
+  // Filament-slot pickers come before the generic branches: the value is an
+  // integer, but offering a spinner over "1, 2, 3" makes the user map slot
+  // numbers to their own AMS by hand.
+  if (filamentChoices && filamentChoices.length > 0) {
+    const selected = filamentChoices.find((c) => String(c.index) === current);
+    return (
+      <div className="relative w-24">
+        <select
+          id={id}
+          value={current}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          className={`${inputClass} w-full cursor-pointer appearance-none pr-5`}
+          // The full name rarely fits in the control, so the hover carries it.
+          title={selected?.label}
+        >
+          {/* 0 is the slicer's "no specific filament — use the region's own". */}
+          <option value="0">{t('slicerSettings.filamentDefault', 'Default')}</option>
+          {filamentChoices.map((choice) => (
+            <option key={choice.index} value={String(choice.index)}>
+              {choice.index}: {choice.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-bambu-gray" />
+      </div>
+    );
+  }
 
   if (option.type === 'coBool') {
     return (
@@ -317,20 +543,26 @@ function OptionControl({ id, option, current, onChange, disabled }: ControlProps
   }
 
   if (option.type === 'coEnum' && option.enum_values) {
+    // Native select chrome is replaced the same way as everywhere else in
+    // Bambuddy: appearance-none plus our own chevron, so the control matches
+    // the app in both themes instead of whatever the browser paints.
     return (
-      <select
-        id={id}
-        value={current}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className={inputClass}
-      >
-        {option.enum_values.map((v, i) => (
-          <option key={v} value={v}>
-            {option.enum_labels?.[i] ?? v}
-          </option>
-        ))}
-      </select>
+      <div className="relative w-24">
+        <select
+          id={id}
+          value={current}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          className={`${inputClass} w-full cursor-pointer appearance-none pr-5`}
+        >
+          {option.enum_values.map((v, i) => (
+            <option key={v} value={v}>
+              {option.enum_labels?.[i] ?? v}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-bambu-gray" />
+      </div>
     );
   }
 

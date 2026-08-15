@@ -4313,6 +4313,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'Default',
+    fromFile: 'from file',
+    fromFileHint: 'The designer changed this in the source file. Its value is {{value}}.',
+    fromFilePrinterCoupled: "designer's printer",
+    fromFilePrinterCoupledHint: 'Tuned for the printer this file was designed for -- may be wrong or out of range on yours.',
+    useFromFile: "Use the source file's value for {{option}}",
+    otherFromFile: 'Other settings from this file',
     loading: 'Loading slicer settings…',
     mode: {
       simple: 'Simple',
@@ -4325,6 +4332,12 @@ export default {
     noMatches: 'No settings match this search.',
   },
   slice: {
+    filamentSlotUnset: 'not set',
+    processSettingsEmbedded: 'Not used while "Use the file\'s built-in settings" is on -- the file\'s own settings drive this slice.',
+    processSettingsInactive: 'Inactive',
+    presetsHidden: '{{count}} hidden',
+    showAllPresets: 'Show all',
+    showFewerPresets: 'Show fewer',
     processSettings: 'Process settings',
     processSettingsHint: "Adjust the picked preset for this slice. Anything you don't touch stays as the preset defines it.",
     processSettingsChanged: '{{count}} changed',
@@ -4358,11 +4371,6 @@ export default {
     autoOrientHint: 'Let the slicer turn each object onto its best printing side first. Overrides the way the model was laid down in the file.',
     autoArrange: 'Auto-arrange on the plate',
     autoArrangeHint: 'Let the slicer position the objects so they no longer overlap. Replaces the layout the file came with.',
-    designSettings: 'Keep the designer\'s settings',
-    designSettingsHint: 'This file changes {{count}} print setting(s) from the stock profile.',
-    designSettingsSelected: '{{selected}} of {{total}} selected',
-    designSettingsPrinterCoupled: 'printer-specific',
-    designSettingsPrinterCoupledHint: 'Tuned for the printer this file was designed for — may be wrong or out of range on yours.',
     enqueuing: 'Submitting slice job…',
     queued: 'Queued…',
     failed: 'Slicing failed. Check the slicer sidecar logs.',

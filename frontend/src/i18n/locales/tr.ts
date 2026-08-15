@@ -4268,6 +4268,13 @@ export default {
 
   // Dilimle (SliceModal ile slicer-API entegrasyonu)
   slicerSettings: {
+    filamentDefault: 'Varsayılan',
+    fromFile: 'dosyadan',
+    fromFileHint: 'Tasarımcı bunu kaynak dosyada değiştirdi. Değeri {{value}}.',
+    fromFilePrinterCoupled: 'tasarımcının yazıcısı',
+    fromFilePrinterCoupledHint: 'Bu dosyanın tasarlandığı yazıcıya göre ayarlanmıştır; sizinkinde yanlış veya aralık dışı olabilir.',
+    useFromFile: '{{option}} için kaynak dosyadaki değeri kullan',
+    otherFromFile: 'Bu dosyadaki diğer ayarlar',
     loading: 'Dilimleyici ayarları yükleniyor…',
     mode: {
       simple: 'Basit',
@@ -4280,6 +4287,12 @@ export default {
     noMatches: 'Bu aramayla eşleşen ayar yok.',
   },
   slice: {
+    filamentSlotUnset: 'ayarlanmadı',
+    processSettingsEmbedded: '“Dosyanın yerleşik ayarlarını kullan” açıkken kullanılmaz — bu dilimlemeyi dosyanın kendi ayarları yönetir.',
+    processSettingsInactive: 'Etkin değil',
+    presetsHidden: '{{count}} gizli',
+    showAllPresets: 'Tümünü göster',
+    showFewerPresets: 'Daha az göster',
     processSettings: 'İşlem ayarları',
     processSettingsHint: 'Seçilen ön ayarı bu dilimleme için düzenleyin. Dokunmadığınız her şey ön ayardaki gibi kalır.',
     processSettingsChanged: '{{count}} değişti',
@@ -4313,11 +4326,6 @@ export default {
     autoOrientHint: 'Dilimleyici, dilimlemeden önce her nesneyi en iyi basılan yüzüne çevirir. Dosyada kayıtlı yönlendirmenin yerini alır.',
     autoArrange: 'Tablaya otomatik yerleştir',
     autoArrangeHint: 'Dilimleyici nesneleri üst üste binmeyecek şekilde yerleştirir. Dosyadaki yerleşimin yerini alır.',
-    designSettings: 'Tasarımcının ayarlarını koru',
-    designSettingsHint: 'Bu dosya standart profile göre {{count}} baskı ayarını değiştiriyor.',
-    designSettingsSelected: '{{total}} ayardan {{selected}} tanesi seçili',
-    designSettingsPrinterCoupled: 'yazıcıya özel',
-    designSettingsPrinterCoupledHint: 'Dosyanın tasarlandığı yazıcıya göre ayarlanmış — sizinkinde yanlış veya aralık dışı olabilir.',
     enqueuing: 'Dilimleme işi gönderiliyor…',
     queued: 'Kuyrukta…',
     failed: 'Dilimleme başarısız. Dilimleyici yardımcı bileşen günlüklerini kontrol edin.',

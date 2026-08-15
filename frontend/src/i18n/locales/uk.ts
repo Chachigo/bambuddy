@@ -4312,6 +4312,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'За замовчуванням',
+    fromFile: 'з файлу',
+    fromFileHint: 'Автор моделі змінив цей параметр у вихідному файлі. Значення: {{value}}.',
+    fromFilePrinterCoupled: 'принтер автора',
+    fromFilePrinterCoupledHint: 'Підібрано під принтер, для якого створено файл, — на вашому значення може бути хибним або поза діапазоном.',
+    useFromFile: 'Використовувати значення з вихідного файлу для «{{option}}»',
+    otherFromFile: 'Інші параметри з цього файлу',
     loading: 'Завантаження налаштувань слайсера…',
     mode: {
       simple: 'Простий',
@@ -4324,6 +4331,12 @@ export default {
     noMatches: 'Немає параметрів, що відповідають запиту.',
   },
   slice: {
+    filamentSlotUnset: 'не задано',
+    processSettingsEmbedded: 'Не використовується, доки увімкнено «Використовувати вбудовані параметри файлу» — нарізанням керують параметри самого файлу.',
+    processSettingsInactive: 'Неактивно',
+    presetsHidden: 'приховано: {{count}}',
+    showAllPresets: 'Показати всі',
+    showFewerPresets: 'Показати менше',
     processSettings: 'Параметри процесу',
     processSettingsHint: 'Налаштуйте вибраний профіль для цього нарізання. Усе, чого ви не змінили, лишається як визначено профілем.',
     processSettingsChanged: 'змінено: {{count}}',
@@ -4357,11 +4370,6 @@ export default {
     autoOrientHint: "Слайсер поверне кожен об'єкт на бік, який друкується найкраще. Орієнтацію з файлу буде замінено.",
     autoArrange: 'Автоматично розмістити на столі',
     autoArrangeHint: "Слайсер розставить об'єкти так, щоб вони не перекривалися. Розташування з файлу буде замінено.",
-    designSettings: "Зберегти налаштування автора",
-    designSettingsHint: "Цей файл змінює {{count}} налаштувань друку порівняно зі стандартним профілем.",
-    designSettingsSelected: "Вибрано {{selected}} із {{total}}",
-    designSettingsPrinterCoupled: "залежить від принтера",
-    designSettingsPrinterCoupledHint: "Значення підібрано для принтера, під який створено файл, — на вашому воно може бути неправильним або поза допустимим діапазоном.",
     enqueuing: "Надсилання завдання нарізання…",
     queued: "У черзі…",
     failed: "Не вдалося виконати нарізання. Перевірте журнали слайсера.",

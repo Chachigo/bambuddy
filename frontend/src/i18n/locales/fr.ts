@@ -4268,6 +4268,13 @@ export default {
 
   // Slice (slicer-API integration via SliceModal)
   slicerSettings: {
+    filamentDefault: 'Par défaut',
+    fromFile: 'du fichier',
+    fromFileHint: 'Le concepteur a modifié ce paramètre dans le fichier source. Sa valeur est {{value}}.',
+    fromFilePrinterCoupled: 'imprimante du concepteur',
+    fromFilePrinterCoupledHint: "Réglé pour l'imprimante pour laquelle ce fichier a été conçu — peut être incorrect ou hors plage sur la vôtre.",
+    useFromFile: 'Utiliser la valeur du fichier source pour {{option}}',
+    otherFromFile: 'Autres paramètres de ce fichier',
     loading: 'Chargement des paramètres du trancheur…',
     mode: {
       simple: 'Simple',
@@ -4280,6 +4287,12 @@ export default {
     noMatches: 'Aucun paramètre ne correspond à cette recherche.',
   },
   slice: {
+    filamentSlotUnset: 'non défini',
+    processSettingsEmbedded: 'Inutilisé tant que « Utiliser les paramètres intégrés du fichier » est activé : ce sont les paramètres du fichier qui pilotent ce découpage.',
+    processSettingsInactive: 'Inactif',
+    presetsHidden: '{{count}} masqués',
+    showAllPresets: 'Tout afficher',
+    showFewerPresets: 'Afficher moins',
     processSettings: 'Paramètres de process',
     processSettingsHint: 'Ajustez le profil choisi pour ce découpage. Tout ce que vous ne modifiez pas reste tel que défini par le profil.',
     processSettingsChanged: '{{count}} modifiés',
@@ -4313,11 +4326,6 @@ export default {
     autoOrientHint: "Le trancheur fait pivoter chaque objet sur sa meilleure face d'impression avant de trancher. Remplace l'orientation enregistrée dans le fichier.",
     autoArrange: 'Disposer automatiquement sur le plateau',
     autoArrangeHint: "Le trancheur place les objets pour qu'ils ne se chevauchent plus. Remplace la disposition du fichier.",
-    designSettings: 'Conserver les réglages du concepteur',
-    designSettingsHint: 'Ce fichier modifie {{count}} réglage(s) d\'impression par rapport au profil standard.',
-    designSettingsSelected: '{{selected}} sur {{total}} sélectionnés',
-    designSettingsPrinterCoupled: 'spécifique à l\'imprimante',
-    designSettingsPrinterCoupledHint: 'Réglé pour l\'imprimante visée par le fichier — peut être incorrect ou hors plage sur la vôtre.',
     enqueuing: 'Envoi du travail de découpage…',
     queued: 'En file d\'attente…',
     failed: 'Échec du découpage. Vérifiez les journaux du sidecar.',
