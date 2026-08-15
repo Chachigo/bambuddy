@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -52,6 +52,10 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
   const [overwriteExisting, setOverwriteExisting] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [result, setResult] = useState<GitHubRestoreResponse | null>(null);
+  // The ['settings'] cache entry as it stood when the restore returned — i.e.
+  // the copy SettingsPage's form state was built from. Used to pin the cache
+  // while a settings restore result is on screen; see the effect below.
+  const pinnedSettings = useRef<unknown>(undefined);
 
   const commitsQuery = useQuery({
     queryKey: ['github-backup-commits'],
@@ -87,30 +91,80 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
       // above a message saying nothing had been restored. Only a real success
       // gets the panel; a failure keeps the form and shows the red block below.
       if (data.success) {
+        pinnedSettings.current = queryClient.getQueryData(['settings']);
         setResult(data);
         // A restore rewrites rows these caches hold.
         queryClient.invalidateQueries({ queryKey: ['spools'] });
         queryClient.invalidateQueries({ queryKey: ['archives'] });
-        queryClient.invalidateQueries({ queryKey: ['settings'] });
       }
       // A failure that got as far as resolving the commit still writes a log row
       // (status "failed"), so refresh the history and status either way.
       queryClient.invalidateQueries({ queryKey: ['github-backup-logs'] });
       queryClient.invalidateQueries({ queryKey: ['github-backup-status'] });
+      // ['settings'] is deliberately NOT invalidated. SettingsPage — which
+      // renders this modal — keeps a `localSettings` copy of the form state and
+      // a debounced effect that PATCHes it back whenever the server copy
+      // differs. Refetching here makes that effect write the pre-restore values
+      // over everything we just restored, 500 ms later and silently: 75 of the
+      // ~80 keys in a backup are in its save payload. A reload is the only safe
+      // resync, so `closeModal` below forces one instead.
     },
     onError: () => setShowConfirm(false),
   });
 
   const isRestoring = restoreMutation.isPending;
 
+  // Leaving this modal mounted after a settings restore lets SettingsPage
+  // overwrite what was restored (see the onSuccess comment), so every exit path
+  // reloads rather than just closing.
+  const settingsRestored = Boolean(result && 'settings' in result.results);
+  const closeModal = useCallback(() => {
+    if (settingsRestored) {
+      window.location.reload();
+      return;
+    }
+    onClose();
+  }, [settingsRestored, onClose]);
+
+  // Not invalidating ['settings'] above keeps the page from reverting a restore
+  // *we* triggered a refetch for, but it is not enough on its own: the query
+  // still refetches on window focus and on reconnect (both default to true, and
+  // ['settings'] has other always-mounted observers that trigger it), and any
+  // such refetch lands the restored values in the cache while SettingsPage's
+  // `localSettings` still holds the pre-restore ones — which is exactly the
+  // state its debounced effect PATCHes back. Tabbing away from the result panel
+  // for a minute and back was enough to lose the restore.
+  //
+  // The refetch cannot be prevented from here, so pin the cache instead: while
+  // the result panel is up, any fresh ['settings'] payload is written straight
+  // back to the copy the page already agrees with, so `hasChanges` stays false
+  // and nothing is saved over the restore. Every exit path reloads (above), and
+  // that reload is what resyncs the page for real.
+  useEffect(() => {
+    if (!settingsRestored) return;
+    const pinned = pinnedSettings.current;
+    if (pinned === undefined) return;
+    // Compared by value, not identity: react-query's structural sharing stores a
+    // copy rather than the object handed to setQueryData, so an identity check
+    // would never match its own write and would recurse until the stack blew.
+    const pinnedJson = JSON.stringify(pinned);
+    return queryClient.getQueryCache().subscribe((event) => {
+      if (event.type !== 'updated' || event.action.type !== 'success') return;
+      const key = event.query.queryKey;
+      if (!Array.isArray(key) || key.length !== 1 || key[0] !== 'settings') return;
+      if (JSON.stringify(event.query.state.data) === pinnedJson) return;
+      queryClient.setQueryData(['settings'], pinned);
+    });
+  }, [settingsRestored, queryClient]);
+
   // Close on Escape, except while a restore is in flight.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isRestoring && !showConfirm) onClose();
+      if (e.key === 'Escape' && !isRestoring && !showConfirm) closeModal();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, isRestoring, showConfirm]);
+  }, [closeModal, isRestoring, showConfirm]);
 
   // Interrupting a restore mid-flight can leave a partly-applied category.
   useEffect(() => {
@@ -174,7 +228,7 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
     <>
       <div
         className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-        onClick={isRestoring ? undefined : onClose}
+        onClick={isRestoring ? undefined : closeModal}
       >
         <Card className="w-full max-w-lg" onClick={(e: React.MouseEvent) => e.stopPropagation()}>
           <CardContent className="p-0">
@@ -190,7 +244,7 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
                 </div>
               </div>
               <button
-                onClick={onClose}
+                onClick={closeModal}
                 disabled={isRestoring}
                 aria-label={t('common.close')}
                 className="p-2 hover:bg-bambu-dark-tertiary rounded-lg transition-colors disabled:opacity-50"
@@ -364,7 +418,7 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
                 <>
                   <span />
                   <div className="flex gap-3">
-                    <Button variant="secondary" onClick={onClose}>
+                    <Button variant="secondary" onClick={closeModal}>
                       {t('common.close')}
                     </Button>
                     <Button
@@ -381,7 +435,7 @@ export function GitHubRestoreModal({ onClose }: GitHubRestoreModalProps) {
                     {t('backup.restoreFromGit.selectedCount', { count: selectedCount })}
                   </span>
                   <div className="flex gap-3">
-                    <Button variant="secondary" onClick={onClose} disabled={isRestoring}>
+                    <Button variant="secondary" onClick={closeModal} disabled={isRestoring}>
                       {t('common.cancel')}
                     </Button>
                     <Button
