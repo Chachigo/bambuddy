@@ -70,6 +70,20 @@ _SENSITIVE_SETTING_KEYS = {"bambu_cloud_token", "auth_secret_key"}
 # skipped even if it isn't in the explicit denylist above.
 _SECRET_KEY_HINTS = ("token", "secret", "password", "access_code", "api_key", "passphrase")
 
+# Settings the MQTT relay reads only when it is (re)configured, so restoring the
+# rows is not enough on its own. Mirrors the set the settings PUT handler
+# watches. mqtt_password is in here for the configure() payload's sake — the
+# credential blocklist means a restore never writes it.
+_MQTT_SETTING_KEYS = {
+    "mqtt_enabled",
+    "mqtt_broker",
+    "mqtt_port",
+    "mqtt_username",
+    "mqtt_password",
+    "mqtt_topic_prefix",
+    "mqtt_use_tls",
+}
+
 # Keys that decide *who can reach the instance* rather than how it behaves. The
 # backup collector writes them like any other Settings row, so a backup taken
 # before auth was turned on carries auth_enabled=false — and a restore reaches
@@ -407,8 +421,16 @@ class GitHubRestoreService:
                     if error:
                         raise RuntimeError(error)
 
-                    results = await self._apply(db, payload, categories, overwrite_existing)
+                    settings_keys_written: set[str] = set()
+                    results = await self._apply(db, payload, categories, overwrite_existing, settings_keys_written)
                     await db.commit()
+
+                    # After the commit: this reconnects the relay, which is not
+                    # something to do on values that could still roll back.
+                    settings_tally = results.get(RestoreCategory.SETTINGS.value)
+                    if settings_tally is not None:
+                        self._progress = "Reconnecting the MQTT relay..."
+                        await self._reconfigure_mqtt_relay(db, settings_keys_written, settings_tally)
 
                     total_restored = sum(tally.restored for tally in results.values())
                     any_failed = any(tally.failed for tally in results.values())
@@ -484,8 +506,14 @@ class GitHubRestoreService:
         payload: dict,
         categories: list[RestoreCategory],
         overwrite: bool,
+        settings_keys_written: set[str] | None = None,
     ) -> dict[str, _CategoryTally]:
-        """Apply categories in dependency order and return per-category tallies."""
+        """Apply categories in dependency order and return per-category tallies.
+
+        ``settings_keys_written``, if given, collects the setting keys actually
+        written, for the caller's post-commit side effects (see
+        ``_reconfigure_mqtt_relay``).
+        """
         results: dict[str, _CategoryTally] = {}
         archive_id_map: dict[int, int] = {}
 
@@ -512,7 +540,9 @@ class GitHubRestoreService:
         if RestoreCategory.SETTINGS in categories:
             self._progress = "Restoring app settings..."
             tally = _CategoryTally()
-            await self._restore_settings(db, payload.get(SETTINGS_PATH), overwrite, tally)
+            await self._restore_settings(
+                db, payload.get(SETTINGS_PATH), overwrite, tally, keys_written=settings_keys_written
+            )
             results[RestoreCategory.SETTINGS.value] = tally
 
         # Last, because it leaves the database and publishes over MQTT.
@@ -879,7 +909,14 @@ class GitHubRestoreService:
                 "spool list, so there is nothing to attach them to."
             )
 
-    async def _restore_settings(self, db: AsyncSession, payload, overwrite: bool, tally: _CategoryTally) -> None:
+    async def _restore_settings(
+        self,
+        db: AsyncSession,
+        payload,
+        overwrite: bool,
+        tally: _CategoryTally,
+        keys_written: set[str] | None = None,
+    ) -> None:
         values = payload.get("settings") if isinstance(payload, dict) else None
         if not isinstance(values, dict):
             tally.note("No settings data in this backup")
@@ -911,10 +948,14 @@ class GitHubRestoreService:
                     continue
                 existing.value = str(value)
                 tally.restored += 1
+                if keys_written is not None:
+                    keys_written.add(key)
                 continue
 
             db.add(Settings(key=key, value=str(value)))
             tally.restored += 1
+            if keys_written is not None:
+                keys_written.add(key)
 
         if blocked:
             tally.note(f"{blocked} credential-like key(s) skipped — re-enter secrets manually")
@@ -923,6 +964,51 @@ class GitHubRestoreService:
                 f"{protected} authentication setting(s) skipped — change those in Settings > "
                 "Authentication so the lockout checks still run"
             )
+
+    async def _reconfigure_mqtt_relay(self, db: AsyncSession, keys_written: set[str], tally: _CategoryTally) -> None:
+        """Push restored mqtt_* settings into the live relay.
+
+        The relay reads its broker config once, at configure() time — the
+        settings PUT handler reconfigures it for exactly this reason
+        (api/routes/settings.py). Writing the rows alone left the relay on the
+        pre-restore broker until the next backend restart while the UI showed
+        the restored values, which is the one way a restore could look applied
+        and not be.
+
+        Called after the commit, never before: configure() tears the connection
+        down and rebuilds it, so it must not run against values a later failure
+        could roll back. Only mqtt_password can't come back this way (the
+        credential blocklist skips it) — the row already in the database is
+        reused, so an unchanged broker keeps working.
+        """
+        if not _MQTT_SETTING_KEYS & keys_written:
+            return
+
+        try:
+            from backend.app.services.mqtt_relay import mqtt_relay
+
+            rows = await db.execute(select(Settings).where(Settings.key.in_(_MQTT_SETTING_KEYS)))
+            stored = {s.key: s.value for s in rows.scalars().all()}
+
+            # Same shape and defaults the settings PUT handler builds.
+            await mqtt_relay.configure(
+                {
+                    "mqtt_enabled": (stored.get("mqtt_enabled") or "false") == "true",
+                    "mqtt_broker": stored.get("mqtt_broker") or "",
+                    "mqtt_port": int(stored.get("mqtt_port") or "1883"),
+                    "mqtt_username": stored.get("mqtt_username") or "",
+                    "mqtt_password": stored.get("mqtt_password") or "",
+                    "mqtt_topic_prefix": stored.get("mqtt_topic_prefix") or "bambuddy",
+                    "mqtt_use_tls": (stored.get("mqtt_use_tls") or "false") == "true",
+                }
+            )
+        except Exception:
+            # Same call is best-effort in the settings PUT handler: the rows are
+            # committed either way, and a broker that refuses the new config
+            # must not turn a successful restore into a failed one. Noted rather
+            # than swallowed silently, so the user knows to restart.
+            logger.warning("Could not reconfigure the MQTT relay after a settings restore", exc_info=True)
+            tally.note("MQTT settings restored, but the relay could not be reconnected — restart Bambuddy")
 
     async def _restore_kprofiles(self, db: AsyncSession, payload: dict, tally: _CategoryTally) -> None:
         by_serial: dict[str, list[tuple[str, dict]]] = {}

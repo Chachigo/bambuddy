@@ -1090,6 +1090,98 @@ class TestMutex:
         assert "restore is currently running" in result["message"]
 
 
+class TestMqttRelayReconfigure:
+    """Restoring mqtt_* rows has to reach the live relay, not just the table."""
+
+    @pytest.mark.asyncio
+    async def test_reconfigures_from_the_committed_rows(self, db_session):
+        db_session.add(Settings(key="mqtt_enabled", value="true"))
+        db_session.add(Settings(key="mqtt_broker", value="restored.local"))
+        db_session.add(Settings(key="mqtt_port", value="8883"))
+        db_session.add(Settings(key="mqtt_use_tls", value="true"))
+        # Never restorable (credential blocklist), so it comes from the row that
+        # was already there.
+        db_session.add(Settings(key="mqtt_password", value="kept"))
+        await db_session.commit()
+        tally = _CategoryTally()
+        relay = MagicMock()
+        relay.configure = AsyncMock(return_value=True)
+
+        with patch("backend.app.services.mqtt_relay.mqtt_relay", relay):
+            await _service()._reconfigure_mqtt_relay(db_session, {"mqtt_broker"}, tally)
+
+        relay.configure.assert_awaited_once()
+        sent = relay.configure.await_args.args[0]
+        assert sent["mqtt_enabled"] is True
+        assert sent["mqtt_broker"] == "restored.local"
+        assert sent["mqtt_port"] == 8883
+        assert sent["mqtt_use_tls"] is True
+        assert sent["mqtt_password"] == "kept"
+        assert sent["mqtt_topic_prefix"] == "bambuddy"
+        assert tally.notes == []
+
+    @pytest.mark.asyncio
+    async def test_no_reconnect_when_no_mqtt_key_was_written(self, db_session):
+        """configure() tears the connection down, so don't call it for a theme change."""
+        tally = _CategoryTally()
+        relay = MagicMock()
+        relay.configure = AsyncMock()
+
+        with patch("backend.app.services.mqtt_relay.mqtt_relay", relay):
+            await _service()._reconfigure_mqtt_relay(db_session, {"currency", "theme"}, tally)
+
+        relay.configure.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_broker_failure_is_noted_not_fatal(self, db_session):
+        tally = _CategoryTally()
+        relay = MagicMock()
+        relay.configure = AsyncMock(side_effect=OSError("no route to broker"))
+
+        with patch("backend.app.services.mqtt_relay.mqtt_relay", relay):
+            await _service()._reconfigure_mqtt_relay(db_session, {"mqtt_enabled"}, tally)
+
+        assert any("restart Bambuddy" in note for note in tally.notes)
+
+    @pytest.mark.asyncio
+    async def test_restore_settings_reports_the_keys_it_wrote(self, db_session):
+        db_session.add(Settings(key="mqtt_broker", value="old.local"))
+        await db_session.commit()
+        written: set[str] = set()
+        payload = {
+            "settings": {
+                "mqtt_broker": "new.local",
+                "currency": "EUR",
+                "mqtt_password": "leaked",
+                "auth_enabled": "false",
+            }
+        }
+
+        await _service()._restore_settings(
+            db_session, payload, overwrite=True, tally=_CategoryTally(), keys_written=written
+        )
+
+        # Skipped keys are not "written", or a blocked mqtt_password would
+        # trigger a pointless reconnect.
+        assert written == {"mqtt_broker", "currency"}
+
+    @pytest.mark.asyncio
+    async def test_keys_skipped_for_overwrite_off_are_not_reported(self, db_session):
+        db_session.add(Settings(key="mqtt_broker", value="old.local"))
+        await db_session.commit()
+        written: set[str] = set()
+
+        await _service()._restore_settings(
+            db_session,
+            {"settings": {"mqtt_broker": "new.local"}},
+            overwrite=False,
+            tally=_CategoryTally(),
+            keys_written=written,
+        )
+
+        assert written == set()
+
+
 class TestApplyOrdering:
     """_apply must not hold SQLite's write transaction across the MQTT phase."""
 
