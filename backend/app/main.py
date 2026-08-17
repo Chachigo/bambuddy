@@ -129,6 +129,7 @@ from backend.app.services.spoolman_tracking import (
 )
 from backend.app.services.tasmota import tasmota_service
 from backend.app.utils.ams_drying import is_drying_active, temperature_alarm_suppressed
+from backend.app.utils.print_jobs import is_internal_printer_job
 
 
 # =============================================================================
@@ -3043,12 +3044,21 @@ async def on_print_start(printer_id: int, data: dict):
 
         logger.info("[CALLBACK] Print start detected - filename: %s, subtask: %s", filename, subtask_name)
 
-        # Skip calibration prints — internal printer files should not be archived
-        # Bambu calibration gcode lives under /usr/ (e.g. /usr/etc/print/auto_cali_for_user.gcode)
-        if filename and filename.startswith("/usr/"):
-            logger.info("[CALLBACK] Skipping archive — internal printer file detected: %s", filename)
-            if not notification_sent:
-                await _send_print_start_notification(printer_id, data, logger=logger)
+        # Skip the printer's own jobs — a calibration run is not a user's print.
+        # See is_internal_printer_job for what counts and why both fields are
+        # tested; the pressure-advance line reports as a subtask name with no
+        # /usr/ path, which the old prefix-only test here missed entirely.
+        #
+        # No notification either. The event describes the printer calibrating
+        # itself, so "Print started" is as wrong as the archive was, and the
+        # matching completion is suppressed in on_print_complete for the same
+        # reason.
+        if is_internal_printer_job(filename, subtask_name):
+            logger.info(
+                "[CALLBACK] Skipping archive — internal printer job detected: filename=%s, subtask=%s",
+                filename,
+                subtask_name,
+            )
             return
 
         if not filename and not subtask_name:
@@ -5875,6 +5885,23 @@ async def on_print_complete(printer_id: int, data: dict):
     log_timing("Filament usage tracking")
 
     if not archive_id:
+        # The printer's own calibration run has no archive by design, so this
+        # arrives here every time one finishes. Returning before the no-archive
+        # notification is not just noise control: that path attributes an
+        # unmatched completion to any queue item this printer finished in the
+        # last five minutes, which for a calibration that runs alongside a real
+        # print means emailing its owner that their print is done, twice and
+        # early. Everything above this point has already run — the plate-clear
+        # gate, the queue reconciliation, the SD-card cleanup — so only the
+        # notification is skipped.
+        if is_internal_printer_job(filename, subtask_name):
+            logger.info(
+                "[CALLBACK] Internal printer job completed, no notification: filename=%s, subtask=%s",
+                filename,
+                subtask_name,
+            )
+            return
+
         logger.warning("Could not find archive for print complete: filename=%s, subtask=%s", filename, subtask_name)
 
         # Still send print-complete/failed/stopped notifications even without an archive.
