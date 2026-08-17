@@ -770,6 +770,10 @@ async def get_printer_status(
         active_extruder=state.active_extruder,
         ams_mapping=ams_mapping,
         ams_extruder_map=ams_extruder_map,
+        # Only meaningful alongside an installed switch; without one the map is
+        # empty anyway, but gating it keeps a stale binding from outliving the
+        # accessory being unplugged.
+        ams_switch_inlet=(dict(state.ams_switch_inlet) if state.fila_switch and state.fila_switch.installed else {}),
         tray_now=tray_now,
         # Runout guidance (#2587): resolve the firmware's target/previous slot to a
         # global tray ID, but only while PAUSED — the moment the operator needs it.

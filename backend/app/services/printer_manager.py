@@ -1507,6 +1507,25 @@ def printer_state_to_dict(
         ),
         # Per-AMS extruder map: {ams_id: extruder_id} where 0=right, 1=left
         "ams_extruder_map": ams_extruder_map,
+        # Filament Track Switch. Both fields have to travel on the WebSocket, not
+        # only on the REST status: the frontend shallow-merges each push over its
+        # cached status, so a field that is absent here keeps whatever the last
+        # full fetch left behind. Omitting them meant the AMS inlet badges only
+        # ever changed on a page reload.
+        "fila_switch": (
+            {
+                "installed": True,
+                "in_slots": list(state.fila_switch.in_slots),
+                "out_extruders": list(state.fila_switch.out_extruders),
+                "stat": state.fila_switch.stat,
+                "info": state.fila_switch.info,
+            }
+            if state.fila_switch and state.fila_switch.installed
+            else None
+        ),
+        # Per-AMS FTS inlet binding: {ams_id: "A" | "B"}. Gated on the accessory
+        # so a stale binding cannot outlive it being unplugged.
+        "ams_switch_inlet": (dict(state.ams_switch_inlet) if state.fila_switch and state.fila_switch.installed else {}),
         # WiFi signal strength
         "wifi_signal": state.wifi_signal,
         "wired_network": state.wired_network,

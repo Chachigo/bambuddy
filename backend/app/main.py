@@ -1483,13 +1483,24 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
         if state.raw_data
         else ()
     )
+    # Filament Track Switch: which inlet each AMS is bound to, and whether the
+    # accessory is fitted at all. Neither is in ams_tray_key (it is per-tray) nor
+    # in the AMS change-hash (tray fields only, and widening that would fire
+    # spurious Spoolman syncs), so without them a "Join IN-B" on the printer
+    # screen changed no key at all and the card's inlet badges sat stale until a
+    # reload. Like the filament-backup flag, these only move when someone
+    # reconfigures the machine, so they add no mid-print broadcast traffic.
+    fts_key = (
+        state.fila_switch.installed if state.fila_switch else False,
+        tuple(sorted(state.ams_switch_inlet.items())),
+    )
     status_key = (
         f"{state.connected}:{state.state}:{state.progress}:{state.layer_num}:"
         f"{nozzle_temp}:{bed_temp}:{nozzle_2_temp}:{chamber_temp}:"
         f"{state.stg_cur}:{bed_target}:{nozzle_target}:"
         f"{state.cooling_fan_speed}:{state.big_fan1_speed}:{state.big_fan2_speed}:"
         f"{state.chamber_light}:{state.active_extruder}:{state.tray_now}:{vt_tray_key}:"
-        f"{ams_dry_key}:{ams_tray_key}:{state.door_open}:{state.ams_filament_backup}"
+        f"{ams_dry_key}:{ams_tray_key}:{state.door_open}:{state.ams_filament_backup}:{fts_key}"
     )
 
     is_active_print = state.state in _ACTIVE_PRINT_STATES

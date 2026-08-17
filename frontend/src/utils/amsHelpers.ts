@@ -32,6 +32,17 @@ export function normalizeColorForCompare(color: string | undefined): string {
 }
 
 /**
+ * Which side letter stands for a Filament Track Switch inlet: In-A reads as L,
+ * In-B as R.
+ *
+ * This labels the inlet's position, not the nozzle it feeds — the switch can
+ * route either inlet to either nozzle, and it never reports which pairing is
+ * live. Anywhere this letter is shown next to a hover target, the tooltip names
+ * the inlet outright so the two cannot be confused.
+ */
+export const FTS_INLET_SIDE = { A: 'L', B: 'R' } as const;
+
+/**
  * AMS unit label using the codebase convention: "AMS-A / AMS-B / ..." for
  * regular AMS, "HT-A / HT-B / ..." for AMS-HT (single-tray modules with
  * IDs starting at 128). `trayCount` is required because the type can't be
