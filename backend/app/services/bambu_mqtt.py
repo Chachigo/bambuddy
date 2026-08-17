@@ -1105,6 +1105,7 @@ class BambuMQTTClient:
         on_finish_photo_moment: Callable[[dict], None] | None = None,
         on_assignment_verified: Callable[[int, int, bool, dict], None] | None = None,
         on_tray_change: Callable[[int, int], None] | None = None,
+        on_fts_inlet_change: Callable[[int, str], None] | None = None,
     ):
         self.ip_address = ip_address
         self.serial_number = serial_number
@@ -1116,6 +1117,9 @@ class BambuMQTTClient:
         self.on_print_start = on_print_start
         self.on_print_complete = on_print_complete
         self.on_ams_change = on_ams_change
+        # Fired when an AMS is moved to the switch's other inlet, which changes
+        # the nozzle it feeds and so invalidates its slots' K-profile bindings.
+        self.on_fts_inlet_change = on_fts_inlet_change
         self.on_layer_change = on_layer_change
         # #2547: fired when `mc_percent` advances during a running print.
         # `on_layer_change` stops firing the instant the final layer starts, so
@@ -3214,6 +3218,7 @@ class BambuMQTTClient:
         # the full map. Merge into existing map to preserve entries from prior updates.
 
         fts_installed = self.state.fila_switch.installed
+        inlet_moves: list[tuple[int, str]] = []
         ams_extruder_map = dict(self.state.ams_extruder_map) if self.state.ams_extruder_map else {}
         ams_switch_inlet = dict(self.state.ams_switch_inlet) if self.state.ams_switch_inlet else {}
         for ams_unit in merged_ams:
@@ -3229,6 +3234,7 @@ class BambuMQTTClient:
                         if fts_installed:
                             inlet = {0: "B", 1: "A"}.get((info_val >> 24) & 0xF)
                             if inlet is not None:
+                                previous = ams_switch_inlet.get(str(ams_id))
                                 ams_switch_inlet[str(ams_id)] = inlet
                                 self._debug_on_change(
                                     f"ams_inlet:{ams_id}",
@@ -3239,6 +3245,18 @@ class BambuMQTTClient:
                                     info,
                                     inlet,
                                 )
+                                if previous is not None and previous != inlet:
+                                    # Only a genuine move, never the first sighting:
+                                    # re-applying K-profiles on every reconnect would
+                                    # fight a binding the operator set deliberately.
+                                    logger.info(
+                                        "[%s] AMS %s moved to FTS inlet %s (was %s)",
+                                        self.serial_number,
+                                        ams_id,
+                                        inlet,
+                                        previous,
+                                    )
+                                    inlet_moves.append((int(ams_id), inlet))
                         continue
                     ams_extruder_map[str(ams_id)] = extruder_id
                     self._debug_on_change(
@@ -3258,6 +3276,9 @@ class BambuMQTTClient:
             logger.debug("[%s] ams_extruder_map: %s", self.serial_number, ams_extruder_map)
         if ams_switch_inlet:
             self.state.ams_switch_inlet = ams_switch_inlet
+        for moved_ams_id, moved_inlet in inlet_moves:
+            if self.on_fts_inlet_change:
+                self.on_fts_inlet_change(moved_ams_id, moved_inlet)
 
         # Extract drying status from info hex string and dry_sf_reason per AMS unit
         # BambuStudio DevFilaSystem.cpp parses info bits:

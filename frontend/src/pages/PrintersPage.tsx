@@ -174,7 +174,7 @@ import { SkipObjectsModal, SkipObjectsIcon } from '../components/SkipObjectsModa
 import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
-import { getAmsLabel, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveSlotNozzleDiameter, FTS_INLET_SIDE } from '../utils/amsHelpers';
+import { getAmsLabel, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveSlotNozzleDiameter, resolveSlotExtruder, FTS_INLET_SIDE } from '../utils/amsHelpers';
 import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems, isPrinterCurrentlyDispatchable } from '../utils/printer';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
@@ -5190,7 +5190,6 @@ function PrinterCard({
                   <div className="flex flex-wrap gap-2">
                     {/* Regular AMS units */}
                     {regularAms.map((ams) => {
-                      const mappedExtruderId = amsExtruderMap[String(ams.id)];
                       const sideBadge = amsSideBadge(ams.id, amsExtruderMap, amsSwitchInlet, ftsInstalled);
 
                       return (
@@ -5572,7 +5571,7 @@ function PrinterCard({
                                             trayColor: tray?.tray_color || undefined,
                                             traySubBrands: tray?.tray_sub_brands || undefined,
                                             trayInfoIdx: tray?.tray_info_idx || undefined,
-                                            extruderId: mappedExtruderId,
+                                            extruderId: resolveSlotExtruder(ams.id, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
                                             caliIdx: tray?.cali_idx,
                                             savedPresetId: slotPreset?.preset_id,
                                           }),
@@ -5595,7 +5594,7 @@ function PrinterCard({
                                             amsId: ams.id,
                                             trayId: slotIdx,
                                             trayCount: ams.tray.length,
-                                            extruderId: mappedExtruderId,
+                                            extruderId: resolveSlotExtruder(ams.id, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
                                           }),
                                         }}
                                         onAssignSpool={() => setAssignSpoolModal({
@@ -5623,7 +5622,6 @@ function PrinterCard({
                     })}
                     {/* HT AMS units */}
                     {htAms.map((ams) => {
-                      const mappedExtruderId = amsExtruderMap[String(ams.id)];
                       const sideBadge = amsSideBadge(ams.id, amsExtruderMap, amsSwitchInlet, ftsInstalled);
                       const tray = ams.tray[0];
                       const hasFillLevel = tray?.tray_type && tray.remain >= 0;
@@ -5960,7 +5958,7 @@ function PrinterCard({
                                         trayColor: tray?.tray_color || undefined,
                                         traySubBrands: tray?.tray_sub_brands || undefined,
                                         trayInfoIdx: tray?.tray_info_idx || undefined,
-                                        extruderId: mappedExtruderId,
+                                        extruderId: resolveSlotExtruder(ams.id, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
                                         caliIdx: tray?.cali_idx,
                                         savedPresetId: slotPreset?.preset_id,
                                       }),
@@ -5983,7 +5981,7 @@ function PrinterCard({
                                         amsId: ams.id,
                                         trayId: htSlotId,
                                         trayCount: ams.tray.length,
-                                        extruderId: mappedExtruderId,
+                                        extruderId: resolveSlotExtruder(ams.id, tray?.id ?? 0, amsExtruderMap, amsSwitchInlet),
                                       }),
                                     }}
                                     onAssignSpool={() => setAssignSpoolModal({

@@ -404,6 +404,7 @@ class PrinterManager:
         self._on_finish_photo_moment: Callable[[int, dict], None] | None = None
         self._on_status_change: Callable[[int, PrinterState], None] | None = None
         self._on_ams_change: Callable[[int, list], None] | None = None
+        self._on_fts_inlet_change: Callable[[int, int, str], None] | None = None
         self._on_layer_change: Callable[[int, int], None] | None = None
         self._on_print_progress: Callable[[int, int], None] | None = None
         self._on_bed_temp_update: Callable[[int, float], None] | None = None
@@ -626,6 +627,14 @@ class PrinterManager:
         """Set callback for AMS data change events."""
         self._on_ams_change = callback
 
+    def set_fts_inlet_change_callback(self, callback: Callable[[int, int, str], None]):
+        """Set callback for Filament Track Switch inlet moves.
+
+        Receives ``(printer_id, ams_id, inlet)``. Fired only when an AMS moves
+        between inlets, not on the first sighting of a binding.
+        """
+        self._on_fts_inlet_change = callback
+
     def set_layer_change_callback(self, callback: Callable[[int, int], None]):
         """Set callback for layer change events. Receives (printer_id, layer_num)."""
         self._on_layer_change = callback
@@ -720,6 +729,10 @@ class PrinterManager:
             if self._on_ams_change:
                 self._schedule_async(self._on_ams_change(printer_id, ams_data))
 
+        def on_fts_inlet_change(ams_id: int, inlet: str):
+            if self._on_fts_inlet_change:
+                self._schedule_async(self._on_fts_inlet_change(printer_id, ams_id, inlet))
+
         def on_layer_change(layer_num: int):
             if self._on_layer_change:
                 self._schedule_async(self._on_layer_change(printer_id, layer_num))
@@ -753,6 +766,7 @@ class PrinterManager:
             on_print_start=on_print_start,
             on_print_complete=on_print_complete,
             on_ams_change=on_ams_change,
+            on_fts_inlet_change=on_fts_inlet_change,
             on_layer_change=on_layer_change,
             on_print_progress=on_print_progress,
             on_bed_temp_update=on_bed_temp_update,

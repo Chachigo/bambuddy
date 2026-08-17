@@ -117,6 +117,7 @@ from backend.app.services.printer_manager import (
     printer_state_to_dict,
     resolve_plate_id,
 )
+from backend.app.services.slot_kprofile import find_slot_kprofile_for_extruder
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.services.spool_assignment_notifications import (
     notify_missing_spool_assignments_on_print_start,
@@ -129,6 +130,7 @@ from backend.app.services.spoolman_tracking import (
 )
 from backend.app.services.tasmota import tasmota_service
 from backend.app.utils.ams_drying import is_drying_active, temperature_alarm_suppressed
+from backend.app.utils.fts_routing import extruder_for_inlet, slot_extruder as resolve_slot_extruder
 from backend.app.utils.print_jobs import is_internal_printer_job
 
 
@@ -1794,6 +1796,83 @@ def _is_bambu_uuid(tray_uuid: str) -> bool:
     return bool(tray_uuid) and tray_uuid not in ("", "0" * len(tray_uuid))
 
 
+async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
+    """Re-point a moved AMS's K-profiles at the nozzle it now feeds.
+
+    K-profiles are per-nozzle and the printer's calibration table is numbered
+    per-nozzle, but a tray holds exactly one ``cali_idx``. Moving an AMS to the
+    switch's other inlet therefore silently invalidates every configured slot in
+    it: the index stays put and now resolves against the other nozzle's table.
+    Measured on the maintainer's H2C — one spool calibrated 0.018 on the left
+    and 0.020 on the right kept the left profile after the move, and a manual
+    RFID re-read only re-asserted the same wrong one.
+
+    Configuring a slot is a deliberate preparation step, so this re-selects
+    rather than re-configures: only the calibration binding moves, and only for
+    slots whose spool already has a stored profile for the new nozzle. A slot
+    Bambuddy knows nothing about is left exactly as the operator left it.
+    """
+    logger = logging.getLogger(__name__)
+
+    target_extruder = extruder_for_inlet(inlet)
+    if target_extruder is None:
+        return
+
+    client = printer_manager.get_client(printer_id)
+    state = printer_manager.get_status(printer_id)
+    if not client or not state or not state.raw_data:
+        return
+
+    nozzle_diameter = "0.4"
+    if state.nozzles and state.nozzles[0].nozzle_diameter:
+        nozzle_diameter = state.nozzles[0].nozzle_diameter
+
+    ams_raw = state.raw_data.get("ams")
+    ams_list = ams_raw.get("ams", []) if isinstance(ams_raw, dict) else ams_raw if isinstance(ams_raw, list) else []
+    unit = next((u for u in ams_list if str(u.get("id")) == str(ams_id)), None)
+    if not unit:
+        return
+
+    try:
+        async with async_session() as db:
+            for tray in unit.get("tray", []):
+                tray_id = int(tray.get("id", -1))
+                if tray_id < 0 or not tray.get("tray_type"):
+                    continue
+                current_idx = tray.get("cali_idx")
+
+                profile = await find_slot_kprofile_for_extruder(
+                    db, printer_id, ams_id, tray_id, target_extruder, nozzle_diameter
+                )
+                if profile is None or profile.cali_idx is None:
+                    continue
+                if current_idx == profile.cali_idx:
+                    continue  # Already on the right one.
+
+                logger.info(
+                    "[Printer %s] AMS %s slot %s moved to inlet %s (nozzle %s): "
+                    "re-selecting K-profile %s (cali_idx %s -> %s, K=%s)",
+                    printer_id,
+                    ams_id,
+                    tray_id,
+                    inlet,
+                    target_extruder,
+                    profile.name,
+                    current_idx,
+                    profile.cali_idx,
+                    profile.k_value,
+                )
+                client.extrusion_cali_sel(
+                    ams_id=ams_id,
+                    tray_id=tray_id,
+                    cali_idx=profile.cali_idx,
+                    filament_id=profile.filament_id or tray.get("tray_info_idx", "") or "",
+                    nozzle_diameter=nozzle_diameter,
+                )
+    except Exception as e:
+        logger.warning("[Printer %s] Could not re-apply K-profiles after inlet move: %s", printer_id, e)
+
+
 async def on_ams_change(printer_id: int, ams_data: list):
     """Handle AMS data changes - sync to Spoolman if enabled and auto mode."""
     logger = logging.getLogger(__name__)
@@ -2169,12 +2248,12 @@ async def on_ams_change(printer_id: int, ams_data: list):
                                         nd = state.nozzles[0].nozzle_diameter
                                         if nd:
                                             nozzle_diameter = nd
-                                    slot_extruder: int | None = None
-                                    if state and state.ams_extruder_map:
-                                        if ams_id == 255:
-                                            slot_extruder = 1 - tray_id
-                                        else:
-                                            slot_extruder = state.ams_extruder_map.get(str(ams_id))
+                                    slot_extruder = resolve_slot_extruder(
+                                        ams_id,
+                                        tray_id,
+                                        state.ams_extruder_map if state else None,
+                                        state.ams_switch_inlet if state else None,
+                                    )
                                     # Prefer exact extruder match, fall back to
                                     # extruder-agnostic kp for the same printer +
                                     # nozzle. Avoids hard-skipping when the AMS is
@@ -7957,6 +8036,7 @@ async def lifespan(app: FastAPI):
     printer_manager.set_print_running_observed_callback(on_print_running_observed)
     printer_manager.set_finish_photo_moment_callback(on_finish_photo_moment)
     printer_manager.set_ams_change_callback(on_ams_change)
+    printer_manager.set_fts_inlet_change_callback(on_fts_inlet_change)
 
     # Rehydrate persisted awaiting-plate-clear gate (#961) so prompts survive restarts
     await printer_manager.load_awaiting_plate_clear_from_db()
