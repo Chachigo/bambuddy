@@ -3,6 +3,12 @@ import { createPortal } from 'react-dom';
 import { compareFwVersions } from '../utils/firmwareVersion';
 import { formatPrintName } from '../utils/printName';
 import { computePopoverPosition, type PopoverPosition } from '../utils/popoverPosition';
+import {
+  openCameraWindow,
+  readStoredCameraViewMode,
+  storeCameraViewMode,
+  type CameraViewMode,
+} from '../utils/camera';
 import { resolveDryingPresetKey, type DryingPreset } from '../utils/dryingPresets';
 import { computeStartAfter, type DryingStartMode } from '../lib/scheduledDrying';
 import {
@@ -132,6 +138,7 @@ import {
   LayoutGrid,
   MonitorPlay,
   ExternalLink,
+  PictureInPicture2,
 } from 'lucide-react';
 
 // Aliased: lucide-react already exports a `Link` icon into this module.
@@ -146,6 +153,7 @@ import { BulkPrinterToolbar, type PrinterState } from '../components/BulkPrinter
 import { FileManagerModal } from '../components/FileManagerModal';
 import { EmbeddedCameraViewer } from '../components/EmbeddedCameraViewer';
 import { CameraWall } from '../components/CameraWall';
+import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { MQTTDebugModal } from '../components/MQTTDebugModal';
 import { HMSErrorModal, filterKnownHMSErrors } from '../components/HMSErrorModal';
 import { AiDetectionModal } from '../components/AiDetectionModal';
@@ -2013,6 +2021,7 @@ function PrinterCard({
   timeFormat = 'system',
   cameraViewMode = 'window',
   onOpenEmbeddedCamera,
+  onSelectCameraViewMode,
   checkPrinterFirmware = true,
   dryingPresets = DRYING_PRESETS,
   requirePlateClear = false,
@@ -2052,8 +2061,9 @@ function PrinterCard({
   spoolmanLoading?: boolean;
   onUnassignSpoolmanSpool?: (spoolmanSpoolId: number) => void;
   timeFormat?: 'system' | '12h' | '24h';
-  cameraViewMode?: 'window' | 'embedded';
+  cameraViewMode?: CameraViewMode;
   onOpenEmbeddedCamera?: (printerId: number, printerName: string) => void;
+  onSelectCameraViewMode?: (mode: CameraViewMode) => void;
   checkPrinterFirmware?: boolean;
   dryingPresets?: Record<string, DryingPreset>;
   requirePlateClear?: boolean;
@@ -2179,6 +2189,11 @@ function PrinterCard({
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [isDropUploading, setIsDropUploading] = useState(false);
   const printerActionsMenuRef = useRef<HTMLDivElement>(null);
+  // Viewport coordinates, because the camera mode menu is a `ContextMenu` at
+  // `position: fixed`. The button sits in the card's footer, so a menu drawn
+  // inside the card would have to open upward into the card body; anchored to
+  // the viewport it escapes the card and the grid's scroll container both.
+  const [cameraMenuAnchor, setCameraMenuAnchor] = useState<{ x: number; y: number } | null>(null);
   const dragCounterRef = useRef(0);
   const [amsHistoryModal, setAmsHistoryModal] = useState<{
     amsId: number;
@@ -3373,6 +3388,48 @@ function PrinterCard({
 
   const footerActionButtonClass = '!h-8 !min-h-8 !px-2 !py-0';
   const footerIconButtonClass = '!h-8 !min-h-8 !w-8 !px-0 !py-0';
+
+  // Opening a camera in a given mode, without touching which mode is remembered
+  // -- the split button's two halves want the same action but disagree about
+  // whether the choice was deliberate enough to keep.
+  const openCameraIn = (mode: CameraViewMode) => {
+    if (mode === 'embedded' && onOpenEmbeddedCamera) {
+      onOpenEmbeddedCamera(printer.id, printer.name);
+    } else {
+      openCameraWindow(printer.id);
+    }
+  };
+
+  // Picking a mode both opens the camera that way and makes it the mode the
+  // plain icon uses from now on. A menu that only changed a preference would
+  // leave the user with a second click to do the thing they already asked for.
+  const cameraViewModeMenuItems: ContextMenuItem[] = (
+    [
+      {
+        mode: 'window' as const,
+        icon: <ExternalLink className="w-4 h-4" />,
+        label: t('settings.newWindow'),
+        title: t('settings.cameraWindowDescription'),
+      },
+      {
+        mode: 'embedded' as const,
+        icon: <PictureInPicture2 className="w-4 h-4" />,
+        label: t('settings.embeddedOverlay'),
+        title: t('settings.cameraOverlayDescription'),
+      },
+    ]
+  ).map(({ mode, icon, label, title }) => ({
+    icon,
+    // The remembered mode is marked in the label itself: the icon slot already
+    // carries the mode's own icon, and a separate tick column would push both
+    // entries out of line with every other card menu.
+    label: mode === cameraViewMode ? `${label} ✓` : label,
+    title,
+    onClick: () => {
+      onSelectCameraViewMode?.(mode);
+      openCameraIn(mode);
+    },
+  }));
   const renderAmsSlotActions = ({
     amsId,
     slotId,
@@ -6271,35 +6328,50 @@ function PrinterCard({
             <div className="flex items-center justify-between gap-2">
               {printerActionsMenu}
               <div className="flex items-center justify-end gap-2 flex-wrap">
-                {/* Camera Button */}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    if (cameraViewMode === 'embedded' && onOpenEmbeddedCamera) {
-                      onOpenEmbeddedCamera(printer.id, printer.name);
-                    } else {
-                      // Use saved window state or defaults
-                      const saved = localStorage.getItem('cameraWindowState');
-                      const state = saved ? JSON.parse(saved) : { width: 640, height: 400 };
-                      const features = [
-                        `width=${state.width}`,
-                        `height=${state.height}`,
-                        state.left !== undefined ? `left=${state.left}` : '',
-                        state.top !== undefined ? `top=${state.top}` : '',
-                        // No `noopener`: same-origin popup needs opener so the browser
-                        // copies sessionStorage (auth token) into the new window.
-                        'menubar=no,toolbar=no,location=no,status=no',
-                      ].filter(Boolean).join(',');
-                      window.open(`/camera/${printer.id}`, `camera-${printer.id}`, features);
-                    }
-                  }}
-                  disabled={!status?.connected || !hasPermission('camera:view')}
-                  title={!hasPermission('camera:view') ? t('printers.permission.noCamera') : (cameraViewMode === 'embedded' ? t('printers.openCameraOverlay') : t('printers.openCameraWindow'))}
-                  className={footerIconButtonClass}
-                >
-                  <Video className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
-                </Button>
+                {/* Camera split button: the icon opens whichever view was used
+                    last, the caret picks between the two and remembers it.
+                    Replaces the old Settings > General > Camera switch, which
+                    made choosing between an overlay and a window a trip to
+                    another page for something you decide per camera. */}
+                <div className="flex items-center flex-shrink-0">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => openCameraIn(cameraViewMode)}
+                    disabled={!status?.connected || !hasPermission('camera:view')}
+                    title={!hasPermission('camera:view') ? t('printers.permission.noCamera') : (cameraViewMode === 'embedded' ? t('printers.openCameraOverlay') : t('printers.openCameraWindow'))}
+                    className={`${footerIconButtonClass} !rounded-r-none`}
+                  >
+                    <Video className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={(e) => {
+                      // No open/close toggle: the menu's own outside-mousedown
+                      // handler has already dismissed it by the time this lands.
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setCameraMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
+                    }}
+                    disabled={!status?.connected || !hasPermission('camera:view')}
+                    title={!hasPermission('camera:view') ? t('printers.permission.noCamera') : t('settings.cameraViewMode')}
+                    aria-label={t('settings.cameraViewMode')}
+                    // Not footerIconButtonClass plus an override: both widths
+                    // would carry !important and the stylesheet's own order,
+                    // not this one, would decide which won.
+                    className="!h-8 !min-h-8 !w-6 !px-0 !py-0 !rounded-l-none border-l border-bambu-dark"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </Button>
+                </div>
+                {cameraMenuAnchor && (
+                  <ContextMenu
+                    x={cameraMenuAnchor.x}
+                    y={cameraMenuAnchor.y}
+                    items={cameraViewModeMenuItems}
+                    onClose={() => setCameraMenuAnchor(null)}
+                  />
+                )}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -8456,10 +8528,15 @@ export function PrintersPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const { hasPermission } = useAuth();
+  // Which way the camera buttons open a stream. Chosen per click from the
+  // button's own menu; null until this browser has made a choice, so the
+  // stored setting below can act as the default a fresh browser starts from.
+  const [chosenCameraViewMode, setChosenCameraViewMode] = useState<CameraViewMode | null>(
+    () => readStoredCameraViewMode()
+  );
   // Embedded camera viewer state - supports multiple simultaneous viewers
   // Persisted to localStorage so cameras reopen after navigation
   const [embeddedCameraPrinters, setEmbeddedCameraPrinters] = useState<Map<number, { id: number; name: string }>>(() => {
-    // Initialize from localStorage if camera_view_mode is embedded
     const saved = localStorage.getItem('openEmbeddedCameras');
     if (saved) {
       try {
@@ -8528,12 +8605,24 @@ export function PrintersPage() {
     return DRYING_PRESETS;
   }, [settings?.drying_presets]);
 
-  // Close embedded cameras if mode changes to 'window'
-  useEffect(() => {
-    if (settings?.camera_view_mode === 'window' && embeddedCameraPrinters.size > 0) {
-      setEmbeddedCameraPrinters(new Map());
+  // The local choice wins over the stored one: someone without settings:update
+  // cannot write their pick back, and a preference that silently reverted on
+  // the next render would be worse than none at all.
+  const cameraViewMode: CameraViewMode =
+    chosenCameraViewMode ?? (settings?.camera_view_mode === 'embedded' ? 'embedded' : 'window');
+
+  const selectCameraViewMode = useCallback((mode: CameraViewMode) => {
+    storeCameraViewMode(mode);
+    setChosenCameraViewMode(mode);
+    // Best effort, and only a default for other browsers -- the choice is
+    // already in effect here. Users below settings:update simply keep theirs
+    // locally, which is why the failure is logged rather than surfaced.
+    if (hasPermission('settings:update')) {
+      api.updateSettings({ camera_view_mode: mode })
+        .then(() => queryClient.invalidateQueries({ queryKey: ['ui-preferences'] }))
+        .catch((err) => console.warn('Could not save camera view mode as the default:', err));
     }
-  }, [settings?.camera_view_mode, embeddedCameraPrinters.size]);
+  }, [hasPermission, queryClient]);
 
   // Fetch all smart plugs to know which printers have them
   const { data: smartPlugs } = useQuery({
@@ -9431,20 +9520,12 @@ export function PrintersPage() {
           maxLive={camWallMaxLive}
           snapshotIntervalSec={camWallSnapshotSec}
           onTileClick={(id, name) => {
-            const cameraMode = settings?.camera_view_mode || 'window';
-            if (cameraMode === 'embedded') {
+            // A wall tile has no room for a split button, so it follows the
+            // mode the card buttons last chose.
+            if (cameraViewMode === 'embedded') {
               setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }));
             } else {
-              const saved = localStorage.getItem('cameraWindowState');
-              const state = saved ? JSON.parse(saved) : { width: 640, height: 400 };
-              const features = [
-                `width=${state.width}`,
-                `height=${state.height}`,
-                state.left !== undefined ? `left=${state.left}` : '',
-                state.top !== undefined ? `top=${state.top}` : '',
-                'menubar=no,toolbar=no,location=no,status=no',
-              ].filter(Boolean).join(',');
-              window.open(`/camera/${id}`, `camera-${id}`, features);
+              openCameraWindow(id);
             }
           }}
           statusMode={camWallStatusMode}
@@ -9538,8 +9619,9 @@ export function PrintersPage() {
                       spoolmanLoading={spoolmanSpoolsLoading || spoolmanAssignmentsLoading}
                       onUnassignSpoolmanSpool={(id) => unassignSpoolmanMutation.mutate(id)}
                       timeFormat={settings?.time_format || 'system'}
-                      cameraViewMode={settings?.camera_view_mode || 'window'}
+                      cameraViewMode={cameraViewMode}
                       onOpenEmbeddedCamera={(id, name) => setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }))}
+                      onSelectCameraViewMode={selectCameraViewMode}
                       checkPrinterFirmware={settings?.check_printer_firmware !== false}
                       dryingPresets={effectiveDryingPresets}
                       nozzleTempPresets={effectiveNozzleTempPresets}
@@ -9590,8 +9672,9 @@ export function PrintersPage() {
                 tempFair: Number(settings.ams_temp_fair) || 35,
               } : undefined}
               timeFormat={settings?.time_format || 'system'}
-              cameraViewMode={settings?.camera_view_mode || 'window'}
+              cameraViewMode={cameraViewMode}
               onOpenEmbeddedCamera={(id, name) => setEmbeddedCameraPrinters(prev => new Map(prev).set(id, { id, name }))}
+              onSelectCameraViewMode={selectCameraViewMode}
               checkPrinterFirmware={settings?.check_printer_firmware !== false}
               dryingPresets={effectiveDryingPresets}
               nozzleTempPresets={effectiveNozzleTempPresets}
