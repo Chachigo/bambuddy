@@ -167,7 +167,7 @@ import { FileUploadModal } from '../components/FileUploadModal';
 import { PrintModal } from '../components/PrintModal';
 import { PrinterInfoModal } from '../components/PrinterInfoModal';
 import { getAmsLabel, getGlobalTrayId, getFillBarColor, getSpoolmanFillLevel, getFallbackSpoolTag, isBambuLabSpool, resolveSlotNozzleDiameter } from '../utils/amsHelpers';
-import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems } from '../utils/printer';
+import { MAX_CHAMBER_TEMP_C, getPrinterImage, getWifiStrength, filterCompatibleQueueItems, isPrinterCurrentlyDispatchable } from '../utils/printer';
 import { FilamentSlotCircle } from '../components/FilamentSlotCircle';
 import { Collapsible } from '../components/Collapsible';
 import { ConnectionDiagnosticModal, DiagnosticChecklist } from '../components/ConnectionDiagnostic';
@@ -3288,7 +3288,22 @@ function PrinterCard({
     }
   };
 
-  const canDrop = isConnected && status?.state !== 'RUNNING' && status?.state !== 'PAUSE' && hasPermission('printers:control');
+  // A dropped file always becomes a queue item, so a printer that is busy,
+  // offline or mid-drying is no reason to refuse the drop — it only means the
+  // item waits its turn instead of starting now (#2849). Rejecting RUNNING /
+  // PAUSE / disconnected sent people to the File Manager to do by hand exactly
+  // what this would have done for them.
+  //
+  // What remains is what the flow actually performs: upload the file, then
+  // create a queue item. It never touches printers:control, which is what this
+  // used to check — so someone holding that but neither of these had the file
+  // uploaded and then rejected by the queue, leaving it stranded. The Print
+  // button below has always checked this pair.
+  const canDrop = hasPermission('library:upload') && hasPermission('queue:create');
+
+  // Drives the wording alone. Shared with the PrintModal so the card's promise
+  // and the modal's own "will start later" toast cannot disagree.
+  const dropWouldQueue = !isPrinterCurrentlyDispatchable(status);
 
   const handleCardDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
@@ -3601,12 +3616,18 @@ function PrinterCard({
             ) : canDrop ? (
               <>
                 <PrinterIcon className="w-8 h-8 mx-auto mb-2 text-bambu-green" />
-                <p className="text-sm font-medium text-bambu-green">{t('printers.dropToPrint', 'Drop to print')}</p>
+                <p className="text-sm font-medium text-bambu-green">
+                  {dropWouldQueue ? t('printers.dropToQueue') : t('printers.dropToPrint')}
+                </p>
               </>
             ) : (
               <>
                 <X className="w-8 h-8 mx-auto mb-2 text-red-600 dark:text-red-400" />
-                <p className="text-sm font-medium text-red-700 dark:text-red-400">{t('printers.cannotPrint', 'Printer busy')}</p>
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">
+                  {!hasPermission('library:upload')
+                    ? t('fileManager.noPermissionUpload')
+                    : t('fileManager.noPermissionAddToQueue')}
+                </p>
               </>
             )}
           </div>
@@ -6289,24 +6310,27 @@ function PrinterCard({
                 >
                   <HardDrive className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                 </Button>
-                {isConnected && status?.state !== 'RUNNING' && status?.state !== 'PAUSE' && (
-                  <Button
-                    size="sm"
-                    onClick={() => setShowUploadForPrint(true)}
-                    disabled={!hasPermission('library:upload') || !hasPermission('queue:create')}
-                    title={
-                      !hasPermission('library:upload')
-                        ? t('fileManager.noPermissionUpload')
-                        : !hasPermission('queue:create')
-                          ? t('fileManager.noPermissionAddToQueue')
-                          : t('common.print')
-                    }
-                    className={`${footerActionButtonClass} !bg-bambu-green hover:!bg-bambu-green/80 !text-white`}
-                  >
-                    <PrinterIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
-                    {t('common.print')}
-                  </Button>
-                )}
+                {/* Shown whatever the printer is doing (#2849): this uploads a
+                    file and queues it, which a busy or offline printer is no
+                    reason to refuse -- it only means the item waits. Hiding it
+                    while the drop zone accepted the same file would have left
+                    the two routes into this flow disagreeing. */}
+                <Button
+                  size="sm"
+                  onClick={() => setShowUploadForPrint(true)}
+                  disabled={!hasPermission('library:upload') || !hasPermission('queue:create')}
+                  title={
+                    !hasPermission('library:upload')
+                      ? t('fileManager.noPermissionUpload')
+                      : !hasPermission('queue:create')
+                        ? t('fileManager.noPermissionAddToQueue')
+                        : t('common.print')
+                  }
+                  className={`${footerActionButtonClass} !bg-bambu-green hover:!bg-bambu-green/80 !text-white`}
+                >
+                  <PrinterIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+                  {t('common.print')}
+                </Button>
               </div>
             </div>
         </div>

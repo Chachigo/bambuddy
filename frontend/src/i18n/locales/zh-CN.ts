@@ -864,7 +864,7 @@ export default {
     incompatibleFile: '此文件是为 {{slicedFor}} 切片的，但该打印机是 {{printerModel}}',
     dropNotPrintable: '只能打印 .gcode 和 .gcode.3mf 文件',
     dropToPrint: '拖放以打印',
-    cannotPrint: '打印机忙碌',
+    dropToQueue: '拖放以加入队列',
   },
 
   // Archives page

@@ -864,7 +864,7 @@ export default {
     incompatibleFile: 'Diese Datei wurde für {{slicedFor}} geslicet, aber dieser Drucker ist ein {{printerModel}}',
     dropNotPrintable: 'Nur .gcode- und .gcode.3mf-Dateien können gedruckt werden',
     dropToPrint: 'Zum Drucken ablegen',
-    cannotPrint: 'Drucker beschäftigt',
+    dropToQueue: 'Zum Einreihen ablegen',
   },
 
   // Archives page

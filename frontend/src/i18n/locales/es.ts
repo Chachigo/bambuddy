@@ -864,7 +864,7 @@ export default {
     incompatibleFile: 'Este archivo se laminó para {{slicedFor}}, pero esta impresora es una {{printerModel}}',
     dropNotPrintable: 'Solo se pueden imprimir archivos .gcode y .gcode.3mf',
     dropToPrint: 'Suelte para imprimir',
-    cannotPrint: 'Impresora ocupada',
+    dropToQueue: 'Suelte para poner en cola',
   },
 
   // Archives page

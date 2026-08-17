@@ -868,7 +868,7 @@ export default {
     incompatibleFile: "Цей файл нарізано для {{slicedFor}}, а модель цього принтера — {{printerModel}}",
     dropNotPrintable: "Можна роздрукувати лише файли .gcode і .gcode.3mf.",
     dropToPrint: "Відпустіть для друку",
-    cannotPrint: "Принтер зайнятий",
+    dropToQueue: "Відпустіть, щоб додати в чергу",
   },
 
   // Archives page

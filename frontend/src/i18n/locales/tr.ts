@@ -864,7 +864,7 @@ export default {
     incompatibleFile: 'Bu dosya {{slicedFor}} için dilimlendi, ancak bu yazıcı bir {{printerModel}}',
     dropNotPrintable: 'Yalnızca .gcode ve .gcode.3mf dosyaları yazdırılabilir',
     dropToPrint: 'Yazdırmak için bırakın',
-    cannotPrint: 'Yazıcı meşgul',
+    dropToQueue: 'Kuyruğa eklemek için bırakın',
   },
 
   // Arşivler sayfası

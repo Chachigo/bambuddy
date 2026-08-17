@@ -864,7 +864,7 @@ export default {
     incompatibleFile: 'Ce fichier a été tranché pour {{slicedFor}}, mais cette imprimante est une {{printerModel}}',
     dropNotPrintable: 'Seuls les fichiers .gcode et .gcode.3mf peuvent être imprimés',
     dropToPrint: 'Déposer pour imprimer',
-    cannotPrint: 'Imprimante occupée',
+    dropToQueue: 'Déposer pour mettre en file',
   },
 
   // Archives page

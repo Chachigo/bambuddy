@@ -821,7 +821,7 @@ export default {
     incompatibleFile: "Файл подготовлен для {{slicedFor}}, а выбранный принтер — {{printerModel}}",
     dropNotPrintable: "Для печати подходят только файлы .gcode и .gcode.3mf",
     dropToPrint: "Перетащите файл для печати",
-    cannotPrint: "Принтер занят",
+    dropToQueue: "Перетащите файл в очередь",
   },
   archives: {
     title: "Архив печати",

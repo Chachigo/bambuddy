@@ -863,7 +863,7 @@ export default {
     incompatibleFile: 'このファイルは{{slicedFor}}用にスライスされていますが、このプリンターは{{printerModel}}です',
     dropNotPrintable: '.gcodeおよび.gcode.3mfファイルのみ印刷できます',
     dropToPrint: 'ドロップして印刷',
-    cannotPrint: 'プリンター使用中',
+    dropToQueue: 'ドロップしてキューに追加',
   },
 
   // Archives page

@@ -816,7 +816,7 @@ export default {
     incompatibleFile: '이 파일은 {{slicedFor}}용으로 슬라이싱되었지만, 이 프린터는 {{printerModel}}입니다',
     dropNotPrintable: '.gcode 및 .gcode.3mf 파일만 인쇄할 수 있습니다',
     dropToPrint: '놓아서 인쇄',
-    cannotPrint: '프린터 사용 중',
+    dropToQueue: '놓아서 대기열에 추가',
     addPreflight: {
       checking: '연결 확인 중...',
       warning: '일부 연결 확인이 실패했습니다. 이 프린터가 오프라인으로 표시될 수 있습니다. 아래 항목을 검토하고 수정하거나 그냥 저장하세요.',

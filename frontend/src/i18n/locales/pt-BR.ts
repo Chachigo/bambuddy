@@ -864,7 +864,7 @@ export default {
     incompatibleFile: 'Este arquivo foi fatiado para {{slicedFor}}, mas esta impressora é uma {{printerModel}}',
     dropNotPrintable: 'Apenas arquivos .gcode e .gcode.3mf podem ser impressos',
     dropToPrint: 'Solte para imprimir',
-    cannotPrint: 'Impressora ocupada',
+    dropToQueue: 'Solte para adicionar à fila',
   },
 
   // Archives page

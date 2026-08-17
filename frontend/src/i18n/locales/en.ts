@@ -869,7 +869,7 @@ export default {
     incompatibleFile: 'This file was sliced for {{slicedFor}}, but this printer is a {{printerModel}}',
     dropNotPrintable: 'Only .gcode and .gcode.3mf files can be printed',
     dropToPrint: 'Drop to print',
-    cannotPrint: 'Printer busy',
+    dropToQueue: 'Drop to queue',
   },
 
   // Archives page
