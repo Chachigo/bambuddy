@@ -58,6 +58,7 @@ from backend.app.api.routes import (
     printer_sensor_history,
     printers,
     projects,
+    scheduled_dryings,
     settings as settings_routes,
     slice_jobs,
     slicer_pipelines,
@@ -127,6 +128,7 @@ from backend.app.services.spoolman_tracking import (
     store_print_data as _store_spoolman_print_data,
 )
 from backend.app.services.tasmota import tasmota_service
+from backend.app.utils.ams_drying import is_drying_active, temperature_alarm_suppressed
 
 
 # =============================================================================
@@ -6844,6 +6846,86 @@ _ams_cleanup_counter = 0  # Track recordings to trigger periodic cleanup
 _ams_alarm_cooldown: dict[str, datetime] = {}
 AMS_ALARM_COOLDOWN_MINUTES = 60  # Don't send same alarm more than once per hour
 
+# Per-AMS "drying was live at" latch that suppresses the high-temperature alarm
+# through a cycle and the cool-down after it (#1802). Stored in the settings
+# table rather than alongside _ams_alarm_cooldown above, because a restart
+# partway through a cool-down would otherwise resume alarming about heat the
+# user asked for — the same internal-timestamp-row pattern as
+# support.py's debug_logging_enabled_at.
+AMS_DRYING_LATCH_KEY = "ams_drying_alarm_latch"
+
+# Upper bound on that suppression. The latch normally clears as soon as the unit
+# reads at or below the threshold; see utils.ams_drying for why this cap only
+# matters when it never does.
+AMS_DRYING_GRACE_MINUTES = 120
+
+
+async def _load_ams_drying_latch(db) -> dict[str, datetime]:
+    """Read the persisted per-AMS drying latch, dropping entries out of window.
+
+    Anything older than the grace cap would expire on its next visit anyway, so
+    discarding it here costs nothing and stops rows for deleted printers from
+    accumulating.
+
+    Stamps ahead of now get two defences, because a box whose clock jumps
+    backwards (a Pi with no RTC coming up before NTP) writes them: wildly future
+    ones are discarded outright, and the rest are clamped to now. Without the
+    clamp the cap would measure from a moment that has not happened yet and hold
+    the alarm quiet for the skew on top of the cap. One unnecessary notification
+    after a clock jump is a far better failure than an alarm silently disabled
+    for hours.
+    """
+    from backend.app.models.settings import Settings
+
+    result = await db.execute(select(Settings).where(Settings.key == AMS_DRYING_LATCH_KEY))
+    setting = result.scalar_one_or_none()
+    if not setting or not setting.value:
+        return {}
+    try:
+        raw = json.loads(setting.value)
+    except (ValueError, TypeError):
+        return {}  # Corrupted row → no latch, alarms behave as they did before
+    if not isinstance(raw, dict):
+        return {}
+
+    now = datetime.now(timezone.utc)
+    window = timedelta(minutes=AMS_DRYING_GRACE_MINUTES)
+    latch: dict[str, datetime] = {}
+    for key, value in raw.items():
+        try:
+            stamp = datetime.fromisoformat(str(value))
+        except (ValueError, TypeError):
+            continue
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        if not (now - window <= stamp <= now + window):
+            continue
+        # Nothing may sit in the future: suppression is measured as now minus
+        # the stamp, so a stamp ahead of now would extend it by the skew on top
+        # of the cap. Clamping the survivors keeps the cap an actual cap.
+        latch[str(key)] = min(stamp, now)
+    return latch
+
+
+async def _save_ams_drying_latch(db, latch: dict[str, datetime]) -> None:
+    """Persist the latch, writing only when it actually changed.
+
+    Adds the session change but does not commit — the caller's own commit
+    carries it, so the latch lands in the same transaction as the sensor rows
+    that produced it.
+    """
+    from backend.app.models.settings import Settings
+
+    payload = json.dumps({key: stamp.isoformat() for key, stamp in sorted(latch.items())})
+    result = await db.execute(select(Settings).where(Settings.key == AMS_DRYING_LATCH_KEY))
+    setting = result.scalar_one_or_none()
+    if setting is None:
+        # Don't create the row on installs that never dry anything.
+        if payload != "{}":
+            db.add(Settings(key=AMS_DRYING_LATCH_KEY, value=payload))
+    elif setting.value != payload:
+        setting.value = payload
+
 
 def _ams_has_filament(ams_data: dict) -> bool:
     """True if this AMS unit has at least one tray slot holding filament.
@@ -6931,6 +7013,11 @@ async def record_ams_history():
                                     continue
                     except (ValueError, TypeError):
                         pass  # Invalid JSON → no overrides, fall through to global threshold
+
+                # Per-AMS drying latch (#1802), loaded once per pass and written
+                # back below only if a unit changed it.
+                drying_latch = await _load_ams_drying_latch(db)
+                drying_latch_before = dict(drying_latch)
 
                 recorded_count = 0
                 for printer in printers:
@@ -7049,8 +7136,30 @@ async def record_ams_history():
                                 except Exception as e:
                                     logger.warning("Failed to send humidity alarm: %s", e)
 
+                        # A drying cycle heats the unit far past ams_temp_fair on
+                        # purpose — 45 C for PLA, 65 C for PETG, 85 C on an
+                        # AMS-HT, against a 35 C default — so the alarm fired
+                        # once an hour for the whole cycle and kept firing while
+                        # the unit cooled back down (#1802). Latch on the
+                        # firmware's own drying state and hold until the reading
+                        # returns to normal. Humidity is deliberately left alone:
+                        # it falls during drying, which is the whole point.
+                        latch_key = f"{printer.id}:{ams_id}"
+                        suppress_temp_alarm, new_latch = temperature_alarm_suppressed(
+                            drying_active=is_drying_active(ams_data),
+                            temperature=temperature,
+                            threshold=temp_threshold,
+                            latched_at=drying_latch.get(latch_key),
+                            now=datetime.now(timezone.utc),
+                            grace_minutes=AMS_DRYING_GRACE_MINUTES,
+                        )
+                        if new_latch is None:
+                            drying_latch.pop(latch_key, None)
+                        else:
+                            drying_latch[latch_key] = new_latch
+
                         # Check temperature alarm (only if above threshold)
-                        if temperature is not None and temperature > temp_threshold:
+                        if temperature is not None and temperature > temp_threshold and not suppress_temp_alarm:
                             cooldown_key = f"{printer.id}:{ams_id}:temperature"
                             last_alarm = _ams_alarm_cooldown.get(cooldown_key)
                             now = datetime.now(timezone.utc)
@@ -7074,6 +7183,9 @@ async def record_ams_history():
                                         )
                                 except Exception as e:
                                     logger.warning("Failed to send temperature alarm: %s", e)
+
+                if drying_latch != drying_latch_before:
+                    await _save_ams_drying_latch(db, drying_latch)
 
                 await db.commit()
                 if recorded_count > 0:
@@ -8662,6 +8774,7 @@ app.include_router(smart_plugs.router, prefix=app_settings.api_prefix)
 app.include_router(ha_sensors.router, prefix=app_settings.api_prefix)
 app.include_router(print_log.router, prefix=app_settings.api_prefix)
 app.include_router(print_queue.router, prefix=app_settings.api_prefix)
+app.include_router(scheduled_dryings.router, prefix=app_settings.api_prefix)
 app.include_router(kprofiles.router, prefix=app_settings.api_prefix)
 app.include_router(notifications.router, prefix=app_settings.api_prefix)
 app.include_router(notification_templates.router, prefix=app_settings.api_prefix)

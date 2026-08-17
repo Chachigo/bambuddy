@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 from backend.app.services.hms_actions import HMSAction, get_actions_for_error_code
+from backend.app.utils.ams_drying import ACTIVE_DRY_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,6 @@ _AMS_MODULE_PREFIXES = ("ams/", "n3f/", "n3s/")
 # are valid start targets and are deliberately excluded. Mirrors
 # printer_manager.ACTIVE_PRINT_STATES and print_scheduler._ACTIVE_PRINT_STATES.
 _ACTIVE_PRINT_STATES = frozenset({"PREPARE", "SLICING", "RUNNING", "PAUSE"})
-
-# AMS dry_status phases (info bits 4-7) in which a drying cycle is still live, so
-# a dry_time of 0 alongside one of them is a transient rather than a completion
-# (#2759). 0=Off, 4=Stopping and 5=Error all mean the cycle is over or ending and
-# are deliberately excluded — those SHOULD end it.
-_ACTIVE_DRY_STATUSES = frozenset({1, 2, 3})  # Checking, Drying, Cooling
 
 # A drying cycle that runs to term ends with its countdown all but exhausted, so
 # the last dry_time we saw before the drop to 0 tells us whether the firmware
@@ -3240,7 +3235,7 @@ class BambuMQTTClient:
             # schedules smart-plug auto-off. dry_status comes from the same info
             # hex parsed above; when it is absent we let the edge through, so a
             # firmware that never reports one still ends its cycles.
-            if current == 0 and ams_unit.get("dry_status") in _ACTIVE_DRY_STATUSES:
+            if current == 0 and ams_unit.get("dry_status") in ACTIVE_DRY_STATUSES:
                 # Leave the remembered value alone, exactly as the absent-
                 # dry_time skip above does: whichever push ends the cycle for
                 # real must still see a non-zero previous.
