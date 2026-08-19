@@ -2051,6 +2051,7 @@ export default {
     // Camera
     saveThumbnails: 'Salva miniature',
     captureFinishPhoto: 'Acquisisci foto finale',
+    autoChamberLight: 'La luce della camera segue la stampa',
     noPrintersConfigured: 'Nessuna stampante configurata',
     // Archive settings
     archiveMode: {
@@ -2573,6 +2574,7 @@ export default {
     autoArchivePrints: 'Archiviazione automatica stampe',
     autoArchiveDescription: 'Salva automaticamente i file 3MF al completamento delle stampe',
     saveThumbnailsDescription: 'Estrai e salva le immagini di anteprima dai file 3MF',
+    autoChamberLightDescription: 'Accende la luce della camera all\'avvio di una stampa e la spegne poco dopo la fine. Il controllo manuale resta disponibile: questa impostazione agisce solo all\'inizio e alla fine di una stampa.',
     captureFinishPhotoDescription: 'Scatta una foto dalla fotocamera della stampante al completamento della stampa. Bambuddy registra un breve timelapse durante la stampa in modo che la foto possa essere ricavata dal momento precedente all\'abbassamento del piatto; il file del timelapse viene mantenuto se hai abilitato il timelapse per questa stampa, altrimenti viene eliminato automaticamente dopo l\'acquisizione della foto.',
     finishPhotoRestorePlate: 'Solleva il piatto per la foto finale',
     finishPhotoRestorePlateDescription: 'La stampante abbassa il piatto di circa 100 mm al termine di una stampa, lasciando l\'oggetto finito sotto l\'inquadratura della fotocamera. Bambuddy lo risolleva fino a poco sopra l\'ultimo strato stampato, scatta la foto e poi lo riabbassa. Ignorato se l\'altezza di stampa è sconosciuta o se un altro lavoro è in coda.',

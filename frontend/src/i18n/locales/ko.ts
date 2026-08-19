@@ -1995,6 +1995,7 @@ export default {
     sidebarOrder: '사이드바 순서',
     saveThumbnails: '썸네일 저장',
     captureFinishPhoto: '완료 사진 캡처',
+    autoChamberLight: '챔버 조명을 프린트에 맞춰 제어',
     noPrintersConfigured: '설정된 프린터 없음',
     archiveMode: {
       always: '항상 아카이브 항목 생성',
@@ -2487,6 +2488,7 @@ export default {
     autoArchivePrints: '인쇄 자동 아카이브',
     autoArchiveDescription: '인쇄 완료 시 3MF 파일 자동 저장',
     saveThumbnailsDescription: '3MF 파일에서 미리보기 이미지 추출 및 저장',
+    autoChamberLightDescription: '프린트가 시작되면 챔버 조명을 켜고, 끝난 직후에 다시 끕니다. 수동 조작은 그대로 사용할 수 있으며, 이 설정은 프린트의 시작과 종료 시점에만 동작합니다.',
     captureFinishPhotoDescription: '인쇄 완료 시 프린터 카메라로 사진 촬영. Bambuddy는 인쇄 중 짧은 타임랩스를 기록하여 베드가 내려가기 전 순간에서 사진을 가져올 수 있도록 합니다. 이 인쇄에 대해 타임랩스를 활성화한 경우 타임랩스 파일이 보관되며, 그렇지 않으면 사진 촬영 후 자동으로 삭제됩니다.',
     finishPhotoRestorePlate: '완료 사진을 위해 베드 올리기',
     finishPhotoRestorePlateDescription: '프린터는 인쇄가 끝나면 베드를 약 100 mm 내리므로 완성된 출력물이 카메라 화각 아래에 놓입니다. Bambuddy는 베드를 마지막 인쇄 레이어 바로 위까지 다시 올려 사진을 찍은 뒤 다시 내립니다. 출력 높이를 알 수 없거나 다른 작업이 대기 중이면 건너뜁니다.',

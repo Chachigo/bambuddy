@@ -57,6 +57,10 @@ class AppSettings(BaseModel):
             "when the print height is unknown or another job is queued for the printer."
         ),
     )
+    auto_chamber_light: bool = Field(
+        default=False,
+        description="Turn the chamber light on when a print starts and off shortly after it ends",
+    )
     default_filament_cost: float = Field(default=25.0, description="Default filament cost per kg")
     currency: str = Field(default="USD", description="Currency for cost tracking")
     energy_cost_per_kwh: float = Field(default=0.15, description="Electricity cost per kWh for energy tracking")
@@ -620,6 +624,7 @@ class AppSettingsUpdate(BaseModel):
     save_thumbnails: bool | None = None
     capture_finish_photo: bool | None = None
     finish_photo_restore_plate: bool | None = None
+    auto_chamber_light: bool | None = None
     default_filament_cost: float | None = None
     currency: str | None = None
     energy_cost_per_kwh: float | None = None

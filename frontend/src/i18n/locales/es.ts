@@ -2098,6 +2098,7 @@ export default {
     // Camera
     saveThumbnails: 'Guardar miniaturas',
     captureFinishPhoto: 'Capturar foto de finalización',
+    autoChamberLight: 'La luz de la cámara sigue la impresión',
     noPrintersConfigured: 'No hay impresoras configuradas',
     // Archive settings
     archiveMode: {
@@ -2622,6 +2623,7 @@ export default {
     autoArchivePrints: 'Archivar impresiones automáticamente',
     autoArchiveDescription: 'Guardar automáticamente los archivos 3MF cuando se completan las impresiones',
     saveThumbnailsDescription: 'Extraer y guardar imágenes de vista previa de los archivos 3MF',
+    autoChamberLightDescription: 'Enciende la luz de la cámara al iniciar una impresión y la apaga poco después de terminar. El control manual sigue disponible: este ajuste solo actúa al principio y al final de una impresión.',
     captureFinishPhotoDescription: 'Tomar una foto desde la cámara de la impresora cuando se completa la impresión. Bambuddy graba un breve timelapse durante la impresión para que la foto pueda obtenerse del momento previo al descenso de la cama; el archivo del timelapse se conserva si activaste el timelapse para esta impresión, de lo contrario se elimina automáticamente tras capturar la foto.',
     finishPhotoRestorePlate: 'Elevar la cama para la foto final',
     finishPhotoRestorePlateDescription: 'La impresora baja la cama unos 100 mm al terminar una impresión, dejando la pieza terminada por debajo del encuadre de la cámara. Bambuddy la vuelve a subir hasta justo encima de la última capa impresa, toma la foto y luego la baja de nuevo. Se omite si se desconoce la altura de la impresión o si hay otro trabajo en cola.',

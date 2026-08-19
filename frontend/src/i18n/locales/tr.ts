@@ -2099,6 +2099,7 @@ export default {
     // Kamera
     saveThumbnails: 'Küçük resimleri kaydet',
     captureFinishPhoto: 'Bitiş fotoğrafı çek',
+    autoChamberLight: 'Hazne ışığı baskıyı takip etsin',
     noPrintersConfigured: 'Yapılandırılmış yazıcı yok',
     // Arşiv ayarları
     archiveMode: {
@@ -2623,6 +2624,7 @@ export default {
     autoArchivePrints: 'Baskıları otomatik arşivle',
     autoArchiveDescription: 'Baskılar tamamlandığında 3MF dosyalarını otomatik olarak kaydet',
     saveThumbnailsDescription: '3MF dosyalarından önizleme görüntülerini çıkar ve kaydet',
+    autoChamberLightDescription: 'Bir baskı başladığında hazne ışığını açar, bittikten kısa süre sonra tekrar kapatır. Manuel kontrol çalışmaya devam eder — bu ayar yalnızca baskının başında ve sonunda devreye girer.',
     captureFinishPhotoDescription: 'Baskı tamamlandığında yazıcı kamerasından bir fotoğraf çek. Bambuddy, baskı sırasında kısa bir zaman atlamalı kayıt yapar, böylece fotoğraf tabla inmeden önceki andan alınabilir. Bu baskı için zaman atlamalı kaydı etkinleştirdiyseniz dosya saklanır, aksi takdirde fotoğraf çekildikten sonra otomatik olarak silinir.',
     finishPhotoRestorePlate: 'Bitiş fotoğrafı için tablayı yükselt',
     finishPhotoRestorePlateDescription: 'Yazıcı, baskı bittiğinde tablayı yaklaşık 100 mm aşağı indirir ve tamamlanmış baskı kameranın çerçevesinin altında kalır. Bambuddy tablayı son basılan katmanın hemen üzerine geri kaldırır, fotoğrafı çeker ve ardından tekrar indirir. Baskı yüksekliği bilinmiyorsa veya kuyrukta başka bir iş varsa atlanır.',

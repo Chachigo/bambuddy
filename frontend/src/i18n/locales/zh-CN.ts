@@ -2096,6 +2096,7 @@ export default {
     // Camera
     saveThumbnails: '保存缩略图',
     captureFinishPhoto: '拍摄完成照片',
+    autoChamberLight: '腔体灯随打印开关',
     noPrintersConfigured: '未配置打印机',
     // Archive settings
     archiveMode: {
@@ -2618,6 +2619,7 @@ export default {
     autoArchivePrints: '自动归档打印',
     autoArchiveDescription: '打印完成时自动保存3MF文件',
     saveThumbnailsDescription: '从3MF文件中提取并保存预览图像',
+    autoChamberLightDescription: '打印开始时打开腔体灯，结束后不久自动关闭。手动控制依然可用——此设置只在打印开始和结束时生效。',
     captureFinishPhotoDescription: '打印完成时从打印机摄像头拍照。Bambuddy 会在打印期间录制一段短延时摄影，以便从热床下降前的瞬间获取照片；如果您为本次打印启用了延时摄影，文件将保留，否则会在拍照完成后自动删除。',
     finishPhotoRestorePlate: '为完成照片抬升热床',
     finishPhotoRestorePlateDescription: '打印结束时打印机会将热床下降约 100 mm，使完成的模型落在相机取景范围之下。Bambuddy 会将热床抬回到最后一层打印高度略上方，拍摄照片后再次下降。若打印高度未知或队列中还有其他任务，则跳过此步骤。',
