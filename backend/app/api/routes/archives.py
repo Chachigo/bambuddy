@@ -1177,6 +1177,30 @@ async def get_archive_stats(
     )
     prints_by_printer = {str(k): v for k, v in printer_result.all()}
 
+    # Names for printers the client can no longer look up. The breakdowns above
+    # key on the id each run recorded, and deleting a printer while keeping its
+    # history leaves that id pointing at nothing, so a chart that used to read
+    # "Ultron" fell back to "Printer 1" (#2873). Every run also stored the name
+    # it printed on, so the last one recorded is what that id was called. The
+    # client still prefers a live printer's current name, which keeps a rename
+    # showing up straight away.
+    last_named_run = (
+        select(func.max(PrintLogEntry.id).label("entry_id"))
+        .where(
+            PrintLogEntry.printer_id.isnot(None),
+            PrintLogEntry.printer_name.isnot(None),
+            *base_conditions,
+        )
+        .group_by(PrintLogEntry.printer_id)
+        .subquery()
+    )
+    name_result = await db.execute(
+        select(PrintLogEntry.printer_id, PrintLogEntry.printer_name).join(
+            last_named_run, PrintLogEntry.id == last_named_run.c.entry_id
+        )
+    )
+    printer_names = {str(printer_id): name for printer_id, name in name_result.all()}
+
     # Time accuracy — compare each completed run's actual duration to the
     # slicer's estimate on the linked archive. Runs without a linked archive
     # (NULL archive_id) or without an estimate are excluded.
@@ -1276,6 +1300,7 @@ async def get_archive_stats(
         total_cost=round(total_cost, 2),
         prints_by_filament_type=prints_by_filament,
         prints_by_printer=prints_by_printer,
+        printer_names=printer_names,
         average_time_accuracy=average_accuracy,
         time_accuracy_by_printer=accuracy_by_printer if accuracy_by_printer else None,
         total_energy_kwh=round(total_energy_kwh, 3),

@@ -173,6 +173,10 @@ class ArchiveStats(BaseModel):
     total_cost: float
     prints_by_filament_type: dict
     prints_by_printer: dict
+    # Name each printer id was last recorded under in the print log. Lets the
+    # client keep labelling history that belongs to a deleted printer (#2873);
+    # a printer that still exists is named from the live record instead.
+    printer_names: dict[str, str] = {}
     # Time accuracy stats
     # Average across all prints with data
     average_time_accuracy: float | None = None
