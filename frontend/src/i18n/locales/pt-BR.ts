@@ -4885,6 +4885,7 @@ export default {
     externalSpool: 'Carretel Externo',
     profile: 'Perfil',
     kFactor: 'Fator K',
+    kFactorShort: 'K',
     fill: 'Preencher',
     configure: 'Configurar',
     used: 'usado',

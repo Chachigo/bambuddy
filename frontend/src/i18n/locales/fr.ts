@@ -4886,6 +4886,7 @@ export default {
     externalSpool: 'Bobine externe',
     profile: 'Profil',
     kFactor: 'Facteur K',
+    kFactorShort: 'K',
     fill: 'Remplir',
     configure: 'Configurer',
     used: 'utilisé',

@@ -4897,6 +4897,7 @@ export default {
     externalSpool: '外部スプール',
     profile: 'プロファイル',
     kFactor: 'K値',
+    kFactorShort: 'K値',
     fill: '充填率',
     configure: '設定',
     used: '使用済み',
