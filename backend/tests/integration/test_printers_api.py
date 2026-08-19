@@ -4494,3 +4494,186 @@ class TestClearPlateOnAPoweredDownPrinter:
         body = response.json()
         assert body["connected"] is False
         assert body["awaiting_plate_clear"] is True
+
+
+class TestPrintableObjectsReload:
+    """Rebuilding the object list must ask the disk before the printer.
+
+    The archive of a running print normally holds the very 3MF the printer is
+    executing. Pulling it back over FTPS costs a full transfer from a machine
+    that is mid-print — 15 MB on the print this was written for — and on a
+    printer that kept the file on internal storage it cannot succeed at all.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_archive_on_disk_is_used_before_any_ftp(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        printer = await printer_factory(name="H2C-1")
+        await archive_factory(printer.id, status="printing", subtask_id="330151809")
+
+        client = MagicMock()
+        client.state = MagicMock(
+            printable_objects={},
+            skipped_objects=[],
+            subtask_id="330151809",
+            subtask_name="HULA",
+            state="RUNNING",
+            gcode_file="/data/Metadata/plate_1.gcode",
+            printable_objects_bbox_all=None,
+        )
+        ftp = AsyncMock(return_value=None)
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager.get_client", return_value=client),
+            patch(
+                "backend.app.services.archive.extract_printable_objects_from_archive",
+                return_value=({101: {"name": "left"}, 102: {"name": "right"}}, None),
+            ) as from_disk,
+            patch("backend.app.services.bambu_ftp.download_file_try_paths_async", new=ftp),
+        ):
+            response = await async_client.get(f"/api/v1/printers/{printer.id}/print/objects")
+
+        assert response.status_code == 200, response.text
+        assert response.json()["total"] == 2
+        from_disk.assert_called_once()
+        ftp.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_reload_that_the_disk_cannot_answer_still_asks_the_printer(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session
+    ):
+        """The fan-out is the fallback, not dead code: a print whose archive has
+        no 3MF (or none at all) still has the printer to ask."""
+        printer = await printer_factory(name="H2C-1")
+        await archive_factory(printer.id, status="printing", subtask_id="330151809")
+
+        client = MagicMock()
+        client.state = MagicMock(
+            printable_objects={},
+            skipped_objects=[],
+            subtask_id="330151809",
+            subtask_name="HULA",
+            state="RUNNING",
+            gcode_file="/data/Metadata/plate_1.gcode",
+            printable_objects_bbox_all=None,
+        )
+        ftp = AsyncMock(return_value=None)
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager.get_client", return_value=client),
+            patch(
+                "backend.app.services.archive.extract_printable_objects_from_archive",
+                return_value=({}, None),
+            ),
+            patch("backend.app.services.bambu_ftp.download_file_try_paths_async", new=ftp),
+        ):
+            response = await async_client.get(f"/api/v1/printers/{printer.id}/print/objects")
+
+        assert response.status_code == 200, response.text
+        ftp.assert_awaited()
+
+
+class TestCoverUsesTheRunningPrintsArchive:
+    """The cover must not re-fetch a 3MF Bambuddy already has on disk.
+
+    The in-memory download cache dies with the process, so after a restart
+    mid-print every cover, top view and skip-objects plate mask went back to the
+    printer for the whole file — measured on the maintainer's H2C as three
+    concurrent fan-outs, thirteen seconds and a 0-byte read, on a machine that
+    was busy printing. The archive of the running print holds that exact file.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_archived_3mf_is_preferred_over_ftp(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session, tmp_path
+    ):
+        import zipfile
+
+        from backend.app.core.config import settings as app_settings
+
+        printer = await printer_factory(name="H2C-1")
+        # A 3MF that is a real zip but carries no cover, so the endpoint reaches
+        # its "no cover in this file" answer without any FTP work.
+        threemf = tmp_path / "job.3mf"
+        with zipfile.ZipFile(threemf, "w") as zf:
+            zf.writestr("Metadata/slice_info.config", "<config/>")
+        await archive_factory(
+            printer.id,
+            status="printing",
+            subtask_id="330151809",
+            file_path=str(threemf.relative_to(tmp_path)),
+        )
+
+        state = MagicMock(
+            subtask_name="job",
+            subtask_id="330151809",
+            state="RUNNING",
+            gcode_file="/data/Metadata/plate_1.gcode",
+            current_project_url="ftp://job.3mf",
+            sdcard=True,
+            sdcard_reported=True,
+        )
+        ftp = AsyncMock(return_value=None)
+
+        with (
+            patch.object(app_settings, "base_dir", tmp_path),
+            patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=state),
+            patch("backend.app.api.routes.printers.resolve_plate_id", return_value=1),
+            patch("backend.app.api.routes.printers.get_cached_3mf", return_value=None),
+            patch("backend.app.api.routes.printers.download_file_try_paths_async", new=ftp),
+        ):
+            response = await async_client.get(f"/api/v1/printers/{printer.id}/cover")
+
+        # No cover inside this 3MF, so a 404 — but reached from the file on disk.
+        assert response.status_code == 404, response.text
+        ftp.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_archived_file_is_never_deleted_by_the_cover_flow(
+        self, async_client: AsyncClient, printer_factory, archive_factory, db_session, tmp_path
+    ):
+        """The cover flow unlinks the file it downloaded. Handed the archive's
+        own copy, that would delete the print's 3MF."""
+        import zipfile
+
+        from backend.app.core.config import settings as app_settings
+
+        printer = await printer_factory(name="H2C-1")
+        threemf = tmp_path / "job.3mf"
+        with zipfile.ZipFile(threemf, "w") as zf:
+            zf.writestr("Metadata/slice_info.config", "<config/>")
+        await archive_factory(
+            printer.id,
+            status="printing",
+            subtask_id="330151809",
+            file_path=str(threemf.relative_to(tmp_path)),
+        )
+
+        state = MagicMock(
+            subtask_name="job",
+            subtask_id="330151809",
+            state="RUNNING",
+            gcode_file="/data/Metadata/plate_1.gcode",
+            current_project_url="ftp://job.3mf",
+            sdcard=True,
+            sdcard_reported=True,
+        )
+
+        with (
+            patch.object(app_settings, "base_dir", tmp_path),
+            patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=state),
+            patch("backend.app.api.routes.printers.resolve_plate_id", return_value=1),
+            patch("backend.app.api.routes.printers.get_cached_3mf", return_value=None),
+            patch(
+                "backend.app.api.routes.printers.download_file_try_paths_async",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            await async_client.get(f"/api/v1/printers/{printer.id}/cover")
+
+        assert threemf.is_file(), "the cover flow deleted the running print's archived 3MF"

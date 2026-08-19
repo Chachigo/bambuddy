@@ -4258,13 +4258,23 @@ function PrinterCard({
                   const coverUrl = isActivePrint ? status.cover_url : showRetainedPrint ? retainedPrintJob.coverUrl : null;
                   const progress = isActivePrint ? (status.progress || 0) : showRetainedPrint ? 100 : 0;
 
+                  // A running print always has at least one object, so a count of
+                  // zero means "not loaded", not "nothing to skip" — after a
+                  // restart mid-print the list is empty until something rebuilds
+                  // it. Treating that as nothing-to-skip disabled the only
+                  // control that opens the modal, and the modal's own fetch is
+                  // what rebuilds the list, so the print could never get it back.
+                  // Exactly one object is the real nothing-to-skip case.
+                  const objectCount = status.printable_objects_count ?? 0;
+                  const canSkipObjects = isActivePrint && objectCount !== 1 && hasPermission('printers:control');
+
                   return (
                     <div className="p-2 bg-bambu-dark rounded-[10px] relative overflow-hidden">
                       <button
                         onClick={() => setShowSkipObjectsModal(true)}
-                        disabled={!isActivePrint || (status.printable_objects_count ?? 0) < 2 || !hasPermission('printers:control')}
+                        disabled={!canSkipObjects}
                         className={`absolute top-2 right-2 p-1.5 rounded transition-colors z-10 ${
-                          isActivePrint && (status.printable_objects_count ?? 0) >= 2 && hasPermission('printers:control')
+                          canSkipObjects
                             ? 'text-bambu-gray hover:text-white hover:bg-white/10'
                             : 'text-bambu-gray/30 cursor-not-allowed'
                         }`}
@@ -4273,9 +4283,9 @@ function PrinterCard({
                             ? t('printers.permission.noControl')
                             : !isActivePrint
                               ? t('printers.skipObjects.onlyWhilePrinting')
-                              : (status.printable_objects_count ?? 0) >= 2
-                                ? t('printers.skipObjects.tooltip')
-                                : t('printers.skipObjects.requiresMultiple')
+                              : objectCount === 1
+                                ? t('printers.skipObjects.requiresMultiple')
+                                : t('printers.skipObjects.tooltip')
                         }
                       >
                         <SkipObjectsIcon className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
