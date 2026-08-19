@@ -3608,9 +3608,14 @@ async def on_print_start(printer_id: int, data: dict):
                     downloaded_filename = storage.probe_filename
                     temp_path = probe_path
                     cache_3mf_download(printer_id, downloaded_filename, probe_path)
+                    # Naming the path, not just the file: a printer that keeps
+                    # uploads around for weeks can serve a same-named copy of an
+                    # earlier slice, and without the directory in the log that
+                    # mismatch is invisible rather than merely rare (#1820).
                     logger.info(
-                        "Found %s over FTPS for printer %s even though the printer reported %s",
+                        "Found %s at %s over FTPS for printer %s even though the printer reported %s",
                         downloaded_filename,
+                        probe_hit,
                         printer_id,
                         storage.reason,
                     )

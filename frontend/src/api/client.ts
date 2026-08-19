@@ -4809,6 +4809,7 @@ export const api = {
     status?: string;
     quantity?: number;
     external_url?: string | null;
+    filament_used_grams?: number | null;
   }) =>
     request<Archive>(`/archives/${id}`, {
       method: 'PATCH',

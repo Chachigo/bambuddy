@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
 
 from backend.app.utils.filename import clean_display_name
 
@@ -28,6 +28,12 @@ class ArchiveUpdate(ArchiveBase):
     project_id: int | None = None
     # Allow changing status (e.g., clearing failed flag)
     status: str | None = None
+    # Editable because a print archived without its 3MF has no figure at all,
+    # and nothing else can supply one after the fact -- rescan needs a file
+    # this archive does not have (#1820). Bounded because it feeds the filament
+    # totals: 100 kg is far past any single print and well short of a value
+    # that would swamp a chart.
+    filament_used_grams: Annotated[float | None, Field(ge=0, le=100_000)] = None
 
 
 class ArchiveDuplicate(BaseModel):
