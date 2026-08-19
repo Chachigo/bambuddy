@@ -4370,3 +4370,127 @@ class TestCoverWhenThePrintIsOnInternalStorage:
             await async_client.get(f"/api/v1/printers/{printer.id}/cover")
 
         mock_download.assert_called()
+
+
+class TestClearPlateOnAPoweredDownPrinter:
+    """Releasing the plate-clear gate must not require a reachable printer.
+
+    #2864: with Auto Power Off the end-of-print state is a dirty plate on a
+    machine Bambuddy has just switched off. The endpoint answered 400 for
+    anything not connected, so the operator who physically cleared that plate
+    had no way to say so — not from the API, not from the UI — and everything
+    gated on the flag stayed stuck until the printer was powered back on by
+    hand. Nothing in the clear path talks to the printer: the flag is
+    Bambuddy-side and persisted.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_clear_plate_succeeds_while_disconnected(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        printer = await printer_factory(name="Powered-off X1C")
+        # What the smart-plug power-off leaves behind: the client is still
+        # registered, but its state is blanked to unknown/disconnected.
+        state = MagicMock(state="unknown", connected=False)
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager.is_connected", return_value=False),
+            patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=state),
+            patch(
+                "backend.app.api.routes.printers.printer_manager.is_awaiting_plate_clear",
+                return_value=True,
+            ),
+            patch("backend.app.api.routes.printers.printer_manager.set_awaiting_plate_clear") as mock_set,
+        ):
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/clear-plate")
+
+        assert response.status_code == 200, response.text
+        mock_set.assert_called_once_with(printer.id, False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_clear_plate_succeeds_with_no_client_state_at_all(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        """A printer disconnected manually, or never connected since the last
+        restart, has no client state — the persisted gate is still releasable."""
+        printer = await printer_factory(name="Never connected")
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager.is_connected", return_value=False),
+            patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=None),
+            patch(
+                "backend.app.api.routes.printers.printer_manager.is_awaiting_plate_clear",
+                return_value=True,
+            ),
+            patch("backend.app.api.routes.printers.printer_manager.set_awaiting_plate_clear") as mock_set,
+        ):
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/clear-plate")
+
+        assert response.status_code == 200, response.text
+        mock_set.assert_called_once_with(printer.id, False)
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_clear_plate_still_rejects_when_there_is_nothing_to_clear(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        """Dropping the connection guard must not turn the endpoint into a
+        no-op accept: an offline printer with a clean plate is still a 400."""
+        printer = await printer_factory(name="Powered-off, clean plate")
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager.is_connected", return_value=False),
+            patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=None),
+            patch(
+                "backend.app.api.routes.printers.printer_manager.is_awaiting_plate_clear",
+                return_value=False,
+            ),
+            patch("backend.app.api.routes.printers.printer_manager.set_awaiting_plate_clear") as mock_set,
+        ):
+            response = await async_client.post(f"/api/v1/printers/{printer.id}/clear-plate")
+
+        assert response.status_code == 400, response.text
+        mock_set.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_plate_clear_state_still_reaches_mqtt_without_a_client(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        """Clearing the gate on a printer with no registered client must still
+        update the retained MQTT topic (#2525) — otherwise it keeps telling Home
+        Assistant the plate is dirty after it was acknowledged."""
+        from backend.app.services.printer_manager import printer_manager
+
+        printer = await printer_factory(name="Disconnected P1S")
+
+        info = await printer_manager._printer_info_from_db(printer.id)
+
+        assert info is not None
+        assert info.name == "Disconnected P1S"
+        assert info.serial_number == printer.serial_number
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_status_reports_the_gate_without_client_state(
+        self, async_client: AsyncClient, printer_factory, db_session
+    ):
+        """Without this the schema default reported a clean plate for a printer
+        the DB says is still gated, and the UI hid the control that releases it."""
+        printer = await printer_factory(name="No client state")
+
+        with (
+            patch("backend.app.api.routes.printers.printer_manager.get_status", return_value=None),
+            patch(
+                "backend.app.api.routes.printers.printer_manager.is_awaiting_plate_clear",
+                return_value=True,
+            ),
+        ):
+            response = await async_client.get(f"/api/v1/printers/{printer.id}/status")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["connected"] is False
+        assert body["awaiting_plate_clear"] is True
