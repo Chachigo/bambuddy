@@ -50,6 +50,28 @@ from backend.app.utils.filament_types import is_material_name
 logger = logging.getLogger(__name__)
 
 
+def _preset_filament_type(raw: object) -> str | None:
+    """Read a slicer preset's ``filament_type`` field.
+
+    Bambu Studio and OrcaSlicer both store it as a one-element array
+    (``["PLA"]``); some hand-written and older profiles store a bare string.
+    ``orca_profiles._extract_filament_fields`` accepts both and this has to
+    agree with it, since that is what fills ``LocalPreset.filament_type``.
+
+    The value is still run through ``printer_filament_type`` by the caller.
+    That is a no-op for every type the app knows -- ``TestTheMaterialsBambuddyOffers``
+    pins exactly that -- and a pass-through for a type it does not, so nothing
+    the slicer says is discarded. It only bites on a hand-edited profile whose
+    ``filament_type`` is a product line, which is the case this whole module
+    exists to keep out of an AMS slot.
+    """
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
 async def resolve_slicer_filament(
     *,
     db: AsyncSession,
@@ -57,7 +79,7 @@ async def resolve_slicer_filament(
     slicer_filament: str | None,
     slicer_filament_name: str | None,
     material: str | None,
-) -> tuple[str, str, str | None]:
+) -> tuple[str, str, str | None, str | None]:
     """Resolve a spool's slicer-preset reference to printer-side ids.
 
     ``slicer_filament``: the spool's stored reference (e.g. ``"GFA01"``,
@@ -72,18 +94,30 @@ async def resolve_slicer_filament(
     ``material``: spool material string for the local-preset fallback
     branch when the LocalPreset's setting JSON doesn't carry a filament_id.
 
-    Returns ``(tray_info_idx, setting_id, sub_brand_override)`` — all empty
-    when nothing resolved. ``sub_brand_override`` is non-None when a more
-    specific brand label is available (cloud detail name or local preset
+    Returns ``(tray_info_idx, setting_id, sub_brand_override, type_override)``
+    — all empty when nothing resolved. ``sub_brand_override`` is non-None when
+    a more specific brand label is available (cloud detail name or local preset
     name); ``None`` means the caller should use its own default.
+
+    ``type_override`` is the preset's own ``filament_type`` when the preset
+    carries one — the slicer's answer to what the material is, rather than one
+    parsed out of the spool's material column. It is what the caller should
+    write into ``tray_type``. ``None`` means no preset said, and the caller
+    falls back to reducing the spool's material (``printer_filament_type``).
+    Raised in the #2902 thread by @doncaruana: a preset has to be chosen from
+    a list the slicer defines, so its type needs no interpreting. It cannot be
+    the only source, though — ``slicer_filament`` is nullable on a spool while
+    ``material`` is required, and the spool this issue was reported for had no
+    preset at all.
     """
     sf = (slicer_filament or "").strip()
     if not sf:
-        return ("", "", None)
+        return ("", "", None, None)
 
     tray_info_idx = ""
     setting_id = ""
     sub_brand_override: str | None = None
+    type_override: str | None = None
 
     base_sf = sf.split("_")[0] if "_" in sf else sf
 
@@ -104,6 +138,15 @@ async def resolve_slicer_filament(
             if cloud is not None and cloud.is_authenticated:
                 try:
                     detail = await cloud.get_setting_detail(base_sf)
+                    # The preset's own type, straight from the slicer's own
+                    # profile -- no parsing of a product name (#2902). The
+                    # preset JSON is nested under ``setting``; some responses
+                    # carry it at the top level instead, the same shape spread
+                    # ``preset_resolver`` documents.
+                    cloud_setting = detail.get("setting")
+                    type_override = _preset_filament_type(
+                        (cloud_setting if isinstance(cloud_setting, dict) else detail).get("filament_type")
+                    )
                     if detail.get("filament_id"):
                         tray_info_idx = detail["filament_id"]
                         cloud_name = detail.get("name", "")
@@ -134,6 +177,10 @@ async def resolve_slicer_filament(
             lp_result = await db.execute(select(LP).where(LP.id == local_id, LP.preset_type == "filament"))
             lp = lp_result.scalar_one_or_none()
             if lp:
+                # The slicer's own answer, extracted from the profile at import
+                # time by ``orca_profiles``. Preferred over anything parsed out
+                # of the spool's material column (#2902).
+                type_override = _preset_filament_type(lp.filament_type)
                 # Local preset's setting JSON carries the printer-recognized
                 # filament_id (e.g. "P4d64437") — use that directly so the
                 # slicer can resolve the specific preset. Falls through to
@@ -219,4 +266,4 @@ async def resolve_slicer_filament(
         ):
             setting_id = ""
 
-    return (tray_info_idx, setting_id, sub_brand_override)
+    return (tray_info_idx, setting_id, sub_brand_override, type_override)

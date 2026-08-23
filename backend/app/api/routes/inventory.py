@@ -63,11 +63,10 @@ from backend.app.services.spool_csv import (
 from backend.app.services.spoolman import SpoolmanClient, get_spoolman_client, init_spoolman_client
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
-    MATERIAL_TEMPS,
     filament_id_to_setting_id,
     normalize_slicer_filament,
 )
-from backend.app.utils.filament_types import is_material_name, printer_filament_type
+from backend.app.utils.filament_types import is_material_name, nozzle_temp_range, printer_filament_type
 from backend.app.utils.tag_normalization import normalize_tag_uid, normalize_tray_uuid
 
 logger = logging.getLogger(__name__)
@@ -136,7 +135,7 @@ async def apply_spool_to_slot_via_mqtt(
     # the builtin-name realignment, AND the defensive PFUS/PFCN/material-name
     # sanitization. When it returns an empty tray_info_idx the local
     # current-tray-state + generic-material fallback below rescues the slot.
-    tray_info_idx, setting_id, sub_brand_override = await resolve_slicer_filament(
+    tray_info_idx, setting_id, sub_brand_override, type_override = await resolve_slicer_filament(
         db=db,
         current_user=current_user,
         slicer_filament=spool.slicer_filament,
@@ -145,6 +144,11 @@ async def apply_spool_to_slot_via_mqtt(
     )
     if sub_brand_override:
         tray_sub_brands = sub_brand_override
+    # A preset says what its material is; the reduction above only infers it
+    # from whatever wording the spool's material column happens to carry. When
+    # the spool has a preset, its answer wins (issue #2902, @doncaruana).
+    if type_override:
+        tray_type = printer_filament_type(type_override)
 
     if not tray_info_idx:
         if (
@@ -187,9 +191,7 @@ async def apply_spool_to_slot_via_mqtt(
     # Same order as the generic-id lookup above: the spool's own wording wins,
     # the reduced type rescues what it does not cover. Without the second
     # lookup a PLA+ spool took the 200/240 catch-all instead of PLA's 190/230.
-    temp_min, temp_max = (
-        MATERIAL_TEMPS.get((spool.material or "").upper()) or MATERIAL_TEMPS.get(tray_type.upper()) or (200, 240)
-    )
+    temp_min, temp_max = nozzle_temp_range(spool.material, tray_type)
     if spool.nozzle_temp_min is not None:
         temp_min = spool.nozzle_temp_min
     if spool.nozzle_temp_max is not None:

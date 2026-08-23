@@ -32,10 +32,9 @@ from backend.app.services.spoolman import (
 )
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
-    MATERIAL_TEMPS,
     normalize_slicer_filament,
 )
-from backend.app.utils.filament_types import printer_filament_type
+from backend.app.utils.filament_types import nozzle_temp_range, printer_filament_type
 
 logger = logging.getLogger(__name__)
 
@@ -970,9 +969,7 @@ async def link_spool(
                     or ""
                 )
                 setting_id = ""
-                temp_defaults = (
-                    MATERIAL_TEMPS.get(material_upper) or MATERIAL_TEMPS.get(tray_type.upper()) or (200, 240)
-                )
+                temp_defaults = nozzle_temp_range(material, tray_type)
                 temp_min = mapped.get("nozzle_temp_min") or temp_defaults[0]
                 temp_max = temp_defaults[1]
 

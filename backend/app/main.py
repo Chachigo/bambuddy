@@ -2114,10 +2114,42 @@ async def on_ams_change(printer_id: int, ams_data: list):
                         spool = assignment.spool
                         if spool:
                             spool_color = (spool.rgba or "FFFFFFFF").upper()
-                            spool_type = printer_filament_type(spool.material).upper()
+                            # Two ways the assign path can have arrived at the
+                            # slot's type, so both count as "we wrote this".
+                            # The material column is one; the spool's preset is
+                            # the other, and it outranks the material when the
+                            # spool has one -- a spool whose material says PLA
+                            # and whose preset is "Bambu PLA Aero" puts
+                            # PLA-AERO in the slot (#2902). Read from the stored
+                            # preset name rather than resolving the preset,
+                            # because this runs on every AMS push and a cloud
+                            # lookup here would be both slow and unavailable on
+                            # the unauthenticated replay path.
+                            spool_types = {printer_filament_type(spool.material).upper()}
+                            if spool.slicer_filament_name:
+                                spool_types.add(printer_filament_type(spool.slicer_filament_name).upper())
+                            # An imported local preset stores its type outright,
+                            # which is what the assign path used -- and the name
+                            # above may be unset. One keyed read, and only on a
+                            # mismatch, which is rare.
+                            #
+                            # slicer_filament is free text up to fifty characters,
+                            # so the digits have to be checked against the range
+                            # of the integer primary key they are about to be
+                            # compared with. Postgres raises on an out-of-range
+                            # integer rather than simply not matching, and that
+                            # would poison this session and abandon the rest of
+                            # the cleanup pass.
+                            lp_ref = (spool.slicer_filament or "").strip()
+                            if lp_ref.isdigit() and int(lp_ref) <= 2147483647:
+                                from backend.app.models.local_preset import LocalPreset as _LP
+
+                                lp_type = await db.scalar(select(_LP.filament_type).where(_LP.id == int(lp_ref)))
+                                if lp_type:
+                                    spool_types.add(printer_filament_type(lp_type).upper())
                             if (
                                 _colors_similar(cur_color, spool_color)
-                                and printer_filament_type(cur_type).upper() == spool_type
+                                and printer_filament_type(cur_type).upper() in spool_types
                             ):
                                 logger.info(
                                     "Auto-unlink: spool %d AMS%d-T%d — fingerprint mismatch but tray matches spool, updating fp",

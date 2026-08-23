@@ -4476,6 +4476,22 @@ class PrintScheduler:
         "default": 0,
     }
 
+    @classmethod
+    def _bundled_preheat_targets(cls) -> dict[str, int]:
+        """The bundled map under the same key casing a parsed one gets.
+
+        The constant is declared with a lowercase ``default`` because that is
+        the key the Settings editor writes and displays. Every read of the map
+        happens after ``str(key).upper()``, so handing the constant back as
+        declared broke the contract the parser documents: an install that had
+        never touched the setting returned a dict with no ``DEFAULT`` in it,
+        and the resolution loop's fallback silently found nothing. It read the
+        right number only because the bundled default happens to be 0 -- change
+        that constant and every unconfigured install would keep preheating to
+        zero with no way to tell why.
+        """
+        return {key.upper(): value for key, value in cls.DEFAULT_PREHEAT_FILAMENT_TARGETS.items()}
+
     async def _get_preheat_filament_targets(self, db: AsyncSession) -> dict[str, int]:
         """Parse the user-configured filament→chamber-target map, falling back
         to DEFAULT_PREHEAT_FILAMENT_TARGETS on missing / malformed JSON. Keys
@@ -4483,14 +4499,14 @@ class PrintScheduler:
         returned dict so the resolution loop can index it unconditionally."""
         raw = await self._get_setting(db, "preheat_filament_targets")
         if not raw:
-            return dict(self.DEFAULT_PREHEAT_FILAMENT_TARGETS)
+            return self._bundled_preheat_targets()
         try:
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 raise ValueError("not an object")
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning("preheat_filament_targets unparseable, using defaults: %s", exc)
-            return dict(self.DEFAULT_PREHEAT_FILAMENT_TARGETS)
+            return self._bundled_preheat_targets()
         # Coerce values to int; drop unparseable rows so a stray string
         # doesn't crash the loop.
         out: dict[str, int] = {}
@@ -4539,7 +4555,14 @@ class PrintScheduler:
                 normalised = self._normalize_filament_type(tray.get("tray_type") or "")
                 if not normalised:
                     continue
-                target = targets.get(normalised, targets.get("DEFAULT", 0))
+                # A filled or foamed variant wants its base material's chamber
+                # when the map has no row of its own: ASA-GF is ASA and needs
+                # ASA's 45 degrees, not the 0 an unknown type falls to. The
+                # specific type is still tried first, so PETG-CF and PA-CF keep
+                # the hotter rows they are listed with (#2902).
+                target = targets.get(normalised)
+                if target is None:
+                    target = targets.get(normalised.split("-")[0], targets.get("DEFAULT", 0))
                 if target > best:
                     best = target
         return best

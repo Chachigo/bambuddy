@@ -545,14 +545,29 @@ class TestTheAssignmentSurvivesTheSlotItJustConfigured:
     assigned to. Correct in isolation, ruinous together.
     """
 
-    async def _push(self, db_session, printer_factory, spool_material, reported_type, fingerprint_type="PETG"):
+    async def _push(
+        self,
+        db_session,
+        printer_factory,
+        spool_material,
+        reported_type,
+        fingerprint_type="PETG",
+        **spool_kwargs,
+    ):
         from unittest.mock import AsyncMock
 
         from backend.app.main import on_ams_change
         from backend.app.models.spool_assignment import SpoolAssignment
 
         printer = await printer_factory(name="H2D")
-        spool = Spool(material=spool_material, brand="eSUN", rgba="E1E9E9FF", label_weight=1000, weight_used=0)
+        spool = Spool(
+            material=spool_material,
+            brand="eSUN",
+            rgba="E1E9E9FF",
+            label_weight=1000,
+            weight_used=0,
+            **spool_kwargs,
+        )
         db_session.add(spool)
         await db_session.commit()
         await db_session.refresh(spool)
@@ -614,6 +629,55 @@ class TestTheAssignmentSurvivesTheSlotItJustConfigured:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
+    async def test_nor_is_one_whose_slot_took_its_presets_type_rather_than_its_material(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        """The preset outranks the material column when the spool has one, so
+        the slot can legitimately carry a type the material never named. The
+        check has to recognise that as its own handiwork or it unlinks the
+        assignment on the very next AMS push."""
+        surviving = await self._push(
+            db_session,
+            printer_factory,
+            "PLA",
+            reported_type="PLA-AERO",
+            slicer_filament_name="Bambu PLA Aero @BBL H2D",
+        )
+
+        assert surviving is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_even_when_the_preset_name_was_never_stored(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        """slicer_filament_name is optional. An imported local preset carries
+        its type outright, which is the value the assign path actually used."""
+        from backend.app.models.local_preset import LocalPreset
+
+        lp = LocalPreset(
+            name="Bambu PLA Aero @BBL H2D",
+            preset_type="filament",
+            source="orcaslicer",
+            filament_type="PLA-AERO",
+            setting="{}",
+        )
+        db_session.add(lp)
+        await db_session.commit()
+        await db_session.refresh(lp)
+
+        surviving = await self._push(
+            db_session,
+            printer_factory,
+            "PLA",
+            reported_type="PLA-AERO",
+            slicer_filament=str(lp.id),
+        )
+
+        assert surviving is not None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_a_genuinely_different_filament_still_unlinks(
         self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
     ):
@@ -623,3 +687,205 @@ class TestTheAssignmentSurvivesTheSlotItJustConfigured:
         surviving = await self._push(db_session, printer_factory, "PLA+", reported_type="ABS")
 
         assert surviving is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_and_a_preset_name_does_not_excuse_an_unrelated_slot(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer_factory
+    ):
+        """Widening the check to the preset only accepts the types the assign
+        path could actually have written. Anything else is still a swap."""
+        surviving = await self._push(
+            db_session,
+            printer_factory,
+            "PLA",
+            reported_type="ABS",
+            slicer_filament_name="Bambu PLA Aero @BBL H2D",
+        )
+
+        assert surviving is None
+
+
+class TestAFilledOrFoamedVariantIsATypeOfItsOwn:
+    """The first cut of this fix reduced PLA-AERO, PLA-GF, ASA-GF and PPS-GF
+    onto their base material, because the reduction table was assembled from
+    the cloud filament names and the frontend preset parser and never checked
+    against ``filament_fields.json`` -- the list Bambuddy itself offers when a
+    preset is created. @doncaruana caught PLA Aero on the issue.
+
+    That is worse than the bug it replaced. "PLA-AERO" matched nothing before,
+    which was useless but honest; "PLA" matches every plain PLA plate in the
+    queue, so the dispatcher would have sent one to foaming filament.
+    """
+
+    @pytest.fixture
+    async def printer(self, db_session):
+        from backend.app.models.printer import Printer
+
+        p = Printer(
+            name="Aero P1S",
+            serial_number="MAT2902AERO",
+            ip_address="192.168.1.81",
+            access_code="12345678",
+        )
+        db_session.add(p)
+        await db_session.commit()
+        await db_session.refresh(p)
+        return p
+
+    async def _assign(self, async_client, db_session, printer, material, tray_id, **spool_kwargs):
+        spool = Spool(
+            material=material,
+            brand="Bambu Lab",
+            rgba="E1E9E9FF",
+            label_weight=1000,
+            weight_used=0,
+            **spool_kwargs,
+        )
+        db_session.add(spool)
+        await db_session.commit()
+        await db_session.refresh(spool)
+
+        client = _mqtt_mock()
+        with patch("backend.app.services.printer_manager.printer_manager") as pm:
+            pm.get_client.return_value = client
+            pm.get_status.return_value = _status()
+            response = await async_client.post(
+                "/api/v1/inventory/assignments",
+                json={"spool_id": spool.id, "printer_id": printer.id, "ams_id": 0, "tray_id": tray_id},
+            )
+        assert response.status_code == 200
+        return client.ams_set_filament_setting.call_args.kwargs
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        ("material", "tray_id"),
+        [("PLA-AERO", 0), ("PLA-GF", 1), ("ASA-GF", 2), ("PPS-GF", 3)],
+    )
+    async def test_it_reaches_the_slot_intact(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer, material, tray_id
+    ):
+        sent = await self._assign(async_client, db_session, printer, material, tray_id)
+
+        assert sent["tray_type"] == material
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_written_with_a_space_it_still_reaches_the_slot_intact(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer
+    ):
+        """The table hyphenates because the slicers do; a spool says "PLA Aero"
+        and so does every Bambu preset name."""
+        sent = await self._assign(async_client, db_session, printer, "PLA Aero", 0)
+
+        assert sent["tray_type"] == "PLA-AERO"
+
+
+class TestThePresetOutranksTheMaterialColumn:
+    """#2902 again, from @doncaruana: a preset has to be picked from a list the
+    slicer defines, so it already knows its own type and nothing has to be read
+    out of a product name. When a spool points at one, that answer wins.
+
+    It cannot be the only answer. ``material`` is required on a spool and
+    ``slicer_filament`` is not -- the spool this issue was reported for had no
+    preset at all -- so the reduction stays as the fallback.
+    """
+
+    @pytest.fixture
+    async def printer(self, db_session):
+        from backend.app.models.printer import Printer
+
+        p = Printer(
+            name="Preset P1S",
+            serial_number="MAT2902PRE",
+            ip_address="192.168.1.82",
+            access_code="12345678",
+        )
+        db_session.add(p)
+        await db_session.commit()
+        await db_session.refresh(p)
+        return p
+
+    async def _preset(self, db_session, name, filament_type):
+        from backend.app.models.local_preset import LocalPreset
+
+        lp = LocalPreset(
+            name=name,
+            preset_type="filament",
+            source="orcaslicer",
+            filament_type=filament_type,
+            setting="{}",
+        )
+        db_session.add(lp)
+        await db_session.commit()
+        await db_session.refresh(lp)
+        return lp
+
+    async def _assign(self, async_client, db_session, printer, material, preset, tray_id):
+        spool = Spool(
+            material=material,
+            brand="Bambu Lab",
+            rgba="E1E9E9FF",
+            label_weight=1000,
+            weight_used=0,
+            slicer_filament=str(preset.id) if preset else None,
+        )
+        db_session.add(spool)
+        await db_session.commit()
+        await db_session.refresh(spool)
+
+        client = _mqtt_mock()
+        with patch("backend.app.services.printer_manager.printer_manager") as pm:
+            pm.get_client.return_value = client
+            pm.get_status.return_value = _status()
+            response = await async_client.post(
+                "/api/v1/inventory/assignments",
+                json={"spool_id": spool.id, "printer_id": printer.id, "ams_id": 0, "tray_id": tray_id},
+            )
+        assert response.status_code == 200
+        return client.ams_set_filament_setting.call_args.kwargs
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_the_slot_gets_the_presets_type_not_one_read_from_the_material(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer
+    ):
+        """The material column says "PLA", which the reduction would happily
+        accept. The preset says the spool is foaming PLA, and it is right."""
+        preset = await self._preset(db_session, "Bambu PLA Aero @BBL P1S", "PLA-AERO")
+        sent = await self._assign(async_client, db_session, printer, "PLA", preset, 0)
+
+        assert sent["tray_type"] == "PLA-AERO"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_preset_that_names_no_type_leaves_the_reduction_in_charge(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer
+    ):
+        preset = await self._preset(db_session, "eSUN PLA+ @BBL P1S", None)
+        sent = await self._assign(async_client, db_session, printer, "PLA+", preset, 1)
+
+        assert sent["tray_type"] == "PLA"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_and_a_spool_with_no_preset_at_all_still_gets_one(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer
+    ):
+        sent = await self._assign(async_client, db_session, printer, "PLA+", None, 2)
+
+        assert sent["tray_type"] == "PLA"
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    async def test_a_hand_edited_preset_naming_a_product_line_is_still_reduced(
+        self, async_client: AsyncClient, db_session: AsyncSession, printer
+    ):
+        """Preferring the preset does not mean trusting it blindly. A profile
+        whose filament_type is a product line puts that product line in the
+        slot, which is the exact failure this issue is about."""
+        preset = await self._preset(db_session, "My PLA+ @BBL P1S", "PLA+")
+        sent = await self._assign(async_client, db_session, printer, "PLA", preset, 3)
+
+        assert sent["tray_type"] == "PLA"

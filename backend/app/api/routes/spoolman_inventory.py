@@ -61,11 +61,10 @@ from backend.app.services.spoolman import (
 from backend.app.services.spoolman_tracking import get_fallback_spool_tag_for_slot
 from backend.app.utils.filament_ids import (
     GENERIC_FILAMENT_IDS,
-    MATERIAL_TEMPS,
     filament_id_to_setting_id,
     normalize_slicer_filament,
 )
-from backend.app.utils.filament_types import printer_filament_type
+from backend.app.utils.filament_types import nozzle_temp_range, printer_filament_type
 
 logger = logging.getLogger(__name__)
 
@@ -1505,7 +1504,7 @@ async def assign_spoolman_slot(
             # configured profile never reached the printer. Shared with the
             # internal-mode route via the same helper so the two flows can't
             # drift again.
-            tray_info_idx, setting_id, sub_brand_override = await resolve_slicer_filament(
+            tray_info_idx, setting_id, sub_brand_override, type_override = await resolve_slicer_filament(
                 db=db,
                 current_user=current_user,
                 slicer_filament=mapped.get("slicer_filament"),
@@ -1514,6 +1513,11 @@ async def assign_spoolman_slot(
             )
             if sub_brand_override:
                 tray_sub_brands = sub_brand_override
+            # A preset carries its own type; the reduction above only infers
+            # one from Spoolman's free-text material. The preset wins when the
+            # spool has one (issue #2902, @doncaruana).
+            if type_override:
+                tray_type = printer_filament_type(type_override)
 
             material_upper = material.upper().strip()
             # Fall back to generic-material id when slicer_filament is empty
@@ -1539,7 +1543,7 @@ async def assign_spoolman_slot(
             if tray_info_idx and not setting_id:
                 setting_id = filament_id_to_setting_id(tray_info_idx)
 
-            temp_defaults = MATERIAL_TEMPS.get(material_upper) or MATERIAL_TEMPS.get(tray_type.upper()) or (200, 240)
+            temp_defaults = nozzle_temp_range(material, tray_type)
             temp_min = mapped.get("nozzle_temp_min") or temp_defaults[0]
             temp_max = temp_defaults[1]
 

@@ -77,27 +77,43 @@ def filament_types_compatible(a: str | None, b: str | None) -> bool:
 # ---------------------------------------------------------------------------
 
 # What a Bambu printer and the slicers accept in an AMS slot's ``tray_type``.
-# Grounded in the catalogue this repo already carries: every "Generic X" entry
-# in ``cloud._BUILTIN_FILAMENT_NAMES`` names a real type, the "Bambu X" entries
-# add the composites, and the frontend's ``parsePresetName`` list contributes
+# Grounded in the catalogues this repo already carries: ``filament_fields.json``
+# is the list Bambuddy itself offers when a preset is created, so every value in
+# it has to appear here -- ``TestTheMaterialsBambuddyOffers`` fails if one does
+# not. On top of that, every "Generic X" entry in
+# ``cloud._BUILTIN_FILAMENT_NAMES`` names a real type, the "Bambu X" entries add
+# the composites, and the frontend's ``parsePresetName`` list contributes
 # PEEK / PEI / PC-CF / PC-ABS.
 #
-# Product lines are deliberately absent. "PLA Matte", "PETG HF" and "eSUN PLA+"
-# are things you buy, not types the firmware knows -- they belong in
-# ``tray_sub_brands``, which is where Bambu itself puts them.
+# A filled or foamed variant is a type of its own, not a flavour of the base
+# material: PLA-AERO is a foaming PLA and PLA-GF a glass-filled one, and a slot
+# that reduces either to "PLA" invites a plain PLA plate onto filament that
+# will not print it. Four of the ones the dropdown offers were missing when
+# #2902 first landed and were being reduced exactly that way, ASA-AERO -- which
+# only the cloud catalogue names (GFB02) -- with them. See the issue thread,
+# where @doncaruana caught PLA Aero.
+#
+# Product lines, by contrast, are deliberately absent. "PLA Matte", "PETG HF"
+# and "eSUN PLA+" are things you buy, not types the firmware knows -- they
+# belong in ``tray_sub_brands``, which is where Bambu itself puts them.
 _PRINTER_TYPES: tuple[str, ...] = (
     # Order within a length matters for ties: "PLA/PHA" must read as PLA.
+    "PLA-AERO",
+    "ASA-AERO",
     "PAHT-CF",
     "PA12-CF",
     "PETG-CF",
     "PPS-CF",
+    "PPS-GF",
     "PPA-CF",
     "PPA-GF",
     "PLA-CF",
+    "PLA-GF",
     "PA6-CF",
     "PA6-GF",
     "ABS-GF",
     "ASA-CF",
+    "ASA-GF",
     "PET-CF",
     "PC-ABS",
     "PA-CF",
@@ -190,11 +206,48 @@ def printer_filament_type(material: str | None) -> str:
         return _TYPE_ALIASES[upper]
 
     words = [w for w in _WORDS.split(upper) if w]
+
+    # A hyphenated type written with a space is still that type. The table
+    # spells it "PLA-AERO" because that is how the preset dropdown and the
+    # slicers spell it, while a spool says "PLA Aero" and a preset name says
+    # "Bambu PLA Aero" -- and the word rules below would find only the "PLA"
+    # in those and hand back a slot that lies about what is loaded.
+    #
+    # Adjacent words only, and only when the join is a type exactly. The prefix
+    # and suffix rules are deliberately not applied across a space: "Support
+    # for PLA" would otherwise start reading as a type by its tail.
+    for first, second in zip(words, words[1:], strict=False):
+        joined = f"{first}-{second}"
+        if joined in _PRINTER_TYPE_SET:
+            return joined
+        if joined in _TYPE_ALIASES:
+            return _TYPE_ALIASES[joined]
+
     for candidate in _TYPES_LONGEST_FIRST:
         if any(_word_names_type(w, candidate) for w in words):
             return _TYPE_ALIASES.get(candidate, candidate)
 
     return text
+
+
+def nozzle_temp_range(material: str | None, tray_type: str | None) -> tuple[int, int]:
+    """The nozzle range to send with a slot, given a spool's material and the
+    type the slot will carry.
+
+    The spool's own wording leads, as it does for the filament-id lookup, so a
+    material that has its own entry keeps it. The reduced type answers for
+    everything else -- and when the reduced type is a filled or foamed variant,
+    the base material answers for that, because ``MATERIAL_TEMPS`` carries
+    eleven entries and none of them is ASA-GF. Without that last step an
+    ASA-GF spool took the 200/240 catch-all and would not have extruded;
+    "ASA" gives it ASA's 240/270 (#2902).
+    """
+    base = (tray_type or "").split("-")[0]
+    for key in (material, tray_type, base):
+        temps = MATERIAL_TEMPS.get((key or "").upper().strip())
+        if temps:
+            return temps
+    return (200, 240)
 
 
 # Both tables are keyed by material, so their keys are exactly the set of names
@@ -229,4 +282,18 @@ def is_material_name(value: str | None) -> bool:
         return True
     if _PRESET_ID_SHAPE.match(text):
         return False
-    return printer_filament_type(text).upper() in _MATERIAL_NAMES
+    reduced = printer_filament_type(text).upper()
+    if reduced in _MATERIAL_NAMES:
+        return True
+    # A filled or foamed variant is its base material by another name, and the
+    # base is what decides. Saying yes means the caller throws this value away
+    # and rescues the slot from its generic-material fallback -- so the answer
+    # has to be no when that fallback has nothing to offer, or the slot goes out
+    # with no filament id at all, which is worse than the junk it replaced.
+    # ``ABS-GF`` reduces to a generic ABS the printer can resolve; ``PPS-CF``
+    # reduces to nothing, so it is left for the caller to send as it stands.
+    #
+    # This is also what keeps a type added to the table above from silently
+    # changing the answer: "PLA-AERO" read as a material name when the table
+    # had no row for it, and it still does (#2902).
+    return reduced.split("-")[0] in _MATERIAL_NAMES
