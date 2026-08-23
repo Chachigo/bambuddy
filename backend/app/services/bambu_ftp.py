@@ -120,6 +120,62 @@ class DeleteResult(Enum):
 _HANDSHAKE_COOLOFF_SECONDS = 300.0
 
 
+# How long to wait for a printer to say something in cleartext on the TLS port.
+# The failing case answers immediately -- the banner is the first thing a
+# vsFTPd refusal sends -- so this only ever elapses in full when the service has
+# gone back to speaking TLS and is waiting for a ClientHello that will not come.
+_CLEARTEXT_PROBE_TIMEOUT = 2.0
+
+
+def _read_cleartext_reply(ip_address: str, port: int) -> str | None:
+    """Read what a printer answers the TLS port with, when it is not TLS.
+
+    ``WRONG_VERSION_NUMBER`` means the peer's first bytes were not a TLS
+    record -- measured, not inferred: a cleartext ``421`` banner reproduces
+    that exact error and message, while a genuine version mismatch produces
+    ``TLSV1_ALERT_PROTOCOL_VERSION`` instead (#2780).
+
+    What it does not say is *which* cleartext message, and that is the part
+    that would identify the fault. OpenSSL has already consumed those bytes by
+    the time the error surfaces, so this opens one plain connection and reads
+    them directly. Answering it from the reporter's own printers beats waiting
+    on a packet capture from the one farm that can take one.
+
+    Returns the reply, or None when the printer said nothing readable -- which
+    is itself informative: a healthy implicit-FTPS service sends nothing until
+    it has a ClientHello, so silence means the fault had already passed.
+    """
+    sock = None
+    # One budget for connect *and* read. Given a timeout each, a printer that
+    # is slow to accept would then get the full read window on top of it, and
+    # the wait this adds to a failed connect would be double what it says.
+    deadline = time.monotonic() + _CLEARTEXT_PROBE_TIMEOUT
+    try:
+        sock = socket.create_connection((ip_address, port), _CLEARTEXT_PROBE_TIMEOUT)
+        sock.settimeout(max(0.05, deadline - time.monotonic()))
+        # One read. A refusal is a single short line; anything longer is not
+        # the thing being looked for, and this must not become a transfer.
+        raw = sock.recv(256)
+    except OSError as e:
+        # Refused or reset is a different fact from "answered in cleartext",
+        # and worth having in the log rather than flattened into silence.
+        logger.debug("Cleartext probe of %s:%s could not connect: %s", ip_address, port, e)
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    if not raw:
+        return None
+    # latin-1 cannot fail, and an FTP reply line is ASCII in practice. Control
+    # characters are stripped so a stray byte cannot mangle the log line.
+    text = raw.decode("latin-1").strip()
+    return "".join(c for c in text if c.isprintable()) or None
+
+
 def _ftp_reply_code(error: BaseException) -> str | None:
     """The three-digit reply code an ftplib error carries, if it carries one.
 
@@ -472,9 +528,40 @@ class BambuFTPClient:
                 self.FTP_PORT,
                 _HANDSHAKE_COOLOFF_SECONDS,
             )
-            self._handshake_blocked_until[self.ip_address] = time.monotonic() + _HANDSHAKE_COOLOFF_SECONDS
-            self.last_failure = FtpFailure(FtpFailureKind.HANDSHAKE, str(e))
+            # Close the dead socket before asking this printer for anything
+            # else. The probe below opens a second connection, and the leading
+            # theory for this failure is a printer out of connection slots --
+            # holding a failed handshake open across that is the exact thing
+            # #2780's cleanup was added to stop. Idempotent, so the call that
+            # used to sit at the end of this branch simply moved up.
             self._abandon_connection()
+
+            # Ask the printer what it actually said, once per cool-off window.
+            # Checked before the deadline below is written, so a live entry here
+            # means an earlier failure already opened this window and already
+            # asked -- which keeps a dispatch that ignores the cool-off from
+            # probing on each of its four attempts.
+            detail = str(e)
+            if getattr(e, "reason", None) == "WRONG_VERSION_NUMBER" and not self.handshake_blocked(self.ip_address):
+                reply = _read_cleartext_reply(self.ip_address, self.FTP_PORT)
+                if reply:
+                    logger.warning(
+                        "Printer %s answered port %s in cleartext with: %s — that is what the TLS "
+                        "handshake read as a malformed record. Please include this line if you report it.",
+                        self.ip_address,
+                        self.FTP_PORT,
+                        reply,
+                    )
+                    detail = f"{e} (printer answered in cleartext: {reply})"
+                else:
+                    logger.warning(
+                        "Printer %s sent nothing readable in cleartext on port %s, so its file service "
+                        "was speaking TLS again by the time we asked — the refusal was momentary.",
+                        self.ip_address,
+                        self.FTP_PORT,
+                    )
+            self._handshake_blocked_until[self.ip_address] = time.monotonic() + _HANDSHAKE_COOLOFF_SECONDS
+            self.last_failure = FtpFailure(FtpFailureKind.HANDSHAKE, detail)
             return False
         except (OSError, ftplib.Error) as e:
             logger.warning("FTP connection failed to %s: %s (type: %s)", self.ip_address, e, type(e).__name__)
