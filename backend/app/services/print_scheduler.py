@@ -33,6 +33,7 @@ from backend.app.services.bambu_ftp import (
     UploadCancelled,
     cache_3mf_download,
     delete_file_async,
+    ftps_handshake_cooloff_deadline,
     get_ftp_retry_settings,
     upload_file_async,
     with_ftp_retry,
@@ -6093,6 +6094,14 @@ class PrintScheduler:
         # pending->printing CAS) transparently open a fresh transaction.
         await db.commit()
 
+        # Where this printer's handshake cool-off stood before we touched it.
+        # The delete and upload below ignore the cool-off, so finding one armed
+        # afterwards proves nothing on its own -- a background timelapse or 3MF
+        # fetch for an earlier print could have armed it minutes ago. A deadline
+        # that MOVED, though, can only mean a handshake failed during this
+        # dispatch, which is what the failure message needs to know (#2898).
+        cooloff_before = ftps_handshake_cooloff_deadline(printer.ip_address)
+
         # Delete existing file if present (avoids 553 error on overwrite)
         try:
             logger.debug("Queue item %s: Deleting existing file %s if present...", item.id, remote_path)
@@ -6102,6 +6111,13 @@ class PrintScheduler:
                 remote_path,
                 socket_timeout=ftp_timeout,
                 printer_model=printer.model,
+                # This delete and the upload below are one bounded, user-initiated
+                # unit -- at most nine connections -- so neither skips on the
+                # handshake cool-off the opportunistic sweeps rely on. In #2898's
+                # trace this delete took the TLS failure and armed the cool-off,
+                # and the upload's four attempts were then spent against it
+                # without a socket being opened.
+                respect_handshake_cooloff=False,
             )
             logger.debug("Queue item %s: Delete result: %s", item.id, delete_result)
         except Exception as e:
@@ -6144,6 +6160,7 @@ class PrintScheduler:
                     socket_timeout=ftp_timeout,
                     printer_model=printer.model,
                     progress_callback=progress_bridge,
+                    respect_handshake_cooloff=False,
                     max_retries=ftp_retry_count,
                     retry_delay=ftp_retry_delay,
                     operation_name=f"Upload print to {printer.name}",
@@ -6157,6 +6174,7 @@ class PrintScheduler:
                     socket_timeout=ftp_timeout,
                     printer_model=printer.model,
                     progress_callback=progress_bridge,
+                    respect_handshake_cooloff=False,
                 )
         except UploadCancelled as e:
             uploaded = False
@@ -6174,6 +6192,20 @@ class PrintScheduler:
             injected_path.unlink(missing_ok=True)
 
         if not uploaded:
+            # A cool-off armed during this dispatch is proof the printer
+            # answered port 990 with something that was not TLS, so the SD card
+            # is the wrong thing to go and look at -- and it is what three of
+            # #2898's queue items were sent to check. "During this dispatch" is
+            # load-bearing: an unrelated background fetch can leave a cool-off
+            # armed for minutes, and blaming TLS for an upload that actually hit
+            # a full disk would repeat the mistake in the other direction.
+            cooloff_after = ftps_handshake_cooloff_deadline(printer.ip_address)
+            if not upload_error and cooloff_after is not None and cooloff_after != cooloff_before:
+                upload_error = (
+                    "The printer's file service did not answer over TLS, so the file could not be sent to it. "
+                    "Its SD card is not involved. Bambuddy will leave this printer alone for a few minutes "
+                    "before trying again."
+                )
             error_msg = upload_error or (
                 "Failed to upload file to printer. Check if SD card is inserted and properly formatted (FAT32/exFAT). "
                 "See server logs for detailed diagnostics."

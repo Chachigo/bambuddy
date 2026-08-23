@@ -225,6 +225,10 @@ class BambuFTPClient:
     # their cool-off expires. See ``_HANDSHAKE_COOLOFF_SECONDS``.
     _handshake_blocked_until: dict[str, float] = {}
 
+    # Which cool-off deadline each printer's "not attempted" warning was last
+    # logged for, so the warning is said once per cool-off. See ``connect``.
+    _handshake_skip_logged: dict[str, float] = {}
+
     def __init__(
         self,
         ip_address: str,
@@ -232,12 +236,26 @@ class BambuFTPClient:
         timeout: float | None = None,
         printer_model: str | None = None,
         force_prot_c: bool = False,
+        respect_handshake_cooloff: bool = True,
     ):
+        """Set ``respect_handshake_cooloff=False`` for bounded, user-initiated work.
+
+        The cool-off exists to stop an unbounded sweep re-running one doomed
+        handshake a hundred times over (#2780). Dispatching a print is not
+        that: it is one delete plus at most four upload attempts, with someone
+        waiting on the result. Sharing the sweep's gate cost those attempts
+        their whole retry budget, and failed every further job queued for that
+        printer for the rest of the 300s window (#2898).
+
+        Leave it at the default everywhere else. Opting out is only defensible
+        because the caller's own connection count is bounded and small.
+        """
         self.ip_address = ip_address
         self.access_code = access_code
         self.timeout = timeout if timeout is not None else self.DEFAULT_TIMEOUT
         self.printer_model = printer_model
         self.force_prot_c = force_prot_c
+        self.respect_handshake_cooloff = respect_handshake_cooloff
         self._ftp: ImplicitFTP_TLS | None = None
 
     def _is_a1_model(self) -> bool:
@@ -283,6 +301,7 @@ class BambuFTPClient:
             # Drop it on the way past rather than leaving an entry per printer
             # this process has ever failed against.
             del cls._handshake_blocked_until[ip_address]
+            cls._handshake_skip_logged.pop(ip_address, None)
             return False
         return True
 
@@ -290,13 +309,35 @@ class BambuFTPClient:
         """Connect to the printer FTP server (implicit FTPS on port 990).
 
         Returns False without touching the network while the printer is inside
-        the cool-off a previous TLS handshake failure opened (#2780).
+        the cool-off a previous TLS handshake failure opened (#2780) -- unless
+        this client was built with ``respect_handshake_cooloff=False``.
         """
-        if self.handshake_blocked(self.ip_address):
-            logger.debug(
-                "FTP connect to %s skipped: FTPS handshake failed recently, cooling off",
-                self.ip_address,
-            )
+        if self.respect_handshake_cooloff and self.handshake_blocked(self.ip_address):
+            # WARNING, not DEBUG. This is the one connect() failure path that
+            # reported without its cause, so at default log level four
+            # reason-free "FTP connection failed" lines two seconds apart gave
+            # no hint that nothing had been sent (#2898). Every caller reaching
+            # here is already gated by handshake_blocked() at its own sweep
+            # boundary, so this costs about one line per print, not a flood.
+            deadline = self._handshake_blocked_until.get(self.ip_address)
+            remaining = max(0.0, deadline - time.monotonic()) if deadline is not None else 0.0
+            if deadline is not None and self._handshake_skip_logged.get(self.ip_address) != deadline:
+                self._handshake_skip_logged[self.ip_address] = deadline
+                logger.warning(
+                    "FTP connect to %s not attempted: its FTPS handshake failed recently and it is "
+                    "cooling off for another %.0fs. Nothing was sent to the printer.",
+                    self.ip_address,
+                    remaining,
+                )
+            else:
+                # Said once already for this cool-off. Repeating it per candidate
+                # path is the log flood #2780 set out to stop -- a download-zip
+                # of 200 files would print the same sentence 200 times.
+                logger.debug(
+                    "FTP connect to %s skipped: still cooling off for another %.0fs",
+                    self.ip_address,
+                    remaining,
+                )
             return False
         try:
             use_prot_c = self._should_use_prot_c()
@@ -928,6 +969,18 @@ class BambuFTPClient:
         return result if result else None
 
 
+def ftps_handshake_cooloff_deadline(ip_address: str) -> float | None:
+    """The monotonic deadline of this printer's handshake cool-off, or None.
+
+    Compare it across an operation to tell "a handshake failed while I was
+    working" from "this printer was already cooling off from something else".
+    Those need different words to the user, and the flag's presence alone
+    cannot separate them: a caller that opted out of the cool-off can be
+    running while an unrelated background fetch has one armed (#2898).
+    """
+    return BambuFTPClient._handshake_blocked_until.get(ip_address)
+
+
 def ftps_handshake_blocked(ip_address: str) -> bool:
     """True while this printer's FTPS handshake cool-off is still running.
 
@@ -1249,6 +1302,7 @@ async def upload_file_async(
     progress_callback: Callable[[int, int], None] | None = None,
     socket_timeout: float | None = None,
     printer_model: str | None = None,
+    respect_handshake_cooloff: bool = True,
 ) -> bool:
     """Async wrapper for uploading a file with timeout and progress callback.
 
@@ -1266,6 +1320,9 @@ async def upload_file_async(
         progress_callback: Optional callback for progress updates
         socket_timeout: FTP socket timeout for slow connections (e.g., A1 printers)
         printer_model: Printer model for A1-specific workarounds
+        respect_handshake_cooloff: see ``BambuFTPClient.__init__``. False for a
+            user-initiated upload, whose attempts are bounded and were being
+            spent against a cool-off that outlives them (#2898).
     """
     loop = asyncio.get_event_loop()
     is_a1 = printer_model in BambuFTPClient.A1_MODELS if printer_model else False
@@ -1287,7 +1344,12 @@ async def upload_file_async(
             f"mode={mode_str}, socket_timeout={socket_timeout}s, deadline={deadline:.0f}s)..."
         )
         client = BambuFTPClient(
-            ip_address, access_code, timeout=socket_timeout, printer_model=printer_model, force_prot_c=force_prot_c
+            ip_address,
+            access_code,
+            timeout=socket_timeout,
+            printer_model=printer_model,
+            force_prot_c=force_prot_c,
+            respect_handshake_cooloff=respect_handshake_cooloff,
         )
         if client.connect():
             logger.info("FTP connected to %s", ip_address)
@@ -1465,6 +1527,7 @@ async def delete_file_async(
     socket_timeout: float | None = None,
     printer_model: str | None = None,
     timeout: float = 60.0,
+    respect_handshake_cooloff: bool = True,
 ) -> DeleteResult:
     """Async wrapper for deleting a file.
 
@@ -1477,11 +1540,21 @@ async def delete_file_async(
         printer_model: Printer model for A1-specific workarounds
         timeout: overall async cap so a saturated ``_ftp_executor`` can't pin
             the caller (and any DB connection it holds) indefinitely (#2572).
+        respect_handshake_cooloff: see ``BambuFTPClient.__init__``. The delete
+            that clears the way for a dispatch shares the upload's exemption --
+            it is one connection, and in #2898's trace it is the one that armed
+            the cool-off the upload then spent all four attempts against.
     """
     loop = asyncio.get_event_loop()
 
     def _delete() -> DeleteResult:
-        client = BambuFTPClient(ip_address, access_code, timeout=socket_timeout, printer_model=printer_model)
+        client = BambuFTPClient(
+            ip_address,
+            access_code,
+            timeout=socket_timeout,
+            printer_model=printer_model,
+            respect_handshake_cooloff=respect_handshake_cooloff,
+        )
         if client.connect():
             try:
                 return client.delete_file(remote_path)
@@ -1710,6 +1783,7 @@ async def with_ftp_retry(
     retry_delay: float = 2.0,
     operation_name: str = "FTP operation",
     non_retry_exceptions: tuple[type[BaseException], ...] = (),
+    cooloff_ip: str | None = None,
     **kwargs,
 ) -> T | None:
     """Execute FTP operation with retry logic.
@@ -1721,6 +1795,10 @@ async def with_ftp_retry(
         retry_delay: Seconds to wait between retries (default: 2.0)
         operation_name: Name for logging purposes
         non_retry_exceptions: Exception types that should immediately abort retries
+        cooloff_ip: printer IP whose FTPS handshake cool-off should end the loop
+            early. Pass it from any caller that respects the cool-off; leave it
+            unset for one that opted out, or the loop would stop on a gate its
+            own attempts are ignoring (#2898).
         **kwargs: Keyword arguments for the operation
 
     Returns:
@@ -1731,8 +1809,10 @@ async def with_ftp_retry(
     another full deadline reaching the same conclusion (#2529).
     """
     last_error = None
+    attempts_made = 0
 
     for attempt in range(max_retries + 1):
+        attempts_made = attempt + 1
         try:
             result = await operation(*args, **kwargs)
             # Check for "falsy" success indicators
@@ -1753,10 +1833,28 @@ async def with_ftp_retry(
 
         # Don't wait after the last attempt
         if attempt < max_retries:
+            # A cool-off outlasts this loop by two orders of magnitude, so once
+            # it is armed every remaining attempt returns False without opening
+            # a socket. Spending them anyway bought nothing and cost the caller
+            # `max_retries * retry_delay` seconds of sleeping, then reported the
+            # failure with the wrong reason (#2898).
+            if cooloff_ip and ftps_handshake_blocked(cooloff_ip):
+                logger.warning(
+                    "%s: stopping after attempt %s/%s — %s is inside its FTPS handshake cool-off, "
+                    "so the remaining attempts would not reach it",
+                    operation_name,
+                    attempt + 1,
+                    max_retries + 1,
+                    cooloff_ip,
+                )
+                break
             logger.info("%s will retry in %ss...", operation_name, retry_delay)
             await asyncio.sleep(retry_delay)
 
-    logger.error("%s failed after %s attempts", operation_name, max_retries + 1)
+    # attempts_made, not max_retries + 1: the loop can stop early on a cool-off,
+    # and reporting attempts that were never made is how #2898 read as a network
+    # problem when nothing had gone near the network.
+    logger.error("%s failed after %s attempts", operation_name, attempts_made)
     if last_error:
         logger.debug("Last error: %s", last_error)
     return None
