@@ -9,6 +9,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from enum import Enum
 from ftplib import FTP, FTP_TLS  # nosec B402
 from io import BytesIO
@@ -117,6 +118,65 @@ class DeleteResult(Enum):
 # enough that a wedged one is contacted twice an hour instead of hundreds of
 # times a minute.
 _HANDSHAKE_COOLOFF_SECONDS = 300.0
+
+
+def _ftp_reply_code(error: BaseException) -> str | None:
+    """The three-digit reply code an ftplib error carries, if it carries one.
+
+    ``ftplib`` puts the server's whole reply line in the exception message, so
+    the code is the first token: "553 Could not create file." Anything that is
+    not three digits (an ``OSError``, a library-side message) has no code, and
+    saying so beats inventing one.
+    """
+    head = str(error)[:3]
+    return head if head.isdigit() else None
+
+
+class FtpFailureKind(Enum):
+    """Why an FTP operation failed, at the granularity the client can tell.
+
+    ``connect`` and ``upload_file`` already separate every one of these -- each
+    has its own log line, and 553 even gets a spelled-out list of storage
+    causes -- and then both returned a bare ``False``. So the dispatch that
+    reports the failure to the operator had nothing to go on, and used one
+    string for all of them: "check if SD card is inserted and properly
+    formatted". #2899's reporter acted on that after a TLS handshake failure
+    and restarted the printer, which could not have helped: the handshake never
+    got near the printer's filesystem.
+    """
+
+    COOLOFF = "cooloff"  # skipped without contacting the printer (#2780)
+    HANDSHAKE = "handshake"  # port 990 answered with something that is not TLS
+    AUTH = "auth"  # permanent refusal, typically a rejected access code
+    TIMEOUT = "timeout"
+    STORAGE = "storage"  # 553/552 -- the case the SD-card advice was written for
+    NOT_FOUND = "not_found"  # 550
+    NETWORK = "network"  # socket dropped, or an FTP error with no clearer reading
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class FtpFailure:
+    """What went wrong, kept next to the log line that already said it."""
+
+    kind: FtpFailureKind
+    detail: str
+    code: str | None = None  # FTP reply code where the server gave one
+
+
+@dataclass
+class FtpFailureReport:
+    """A slot the *caller* owns for the reason its upload failed.
+
+    Deliberately not a per-IP dict on the client, the way ``_mode_cache`` and
+    ``_handshake_blocked_until`` are. Those describe a printer, and are
+    correct to share. This describes one operation, and a background timelapse
+    fetch running beside a dispatch would overwrite the dispatch's reason with
+    its own -- reporting the wrong cause with total confidence, which is the
+    bug being fixed rather than a new way to hit it (#2899).
+    """
+
+    failure: FtpFailure | None = None
 
 
 class FileNotOnPrinterError(Exception):
@@ -256,6 +316,10 @@ class BambuFTPClient:
         self.printer_model = printer_model
         self.force_prot_c = force_prot_c
         self.respect_handshake_cooloff = respect_handshake_cooloff
+        # Why the last connect/upload on this client failed, for a caller that
+        # only gets a bool back (#2899). Per instance, so it describes one
+        # operation and cannot be overwritten by work against another printer.
+        self.last_failure: FtpFailure | None = None
         self._ftp: ImplicitFTP_TLS | None = None
 
     def _is_a1_model(self) -> bool:
@@ -312,6 +376,7 @@ class BambuFTPClient:
         the cool-off a previous TLS handshake failure opened (#2780) -- unless
         this client was built with ``respect_handshake_cooloff=False``.
         """
+        self.last_failure = None
         if self.respect_handshake_cooloff and self.handshake_blocked(self.ip_address):
             # WARNING, not DEBUG. This is the one connect() failure path that
             # reported without its cause, so at default log level four
@@ -338,6 +403,10 @@ class BambuFTPClient:
                     self.ip_address,
                     remaining,
                 )
+            self.last_failure = FtpFailure(
+                FtpFailureKind.COOLOFF,
+                f"cooling off for another {remaining:.0f}s after a recent FTPS handshake failure",
+            )
             return False
         try:
             use_prot_c = self._should_use_prot_c()
@@ -374,10 +443,12 @@ class BambuFTPClient:
             return True
         except ftplib.error_perm as e:
             logger.warning("FTP connection permission error to %s: %s", self.ip_address, e)
+            self.last_failure = FtpFailure(FtpFailureKind.AUTH, str(e), _ftp_reply_code(e))
             self._abandon_connection()
             return False
         except TimeoutError as e:
             logger.warning("FTP connection timed out to %s: %s", self.ip_address, e)
+            self.last_failure = FtpFailure(FtpFailureKind.TIMEOUT, str(e))
             self._abandon_connection()
             return False
         except ssl.SSLError as e:
@@ -402,10 +473,12 @@ class BambuFTPClient:
                 _HANDSHAKE_COOLOFF_SECONDS,
             )
             self._handshake_blocked_until[self.ip_address] = time.monotonic() + _HANDSHAKE_COOLOFF_SECONDS
+            self.last_failure = FtpFailure(FtpFailureKind.HANDSHAKE, str(e))
             self._abandon_connection()
             return False
         except (OSError, ftplib.Error) as e:
             logger.warning("FTP connection failed to %s: %s (type: %s)", self.ip_address, e, type(e).__name__)
+            self.last_failure = FtpFailure(FtpFailureKind.NETWORK, str(e), _ftp_reply_code(e))
             self._abandon_connection()
             return False
 
@@ -644,8 +717,10 @@ class BambuFTPClient:
         progress_callback: Callable[[int, int], None] | None = None,
     ) -> bool:
         """Upload a file to the printer with optional progress callback."""
+        self.last_failure = None
         if not self._ftp:
             logger.warning("upload_file: FTP not connected")
+            self.last_failure = FtpFailure(FtpFailureKind.UNKNOWN, "no FTP connection")
             return False
 
         try:
@@ -797,19 +872,30 @@ class BambuFTPClient:
             # Permanent FTP error (4xx/5xx response)
             error_code = str(e)[:3] if str(e) else "unknown"
             logger.error("FTP upload failed for %s: %s (error code: %s)", remote_path, e, error_code)
+            # 553 and 552 are the printer telling us about its own storage --
+            # the one case where advice about the card is worth giving, and
+            # the case the dispatch's blanket SD-card message was written for
+            # before it was applied to every failure alike (#2899).
             if error_code == "553":
                 logger.error(
                     "FTP 553 error - Could not create file. Possible causes: "
                     "1) No SD card inserted, 2) SD card full, 3) SD card not formatted correctly (needs FAT32/exFAT), "
                     "4) Printer busy/not ready, 5) File path issue"
                 )
+                kind = FtpFailureKind.STORAGE
             elif error_code == "550":
                 logger.error("FTP 550 error - File/directory not found or permission denied")
+                kind = FtpFailureKind.NOT_FOUND
             elif error_code == "552":
                 logger.error("FTP 552 error - Storage quota exceeded (SD card full?)")
+                kind = FtpFailureKind.STORAGE
+            else:
+                kind = FtpFailureKind.UNKNOWN
+            self.last_failure = FtpFailure(kind, str(e), _ftp_reply_code(e))
             return False
         except (OSError, ftplib.Error) as e:
             logger.error("FTP upload failed for %s: %s (type: %s)", remote_path, e, type(e).__name__)
+            self.last_failure = FtpFailure(FtpFailureKind.NETWORK, str(e), _ftp_reply_code(e))
             return False
 
     def upload_bytes(self, data: bytes, remote_path: str) -> bool:
@@ -969,16 +1055,63 @@ class BambuFTPClient:
         return result if result else None
 
 
-def ftps_handshake_cooloff_deadline(ip_address: str) -> float | None:
-    """The monotonic deadline of this printer's handshake cool-off, or None.
+def describe_upload_failure(failure: FtpFailure | None) -> str:
+    """One sentence for the operator, chosen from what actually went wrong.
 
-    Compare it across an operation to tell "a handshake failed while I was
-    working" from "this printer was already cooling off from something else".
-    Those need different words to the user, and the flag's presence alone
-    cannot separate them: a caller that opted out of the cool-off can be
-    running while an unrelated background fetch has one armed (#2898).
+    Every upload failure used to get the same one: "Failed to upload file to
+    printer. Check if SD card is inserted and properly formatted
+    (FAT32/exFAT)." #2899's reporter got that after a TLS handshake failure and
+    restarted the printer, which could not have helped -- the handshake never
+    reached the printer's filesystem, and the state that produced it lives in
+    Bambuddy's own memory. #2780 had already removed advice from this failure's
+    *log* line for the same reason; it survived in the string people read.
+
+    So the card is named only where the printer itself raised storage, and
+    where nothing here can say more, this says so and points at the log rather
+    than picking a plausible cause. A wrong instruction costs more than a
+    vague one: it sends someone to work on hardware that is fine.
     """
-    return BambuFTPClient._handshake_blocked_until.get(ip_address)
+    if failure is None:
+        return (
+            "Could not upload the file to the printer. See the server log for the reason — "
+            "it records what the printer's file service said."
+        )
+
+    if failure.kind is FtpFailureKind.STORAGE:
+        return (
+            f"The printer refused to store the file ({failure.code or 'storage error'}). Check that its SD card "
+            "is inserted, has space free, and is formatted FAT32 or exFAT."
+        )
+    if failure.kind is FtpFailureKind.HANDSHAKE:
+        return (
+            "The printer's file service answered, but not with TLS, so no file could be sent to it. "
+            "Its SD card is not involved. This usually clears by itself; if it does not, power-cycling "
+            "the printer has not been found to help either, so please report it."
+        )
+    if failure.kind is FtpFailureKind.COOLOFF:
+        return (
+            "Bambuddy is holding off from this printer's file service after a recent failed TLS handshake, "
+            "so the file was not sent. This clears on its own within a few minutes."
+        )
+    if failure.kind is FtpFailureKind.AUTH:
+        return (
+            "The printer refused the file transfer connection. If the printer's access code changed, "
+            "update it on Bambuddy's Printers page."
+        )
+    if failure.kind is FtpFailureKind.TIMEOUT:
+        return (
+            "The printer's file service did not respond in time, so the file was not sent. "
+            "Check that the printer is on the network and reachable."
+        )
+    if failure.kind is FtpFailureKind.NOT_FOUND:
+        return (
+            "The printer rejected the upload path (550). See the server log — this is a Bambuddy-side "
+            "problem, not something to fix on the printer."
+        )
+    return (
+        "Could not upload the file to the printer. See the server log for the reason — "
+        "it records what the printer's file service said."
+    )
 
 
 def ftps_handshake_blocked(ip_address: str) -> bool:
@@ -1303,6 +1436,7 @@ async def upload_file_async(
     socket_timeout: float | None = None,
     printer_model: str | None = None,
     respect_handshake_cooloff: bool = True,
+    failure: FtpFailureReport | None = None,
 ) -> bool:
     """Async wrapper for uploading a file with timeout and progress callback.
 
@@ -1323,6 +1457,11 @@ async def upload_file_async(
         respect_handshake_cooloff: see ``BambuFTPClient.__init__``. False for a
             user-initiated upload, whose attempts are bounded and were being
             spent against a cool-off that outlives them (#2898).
+        failure: caller-owned slot filled in with why the upload failed, so the
+            caller can say something true about it instead of guessing (#2899).
+            Passed through ``with_ftp_retry`` unchanged, so it ends up holding
+            the last attempt's reason -- which is the one that decided the
+            outcome.
     """
     loop = asyncio.get_event_loop()
     is_a1 = printer_model in BambuFTPClient.A1_MODELS if printer_model else False
@@ -1351,18 +1490,25 @@ async def upload_file_async(
             force_prot_c=force_prot_c,
             respect_handshake_cooloff=respect_handshake_cooloff,
         )
-        if client.connect():
-            logger.info("FTP connected to %s", ip_address)
-            try:
-                result = client.upload_file(local_path, remote_path, _guarded_progress)
-                if result:
-                    # Cache the working mode
-                    BambuFTPClient.cache_mode(ip_address, mode_str)
-                return result
-            finally:
-                client.disconnect()
-        logger.warning("FTP connection failed to %s", ip_address)
-        return False
+        try:
+            if client.connect():
+                logger.info("FTP connected to %s", ip_address)
+                try:
+                    result = client.upload_file(local_path, remote_path, _guarded_progress)
+                    if result:
+                        # Cache the working mode
+                        BambuFTPClient.cache_mode(ip_address, mode_str)
+                    return result
+                finally:
+                    client.disconnect()
+            logger.warning("FTP connection failed to %s", ip_address)
+            return False
+        finally:
+            # In a finally so a transfer that leaves by raising -- a cancelled
+            # upload, a re-raised STOR rejection -- still reports what the
+            # client recorded on its way out.
+            if failure is not None and client.last_failure is not None:
+                failure.failure = client.last_failure
 
     async def _attempt(force_prot_c: bool) -> bool:
         """Run one upload attempt, and make a timeout actually stop the transfer.

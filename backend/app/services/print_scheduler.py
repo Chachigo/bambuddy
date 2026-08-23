@@ -30,10 +30,11 @@ from backend.app.models.spool_assignment import SpoolAssignment
 from backend.app.models.spoolman_slot_assignment import SpoolmanSlotAssignment
 from backend.app.services import drying_preflight, print_dispatch_context
 from backend.app.services.bambu_ftp import (
+    FtpFailureReport,
     UploadCancelled,
     cache_3mf_download,
     delete_file_async,
-    ftps_handshake_cooloff_deadline,
+    describe_upload_failure,
     get_ftp_retry_settings,
     upload_file_async,
     with_ftp_retry,
@@ -6094,14 +6095,6 @@ class PrintScheduler:
         # pending->printing CAS) transparently open a fresh transaction.
         await db.commit()
 
-        # Where this printer's handshake cool-off stood before we touched it.
-        # The delete and upload below ignore the cool-off, so finding one armed
-        # afterwards proves nothing on its own -- a background timelapse or 3MF
-        # fetch for an earlier print could have armed it minutes ago. A deadline
-        # that MOVED, though, can only mean a handshake failed during this
-        # dispatch, which is what the failure message needs to know (#2898).
-        cooloff_before = ftps_handshake_cooloff_deadline(printer.ip_address)
-
         # Delete existing file if present (avoids 553 error on overwrite)
         try:
             logger.debug("Queue item %s: Deleting existing file %s if present...", item.id, remote_path)
@@ -6149,6 +6142,11 @@ class PrintScheduler:
         # wrong advice for a link that was simply too slow to finish (#2529).
         upload_error: str | None = None
 
+        # Why the upload failed, straight from the client rather than inferred.
+        # Owned here, so a background fetch for another print cannot overwrite
+        # it between the failure and the sentence built from it (#2899).
+        upload_failure = FtpFailureReport()
+
         try:
             if ftp_retry_enabled:
                 uploaded = await with_ftp_retry(
@@ -6161,6 +6159,7 @@ class PrintScheduler:
                     printer_model=printer.model,
                     progress_callback=progress_bridge,
                     respect_handshake_cooloff=False,
+                    failure=upload_failure,
                     max_retries=ftp_retry_count,
                     retry_delay=ftp_retry_delay,
                     operation_name=f"Upload print to {printer.name}",
@@ -6175,6 +6174,7 @@ class PrintScheduler:
                     printer_model=printer.model,
                     progress_callback=progress_bridge,
                     respect_handshake_cooloff=False,
+                    failure=upload_failure,
                 )
         except UploadCancelled as e:
             uploaded = False
@@ -6192,24 +6192,12 @@ class PrintScheduler:
             injected_path.unlink(missing_ok=True)
 
         if not uploaded:
-            # A cool-off armed during this dispatch is proof the printer
-            # answered port 990 with something that was not TLS, so the SD card
-            # is the wrong thing to go and look at -- and it is what three of
-            # #2898's queue items were sent to check. "During this dispatch" is
-            # load-bearing: an unrelated background fetch can leave a cool-off
-            # armed for minutes, and blaming TLS for an upload that actually hit
-            # a full disk would repeat the mistake in the other direction.
-            cooloff_after = ftps_handshake_cooloff_deadline(printer.ip_address)
-            if not upload_error and cooloff_after is not None and cooloff_after != cooloff_before:
-                upload_error = (
-                    "The printer's file service did not answer over TLS, so the file could not be sent to it. "
-                    "Its SD card is not involved. Bambuddy will leave this printer alone for a few minutes "
-                    "before trying again."
-                )
-            error_msg = upload_error or (
-                "Failed to upload file to printer. Check if SD card is inserted and properly formatted (FAT32/exFAT). "
-                "See server logs for detailed diagnostics."
-            )
+            # This used to be one string for every upload failure, telling
+            # everyone to check the SD card. The client knows which of seven
+            # things went wrong and logs each one differently; it just had no
+            # way to say so here, so the card got named even for a TLS
+            # handshake that never reached the printer's filesystem (#2899).
+            error_msg = upload_error or describe_upload_failure(upload_failure.failure)
             item.status = "failed"
             item.error_message = error_msg
             item.completed_at = datetime.now(timezone.utc)
@@ -6224,7 +6212,9 @@ class PrintScheduler:
                 job_name=filename.replace(".gcode.3mf", "").replace(".3mf", ""),
                 printer_id=printer.id,
                 printer_name=printer.name,
-                reason="Failed to upload file to printer",
+                # The same sentence the queue shows. A push notification saying
+                # something different from the UI is its own small bug (#2899).
+                reason=error_msg,
                 db=db,
             )
             try:
