@@ -35,6 +35,7 @@ from backend.app.utils.filament_ids import (
     MATERIAL_TEMPS,
     normalize_slicer_filament,
 )
+from backend.app.utils.filament_types import printer_filament_type
 
 logger = logging.getLogger(__name__)
 
@@ -904,28 +905,41 @@ async def link_spool(
 
             mqtt_client = printer_manager.get_client(p_id)
             if mqtt_client:
-                tray_type = mapped.get("material") or ""
+                # Spoolman's material is free text, so it arrives as whatever
+                # the user typed there -- "PLA+", "PolyTerra PLA". The sub-brand
+                # keeps that wording; the slot's type has to be one the printer
+                # and the slicer know (issue #2902).
+                material = mapped.get("material") or ""
+                tray_type = printer_filament_type(material)
                 brand = mapped.get("brand") or ""
                 subtype = mapped.get("subtype") or ""
                 if brand:
-                    tray_sub_brands = f"{brand} {tray_type} {subtype}".strip()
+                    tray_sub_brands = f"{brand} {material} {subtype}".strip()
                 elif subtype:
-                    tray_sub_brands = f"{tray_type} {subtype}".strip()
+                    tray_sub_brands = f"{material} {subtype}".strip()
                 else:
-                    tray_sub_brands = tray_type
+                    tray_sub_brands = material
 
                 tray_color = (mapped.get("rgba") or "808080FF").upper()
                 if len(tray_color) == 6:
                     tray_color = tray_color + "FF"
 
-                material_upper = tray_type.upper().strip()
+                # The spool's own wording is tried first and the reduced type
+                # only as a further fallback, so a material that already
+                # resolves keeps resolving to the same id: "PETG HF" has its
+                # own generic preset (GFG96) that reducing it to "PETG" would
+                # trade away for GFG99.
+                material_upper = material.upper().strip()
                 tray_info_idx = (
                     GENERIC_FILAMENT_IDS.get(material_upper)
                     or GENERIC_FILAMENT_IDS.get(material_upper.split("-")[0].split(" ")[0])
+                    or GENERIC_FILAMENT_IDS.get(tray_type.upper())
                     or ""
                 )
                 setting_id = ""
-                temp_defaults = MATERIAL_TEMPS.get(material_upper, (200, 240))
+                temp_defaults = (
+                    MATERIAL_TEMPS.get(material_upper) or MATERIAL_TEMPS.get(tray_type.upper()) or (200, 240)
+                )
                 temp_min = mapped.get("nozzle_temp_min") or temp_defaults[0]
                 temp_max = temp_defaults[1]
 
