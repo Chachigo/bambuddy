@@ -101,14 +101,47 @@ async def get_spoolman_status(
     db: AsyncSession = Depends(get_db),
     _: User | None = RequirePermissionIfAuthEnabled(Permission.FILAMENTS_READ),
 ):
-    """Get Spoolman integration status."""
+    """Get Spoolman integration status.
+
+    ``connected`` answers "does the configured Spoolman respond?", which means
+    asking it. It used to answer "has some earlier request in this process left
+    a client object lying around?" -- and roughly twenty call sites build one
+    lazily, so the answer depended on which page happened to load first rather
+    than on anything about Spoolman.
+
+    That mattered because the UI reads this one flag twice: it offers Connect
+    only while disconnected, and the AMS sync section only while connected.
+    Saving the Settings page initialises a client as a side effect of syncing
+    locations, so enabling Spoolman there reported "connected" without anything
+    having been set up, hiding the Connect button and revealing a sync that then
+    failed on every slot (issue #2903). Registration no longer depends on that
+    button, but the flag was still describing Bambuddy's memory rather than the
+    integration, so it is now resolved the same way every other route resolves
+    it -- including the stale-URL check, so editing the URL is not reported
+    against the old host.
+    """
     sm = await get_spoolman_settings(db)
     enabled, url = sm["enabled"], sm["url"]
 
-    client = await get_spoolman_client()
     connected = False
-    if client:
-        connected = await client.health_check()
+    if enabled and url:
+        client = await get_spoolman_client()
+        if not client or client.base_url != url.rstrip("/"):
+            try:
+                client = await init_spoolman_client(url)
+            except ValueError as exc:
+                logger.warning("Spoolman URL %r rejected by SSRF guard during status check: %s", url, exc)
+                client = None
+            except Exception as exc:
+                # Every remaining way this can fail still answers the question:
+                # replacing a client closes the previous one, and httpx's
+                # aclose() is not guaranteed not to raise. A status poll that
+                # 500s every 30 seconds is worse than one reporting what is
+                # true either way -- that Spoolman could not be reached.
+                logger.warning("Could not open a Spoolman client for %r during status check: %s", url, exc)
+                client = None
+        if client:
+            connected = await client.health_check()
 
     return SpoolmanStatus(
         enabled=enabled,
