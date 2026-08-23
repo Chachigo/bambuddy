@@ -346,6 +346,14 @@ describe('ArchivesPage', () => {
   });
 
   describe('timelapse management', () => {
+    // A card reaches print-video downloads through its context menu; only the
+    // list row keeps an action-bar button for it (#2853).
+    const openCardPrintVideos = async (cardIndex = 0) => {
+      const triggers = await screen.findAllByTitle('Right-click for more options');
+      fireEvent.click(triggers[cardIndex]);
+      return screen.findByRole('button', { name: 'Download print videos' });
+    };
+
     it('keeps an attached timelapse available without printer-file permission', async () => {
       setAuthToken('archive-only-token', 'session');
       server.use(
@@ -377,12 +385,16 @@ describe('ArchivesPage', () => {
 
       render(<ArchivesPage />);
 
-      const mediaButton = (await screen.findAllByTitle('Download print videos'))[0];
-      expect(mediaButton).toBeEnabled();
-      const deniedButtons = screen.getAllByTitle('You do not have permission to access printer files');
-      expect(deniedButtons.every(button => button.hasAttribute('disabled'))).toBe(true);
+      // One of the two archives has no attached copy, so without printer-file
+      // permission there is nothing left for the action to offer.
+      const deniedItem = await openCardPrintVideos(0);
+      expect(deniedItem).toBeDisabled();
+      expect(deniedItem).toHaveAttribute('title', 'You do not have permission to access printer files');
+      fireEvent.keyDown(document, { key: 'Escape' });
 
-      fireEvent.click(mediaButton);
+      const mediaItem = await openCardPrintVideos(1);
+      expect(mediaItem).toBeEnabled();
+      fireEvent.click(mediaItem);
       expect(await screen.findByText('attached.mp4')).toBeInTheDocument();
       expect(screen.getByText('You do not have permission to access printer files')).toBeInTheDocument();
     });
@@ -409,8 +421,7 @@ describe('ArchivesPage', () => {
       );
 
       render(<ArchivesPage />);
-      const mediaButtons = await screen.findAllByTitle('Download print videos');
-      fireEvent.click(mediaButtons[0]);
+      fireEvent.click(await openCardPrintVideos());
 
       expect(await screen.findByText('Print videos')).toBeInTheDocument();
       expect(await screen.findByText('ipcam-record.2024-01-01_10-05-00.1.mp4')).toBeInTheDocument();
@@ -443,7 +454,7 @@ describe('ArchivesPage', () => {
       );
 
       render(<ArchivesPage />);
-      fireEvent.click((await screen.findAllByTitle('Download print videos'))[0]);
+      fireEvent.click(await openCardPrintVideos());
       fireEvent.click(await screen.findByRole('button', { name: /Download selected \(1\)/i }));
 
       expect(await screen.findByText('Download failed: Not enough app data volume space')).toBeInTheDocument();

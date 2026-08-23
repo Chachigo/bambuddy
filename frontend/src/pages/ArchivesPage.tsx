@@ -33,6 +33,7 @@ import {
   AlertCircle,
   Copy,
   Film,
+  FileVideo,
   ScanSearch,
   QrCode,
   Camera,
@@ -618,6 +619,17 @@ function ArchiveCard({
       icon: <Film className="w-4 h-4" />,
       onClick: () => setShowTimelapse(true),
       disabled: !archive.timelapse_path,
+    },
+    {
+      label: t('archives.media.download'),
+      icon: <FileVideo className="w-4 h-4" />,
+      onClick: () => setShowPrinterMedia(true),
+      disabled: !archive.timelapse_path && (
+        !hasPermission('printers:files') || !archive.printer_id || !archive.started_at
+      ),
+      title: !archive.timelapse_path && !hasPermission('printers:files')
+        ? t('printers.permission.noFiles')
+        : undefined,
     },
     {
       label: t('archives.menu.scanForTimelapse'),
@@ -1382,20 +1394,6 @@ function ArchiveCard({
             }
           >
             <Globe className={`w-3 h-3 sm:w-4 sm:h-4 ${!archive.external_url && !archive.makerworld_url ? 'opacity-20' : ''}`} />
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="min-w-0 p-1 sm:p-1.5"
-            onClick={() => setShowPrinterMedia(true)}
-            disabled={!archive.timelapse_path && (
-              !hasPermission('printers:files') || !archive.printer_id || !archive.started_at
-            )}
-            title={!archive.timelapse_path && !hasPermission('printers:files')
-              ? t('printers.permission.noFiles')
-              : t('archives.media.download')}
-          >
-            <Film className="w-3 h-3 sm:w-4 sm:h-4" />
           </Button>
           <Button
             variant="secondary"
