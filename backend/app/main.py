@@ -8091,6 +8091,16 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
+    # Browser download tokens expire after five minutes. Remove abandoned
+    # prepared ZIPs at startup as well as before each new preparation so a
+    # quiet appliance cannot retain an unusable bundle indefinitely.
+    try:
+        from backend.app.services.printer_media import prune_stale_printer_file_bundles
+
+        await prune_stale_printer_file_bundles()
+    except Exception as exc:
+        logging.warning("Failed to prune stale printer download bundles: %s", exc)
+
     # After migrations, so the is_env_managed column exists. Never raises --
     # a bad BAMBUDDY_OIDC_* value is logged and skipped rather than blocking
     # startup (see apply_env_oidc_provider).
@@ -8507,6 +8517,10 @@ async def lifespan(app: FastAPI):
     # L-2: Start periodic auth cleanup (stale TOTP + expired revoked JTIs)
     start_auth_cleanup()
 
+    from backend.app.services.printer_media import start_printer_download_cleanup
+
+    start_printer_download_cleanup()
+
     # Event-loop stall watchdog: dumps all thread stacks to stderr if the loop
     # freezes (#1486 — silent "container hangs after adding a printer" reports).
     from backend.app.services.loop_watchdog import start_loop_watchdog
@@ -8555,6 +8569,9 @@ async def lifespan(app: FastAPI):
         logging.warning("Failed to shut down camera broadcasters: %s", e)
     stop_expected_prints_cleanup()
     stop_auth_cleanup()
+    from backend.app.services.printer_media import stop_printer_download_cleanup
+
+    await stop_printer_download_cleanup()
     printer_manager.disconnect_all()
     await close_spoolman_client()
 

@@ -89,6 +89,7 @@ import { QRCodeModal } from '../components/QRCodeModal';
 import { PhotoGalleryModal } from '../components/PhotoGalleryModal';
 import { ProjectPageModal } from '../components/ProjectPageModal';
 import { TimelapseViewer } from '../components/TimelapseViewer';
+import { ArchiveMediaDownloadModal } from '../components/ArchiveMediaDownloadModal';
 import { CompareArchivesModal } from '../components/CompareArchivesModal';
 import { PendingUploadsPanel } from '../components/PendingUploadsPanel';
 import { TagManagementModal } from '../components/TagManagementModal';
@@ -342,6 +343,7 @@ function ArchiveCard({
   const [showEdit, setShowEdit] = useState(false);
   const [showPrintLog, setShowPrintLog] = useState(false);
   const [showTimelapse, setShowTimelapse] = useState(false);
+  const [showPrinterMedia, setShowPrinterMedia] = useState(false);
   const [showTimelapseSelect, setShowTimelapseSelect] = useState(false);
   const [availableTimelapses, setAvailableTimelapses] = useState<Array<{ name: string; path: string; size: number; mtime: string | null }>>([]);
   const [showQRCode, setShowQRCode] = useState(false);
@@ -1385,6 +1387,20 @@ function ArchiveCard({
             variant="secondary"
             size="sm"
             className="min-w-0 p-1 sm:p-1.5"
+            onClick={() => setShowPrinterMedia(true)}
+            disabled={!archive.timelapse_path && (
+              !hasPermission('printers:files') || !archive.printer_id || !archive.started_at
+            )}
+            title={!archive.timelapse_path && !hasPermission('printers:files')
+              ? t('printers.permission.noFiles')
+              : t('archives.media.download')}
+          >
+            <Film className="w-3 h-3 sm:w-4 sm:h-4" />
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="min-w-0 p-1 sm:p-1.5"
             onClick={() => {
               api.downloadArchive(archive.id, `${archive.print_name || archive.filename}.3mf`).catch((err) => {
                 console.error('Archive download failed:', err);
@@ -1566,6 +1582,16 @@ function ArchiveCard({
           y={contextMenu.y}
           items={contextMenuItems}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Print Media Download Modal */}
+      {showPrinterMedia && (
+        <ArchiveMediaDownloadModal
+          archiveId={archive.id}
+          archiveName={archive.print_name || archive.filename}
+          printerName={printerName}
+          onClose={() => setShowPrinterMedia(false)}
         />
       )}
 
@@ -1770,6 +1796,7 @@ function ArchiveListRow({
   const [showSliceModal, setShowSliceModal] = useState(false);
   const [showRunPipeline, setShowRunPipeline] = useState(false);
   const [showTimelapse, setShowTimelapse] = useState(false);
+  const [showPrinterMedia, setShowPrinterMedia] = useState(false);
   const [showTimelapseSelect, setShowTimelapseSelect] = useState(false);
   const [availableTimelapses, setAvailableTimelapses] = useState<Array<{ name: string; path: string; size: number; mtime: string | null }>>([]);
   const [showQRCode, setShowQRCode] = useState(false);
@@ -2398,6 +2425,19 @@ function ArchiveListRow({
           <Button
             variant="ghost"
             size="sm"
+            onClick={() => setShowPrinterMedia(true)}
+            disabled={!archive.timelapse_path && (
+              !hasPermission('printers:files') || !archive.printer_id || !archive.started_at
+            )}
+            title={!archive.timelapse_path && !hasPermission('printers:files')
+              ? t('printers.permission.noFiles')
+              : t('archives.media.download')}
+          >
+            <Film className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => {
               api.downloadArchive(archive.id, `${archive.print_name || archive.filename}.3mf`).catch((err) => {
                 console.error('Archive download failed:', err);
@@ -2598,6 +2638,16 @@ function ArchiveListRow({
           y={contextMenu.y}
           items={contextMenuItems}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Print Media Download Modal */}
+      {showPrinterMedia && (
+        <ArchiveMediaDownloadModal
+          archiveId={archive.id}
+          archiveName={archive.print_name || archive.filename}
+          printerName={printerName}
+          onClose={() => setShowPrinterMedia(false)}
         />
       )}
 
