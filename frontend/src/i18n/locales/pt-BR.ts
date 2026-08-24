@@ -4330,6 +4330,10 @@ export default {
       'O arquivo define {{value}} enquanto o perfil escolhido usa {{preset}}. Marque apenas se o arquivo deve prevalecer.',
     useFromFile: 'Usar o valor do arquivo de origem para {{option}}',
     otherFromFile: 'Outras configurações deste arquivo',
+    fromFileSummary: 'O designer alterou {{count}} configurações de processo neste arquivo. Só as que você marcar são usadas.',
+    fromFileUseAll: 'Usar as configurações do designer',
+    fromFileUseAllHint: 'Marca as configurações que valem em outras impressoras. As ajustadas para a impressora do designer, e as que definem o preset escolhido, ficam desmarcadas.',
+    fromFileClear: 'Limpar {{count}}',
     loading: 'Carregando configurações do fatiador…',
     mode: {
       simple: 'Simples',

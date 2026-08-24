@@ -4331,6 +4331,10 @@ export default {
       'Dosya bunu {{value}} olarak ayarlıyor, seçtiğiniz profil ise {{preset}} kullanıyor. Yalnızca dosya öncelikli olacaksa işaretleyin.',
     useFromFile: '{{option}} için kaynak dosyadaki değeri kullan',
     otherFromFile: 'Bu dosyadaki diğer ayarlar',
+    fromFileSummary: 'Tasarımcı bu dosyada {{count}} işlem ayarını değiştirmiş. Yalnızca işaretlediklerin kullanılır.',
+    fromFileUseAll: 'Tasarımcının ayarlarını kullan',
+    fromFileUseAllHint: 'Başka yazıcılara taşınabilen ayarları işaretler. Tasarımcının kendi yazıcısına göre ayarlananlar ve seçtiğin ön ayarı tanımlayanlar kapalı kalır.',
+    fromFileClear: '{{count}} ayarı temizle',
     loading: 'Dilimleyici ayarları yükleniyor…',
     mode: {
       simple: 'Basit',

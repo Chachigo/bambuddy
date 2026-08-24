@@ -4342,6 +4342,10 @@ export default {
       'ファイルはこれを {{value}} に設定していますが、選択したプリセットは {{preset}} です。ファイルを優先する場合のみチェックしてください。',
     useFromFile: '{{option}} に元ファイルの値を使用する',
     otherFromFile: 'このファイルのその他の設定',
+    fromFileSummary: 'このファイルではデザイナーが{{count}}件のプロセス設定を変更しています。使われるのはチェックしたものだけです。',
+    fromFileUseAll: 'デザイナーの設定を使う',
+    fromFileUseAllHint: '他のプリンターでも通用する設定にチェックを入れます。デザイナーのプリンター向けに調整された設定と、選んだプリセットを定義する設定はオフのままです。',
+    fromFileClear: '{{count}}件を解除',
     loading: 'スライサー設定を読み込んでいます…',
     mode: {
       simple: 'シンプル',

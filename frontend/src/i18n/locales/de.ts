@@ -4342,6 +4342,10 @@ export default {
       'Die Datei setzt hier {{value}}, das gewählte Preset verwendet {{preset}}. Nur aktivieren, wenn die Datei Vorrang haben soll.',
     useFromFile: 'Wert aus der Quelldatei für {{option}} verwenden',
     otherFromFile: 'Weitere Einstellungen aus dieser Datei',
+    fromFileSummary: 'Der Designer hat in dieser Datei {{count}} Prozesseinstellungen geändert. Verwendet werden nur die, die du ankreuzt.',
+    fromFileUseAll: 'Einstellungen des Designers übernehmen',
+    fromFileUseAllHint: 'Kreuzt die Einstellungen an, die sich auf andere Drucker übertragen lassen. Die auf den Drucker des Designers abgestimmten und die, die dein gewähltes Preset ausmachen, bleiben aus.',
+    fromFileClear: '{{count}} zurücksetzen',
     loading: 'Slicer-Einstellungen werden geladen…',
     mode: {
       simple: 'Einfach',
