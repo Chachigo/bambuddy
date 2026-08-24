@@ -2799,17 +2799,17 @@ _LIGHT_OFF_GRACE_SECONDS = 120
 async def _auto_chamber_light(printer_id: int, on: bool) -> None:
     """Turn the chamber light on at print start / off after it ends.
 
-    No-op unless the ``auto_chamber_light`` setting is enabled. Turning it off
+    No-op unless the printer has ``auto_chamber_light`` enabled. Turning it off
     waits out `_LIGHT_OFF_GRACE_SECONDS` first; on_print_start cancels that wait
     when a new print begins inside the window.
     """
     logger = logging.getLogger(__name__)
     try:
         async with async_session() as db:
-            from backend.app.api.routes.settings import get_setting
+            from backend.app.models.printer import Printer
 
-            enabled = await get_setting(db, "auto_chamber_light")
-        if (enabled or "").lower() != "true":
+            enabled = await db.scalar(select(Printer.auto_chamber_light).where(Printer.id == printer_id))
+        if not enabled:
             return
 
         if not on:

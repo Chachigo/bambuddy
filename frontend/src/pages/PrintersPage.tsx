@@ -78,6 +78,7 @@ import {
   Cable,
   Flame,
   Repeat,
+  Wand2,
   Snowflake,
   Gauge,
   DoorOpen,
@@ -2749,6 +2750,16 @@ function PrinterCard({
       showToast(error.message || t('printers.toast.failedToSendCommand'), 'error'),
   });
 
+  // Chamber-light automation setting mutation (per printer)
+  const autoChamberLightMutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updatePrinter(printer.id, { auto_chamber_light: enabled }),
+    onSuccess: (_data, enabled) => {
+      queryClient.invalidateQueries({ queryKey: ['printers'] });
+      showToast(enabled ? t('printers.toast.autoChamberLightEnabled') : t('printers.toast.autoChamberLightDisabled'));
+    },
+    onError: (error: Error) => showToast(error.message || t('printers.toast.failedToUpdateSetting'), 'error'),
+  });
+
   // Plate detection setting mutation
   const plateDetectionMutation = useMutation({
     mutationFn: (enabled: boolean) => api.updatePrinter(printer.id, { plate_detection_enabled: enabled }),
@@ -4425,6 +4436,20 @@ function PrinterCard({
                         title={!hasPermission('printers:control') ? t('printers.permission.noControl') : (status.chamber_light ? t('printers.chamberLightOff') : t('printers.chamberLightOn'))}
                       >
                         <ChamberLight on={status.chamber_light ?? false} className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+                      </button>
+
+                      {/* Chamber light follows the print: on at start, off after the end. */}
+                      <button
+                        onClick={() => autoChamberLightMutation.mutate(!printer.auto_chamber_light)}
+                        disabled={autoChamberLightMutation.isPending || !hasPermission('printers:update')}
+                        className={`${iconControlClass} ${
+                          printer.auto_chamber_light
+                            ? 'bg-yellow-50 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/20'
+                            : 'bg-bambu-dark text-bambu-gray/50 hover:bg-bambu-dark-tertiary hover:text-white'
+                        }`}
+                        title={!hasPermission('printers:update') ? t('printers.permission.noControl') : t('printers.autoChamberLightTooltip')}
+                      >
+                        <Wand2 className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                       </button>
 
                       {/* Airduct Mode (P2S / X2D / H2*) */}

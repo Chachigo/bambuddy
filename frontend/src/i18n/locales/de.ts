@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'Kammerbeleuchtung einschalten',
+    autoChamberLightTooltip: 'Kammerlicht folgt dem Druck (an beim Start, aus nach dem Ende)',
     chamberLightOff: 'Kammerbeleuchtung ausschalten',
     // Files
     files: 'Dateien',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: 'Erkennungsbereich konnte nicht gespeichert werden',
       plateCheckEnabled: 'Plattenprüfung aktiviert',
       plateCheckDisabled: 'Plattenprüfung deaktiviert',
+      autoChamberLightEnabled: 'Auto-Kammerlicht an',
+      autoChamberLightDisabled: 'Auto-Kammerlicht aus',
       calibrationSaved: 'Kalibrierung gespeichert!',
       calibrationFailed: 'Kalibrierung fehlgeschlagen',
       rfidRereadInitiated: 'RFID-Neueinlesen gestartet',
@@ -2095,7 +2098,6 @@ export default {
     // Camera
     saveThumbnails: 'Vorschaubilder speichern',
     captureFinishPhoto: 'Abschlussfoto aufnehmen',
-    autoChamberLight: 'Kammerlicht folgt dem Druck',
     noPrintersConfigured: 'Keine Drucker konfiguriert',
     // Archive settings
     archiveMode: {
@@ -2621,7 +2623,6 @@ export default {
     autoArchivePrints: 'Drucke automatisch archivieren',
     autoArchiveDescription: '3MF-Dateien automatisch speichern, wenn Drucke abgeschlossen sind',
     saveThumbnailsDescription: 'Vorschaubilder aus 3MF-Dateien extrahieren und speichern',
-    autoChamberLightDescription: 'Schaltet das Kammerlicht beim Druckstart ein und kurz nach dem Ende wieder aus. Die manuelle Steuerung bleibt möglich — diese Einstellung greift nur zu Beginn und am Ende eines Drucks.',
     captureFinishPhotoDescription: 'Foto von der Druckerkamera aufnehmen, wenn der Druck abgeschlossen ist. Bambuddy zeichnet während des Drucks einen kurzen Zeitraffer auf, damit das Foto aus dem Moment vor dem Absenken der Druckplatte stammen kann. Die Zeitraffer-Datei bleibt erhalten, wenn du den Zeitraffer für diesen Druck aktiviert hast, andernfalls wird sie nach Aufnahme des Fotos automatisch gelöscht.',
     finishPhotoRestorePlate: 'Druckplatte für Abschlussfoto anheben',
     finishPhotoRestorePlateDescription: 'Der Drucker senkt die Druckplatte am Druckende um etwa 100 mm ab, wodurch der fertige Druck unterhalb des Kamerabildausschnitts liegt. Bambuddy hebt sie wieder bis knapp über die zuletzt gedruckte Schicht an, nimmt das Foto auf und senkt sie danach wieder ab. Wird übersprungen, wenn die Druckhöhe unbekannt ist oder ein weiterer Auftrag in der Warteschlange steht.',

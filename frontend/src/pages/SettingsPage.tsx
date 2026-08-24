@@ -1021,7 +1021,6 @@ export function SettingsPage() {
       baseline.save_thumbnails !== localSettings.save_thumbnails ||
       baseline.capture_finish_photo !== localSettings.capture_finish_photo ||
       (baseline.finish_photo_restore_plate ?? true) !== (localSettings.finish_photo_restore_plate ?? true) ||
-      (baseline.auto_chamber_light ?? false) !== (localSettings.auto_chamber_light ?? false) ||
       baseline.default_filament_cost !== localSettings.default_filament_cost ||
       baseline.currency !== localSettings.currency ||
       baseline.energy_cost_per_kwh !== localSettings.energy_cost_per_kwh ||
@@ -1134,7 +1133,6 @@ export function SettingsPage() {
         // whose settings payload predates this field saves what the user is
         // actually looking at rather than `undefined`.
         finish_photo_restore_plate: localSettings.finish_photo_restore_plate ?? true,
-        auto_chamber_light: localSettings.auto_chamber_light ?? false,
         default_filament_cost: localSettings.default_filament_cost,
         currency: localSettings.currency,
         energy_cost_per_kwh: localSettings.energy_cost_per_kwh,
@@ -2020,23 +2018,6 @@ export function SettingsPage() {
                   </label>
                 </div>
               )}
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-white">{t('settings.autoChamberLight')}</p>
-                  <p className="text-sm text-bambu-gray">
-                    {t('settings.autoChamberLightDescription')}
-                  </p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={localSettings.auto_chamber_light}
-                    onChange={(e) => updateSetting('auto_chamber_light', e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-bambu-dark-tertiary peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-bambu-green"></div>
-                </label>
-              </div>
               {localSettings.capture_finish_photo && ffmpegStatus && !ffmpegStatus.installed && (
                 <div className="flex items-start gap-2 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                   <AlertTriangle className="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" />

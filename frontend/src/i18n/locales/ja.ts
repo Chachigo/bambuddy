@@ -381,6 +381,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'チャンバーライトをオンにしました',
+    autoChamberLightTooltip: 'チャンバーライトが印刷に追従（開始時に点灯、終了後に消灯）',
     chamberLightOff: 'チャンバーライトをオフにしました',
     // Files
     files: 'ファイル',
@@ -484,6 +485,8 @@ export default {
       failedToSaveDetectionArea: '検出エリアの保存に失敗しました',
       plateCheckEnabled: 'プレートチェックを有効にしました',
       plateCheckDisabled: 'プレートチェックを無効にしました',
+      autoChamberLightEnabled: 'ライト自動制御 オン',
+      autoChamberLightDisabled: 'ライト自動制御 オフ',
       calibrationSaved: 'キャリブレーションを保存しました！',
       calibrationFailed: 'キャリブレーションに失敗しました',
       rfidRereadInitiated: 'RFID再読み取りを開始しました',
@@ -2094,7 +2097,6 @@ export default {
     // Camera
     saveThumbnails: 'サムネイルを保存',
     captureFinishPhoto: '完了写真を撮影',
-    autoChamberLight: '印刷に合わせてチャンバーライトを制御',
     noPrintersConfigured: 'プリンターが設定されていません',
     // Archive settings
     archiveMode: {
@@ -2620,7 +2622,6 @@ export default {
     autoArchivePrints: '印刷を自動アーカイブ',
     autoArchiveDescription: '印刷完了時に3MFファイルを自動保存',
     saveThumbnailsDescription: '3MFファイルからプレビュー画像を抽出して保存',
-    autoChamberLightDescription: '印刷開始時にチャンバーライトを点灯し、終了の少し後に消灯します。手動操作はこれまでどおり可能で、この設定は印刷の開始時と終了時にのみ動作します。',
     captureFinishPhotoDescription: '印刷完了時にプリンターカメラから写真を撮影します。Bambuddy は印刷中に短いタイムラプスを記録し、ベッドが下がる前の瞬間から写真を取得できるようにします。この印刷でタイムラプスを有効にしていた場合はタイムラプスファイルが保存され、それ以外の場合は写真の取得後に自動的に削除されます。',
     finishPhotoRestorePlate: '完了写真のためにプレートを戻す',
     finishPhotoRestorePlateDescription: 'プリンターは印刷終了時にビルドプレートを約 100 mm 下降させるため、完成した造形物がカメラの画角より下に来ます。Bambuddy はプレートを最終印刷レイヤーのすぐ上まで戻して写真を撮影し、その後再び下降させます。造形高さが不明な場合や次のジョブがキューにある場合はスキップされます。',

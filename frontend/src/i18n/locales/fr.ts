@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'Allumer la lumière de la chambre',
+    autoChamberLightTooltip: 'La lumière du caisson suit l\'impression (allumée au démarrage, éteinte après la fin)',
     chamberLightOff: 'Éteindre la lumière de la chambre',
     // Files
     files: 'Fichiers',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: 'Échec enregistrement zone',
       plateCheckEnabled: 'Vérification plateau activée',
       plateCheckDisabled: 'Vérification plateau désactivée',
+      autoChamberLightEnabled: 'Lumière auto activée',
+      autoChamberLightDisabled: 'Lumière auto désactivée',
       calibrationSaved: 'Calibration enregistrée !',
       calibrationFailed: 'Échec de la calibration',
       rfidRereadInitiated: 'Lecture RFID initiée',
@@ -2051,7 +2054,6 @@ export default {
     // Camera
     saveThumbnails: 'Enregistrer les vignettes',
     captureFinishPhoto: 'Prendre une photo à la fin',
-    autoChamberLight: 'Lumière du caisson suivant l\'impression',
     noPrintersConfigured: 'Aucune imprimante configurée',
     // Archive settings
     archiveMode: {
@@ -2575,7 +2577,6 @@ export default {
     autoArchivePrints: 'Archiver automatiquement les impressions',
     autoArchiveDescription: 'Sauvegarder automatiquement les fichiers 3MF à la fin des impressions',
     saveThumbnailsDescription: 'Extraire et sauvegarder les images d\'aperçu des fichiers 3MF',
-    autoChamberLightDescription: 'Allume la lumière du caisson au démarrage d\'une impression et l\'éteint peu après la fin. La commande manuelle reste disponible — ce réglage n\'agit qu\'au début et à la fin d\'une impression.',
     captureFinishPhotoDescription: 'Prendre une photo avec la caméra de l\'imprimante à la fin de l\'impression. Bambuddy enregistre un court timelapse pendant l\'impression afin que la photo puisse provenir du moment précédant l\'abaissement du plateau ; le fichier du timelapse est conservé si vous avez activé le timelapse pour cette impression, sinon il est supprimé automatiquement après la capture de la photo.',
     finishPhotoRestorePlate: 'Remonter le plateau pour la photo finale',
     finishPhotoRestorePlateDescription: 'L\'imprimante abaisse le plateau d\'environ 100 mm à la fin d\'une impression, plaçant l\'objet terminé sous le cadrage de la caméra. Bambuddy le remonte juste au-dessus de la dernière couche imprimée, prend la photo, puis le rabaisse. Ignoré si la hauteur d\'impression est inconnue ou si un autre travail est en file d\'attente.',

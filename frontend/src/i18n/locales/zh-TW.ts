@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: '開啟腔室燈',
+    autoChamberLightTooltip: '機箱燈隨列印開關（開始時點亮，結束後熄滅）',
     chamberLightOff: '關閉腔室燈',
     // Files
     files: '檔案',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: '儲存檢測區域失敗',
       plateCheckEnabled: '列印板檢查已啟用',
       plateCheckDisabled: '列印板檢查已停用',
+      autoChamberLightEnabled: '自動機箱燈已開啟',
+      autoChamberLightDisabled: '自動機箱燈已關閉',
       calibrationSaved: '校準已儲存！',
       calibrationFailed: '校準失敗',
       rfidRereadInitiated: '已發起 RFID 重新讀取',
@@ -2096,7 +2099,6 @@ export default {
     // Camera
     saveThumbnails: '儲存縮圖',
     captureFinishPhoto: '拍攝完成照片',
-    autoChamberLight: '機箱燈隨列印開關',
     noPrintersConfigured: '未設定印表機',
     // Archive settings
     archiveMode: {
@@ -2619,7 +2621,6 @@ export default {
     autoArchivePrints: '自動歸檔列印',
     autoArchiveDescription: '列印完成時自動儲存3MF檔案',
     saveThumbnailsDescription: '從3MF檔案中提取並儲存預覽影像',
-    autoChamberLightDescription: '列印開始時開啟機箱燈，結束後不久自動關閉。手動控制仍可使用——此設定只在列印開始與結束時生效。',
     captureFinishPhotoDescription: '列印完成時從印表機攝影機拍照。Bambuddy 會在列印期間錄製一段短縮時攝影，以便從熱床下降前的瞬間取得照片；如果您為本次列印啟用了縮時攝影，檔案將保留，否則會在拍照完成後自動刪除。',
     finishPhotoRestorePlate: '為完成照片抬升熱床',
     finishPhotoRestorePlateDescription: '列印結束時印表機會將熱床下降約 100 mm，使完成的模型落在相機取景範圍之下。Bambuddy 會將熱床抬回到最後一層列印高度略上方，拍攝照片後再次下降。若列印高度未知或佇列中還有其他任務，則跳過此步驟。',
