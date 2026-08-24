@@ -2780,6 +2780,51 @@ def _load_objects_from_archive(archive, printer_id: int, logger) -> None:
         logger.debug("Failed to extract printable objects from archive: %s", e)
 
 
+# Pending "turn the chamber light back off" tasks from the auto_chamber_light
+# setting, keyed by printer id. Held so the task isn't garbage-collected mid-
+# sleep, and so a print starting inside the grace window can cancel it.
+_light_off_tasks: dict[int, asyncio.Task] = {}
+
+# Grace period between print completion and the light going off: the finish-photo
+# fallback still grabs a fresh camera frame in the background, and it needs the
+# chamber lit. Sized for the slowest path — the #2547 plate restore settles for
+# _PLATE_RESTORE_SETTLE_SECONDS before the grab, and that grab may follow an FTP
+# timelapse fetch.
+# ponytail: fixed timer, not a signal. An unusually slow archive/FTP stretch can
+# still push the fallback grab past it and darken the photo; wire the off to the
+# end of _background_finish_photo if that shows up in practice.
+_LIGHT_OFF_GRACE_SECONDS = 120
+
+
+async def _auto_chamber_light(printer_id: int, on: bool) -> None:
+    """Turn the chamber light on at print start / off after it ends.
+
+    No-op unless the printer has ``auto_chamber_light`` enabled. Turning it off
+    waits out `_LIGHT_OFF_GRACE_SECONDS` first; on_print_start cancels that wait
+    when a new print begins inside the window.
+    """
+    logger = logging.getLogger(__name__)
+    try:
+        async with async_session() as db:
+            from backend.app.models.printer import Printer
+
+            enabled = await db.scalar(select(Printer.auto_chamber_light).where(Printer.id == printer_id))
+        if not enabled:
+            return
+
+        if not on:
+            await asyncio.sleep(_LIGHT_OFF_GRACE_SECONDS)
+
+        client = printer_manager.get_client(printer_id)
+        if client:
+            logger.info("[AUTO-LIGHT] Turning chamber light %s for printer %s", "on" if on else "off", printer_id)
+            client.set_chamber_light(on)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("[AUTO-LIGHT] Failed to turn chamber light %s for printer %s: %s", on, printer_id, e)
+
+
 async def on_print_start(printer_id: int, data: dict):
     """Handle print start - archive the 3MF file immediately."""
     logger = logging.getLogger(__name__)
@@ -2866,6 +2911,13 @@ async def on_print_start(printer_id: int, data: dict):
             await smart_plug_manager.on_print_start(printer_id, db)
     except Exception as e:
         logger.warning("Smart plug on_print_start failed: %s", e)
+
+    # Chamber light automation: light on while printing (auto_chamber_light).
+    # Cancels a pending off from a print that ended moments ago.
+    pending_off = _light_off_tasks.pop(printer_id, None)
+    if pending_off:
+        pending_off.cancel()
+    await _auto_chamber_light(printer_id, True)
 
     async with async_session() as db:
         from backend.app.models.printer import Printer
@@ -5339,6 +5391,10 @@ async def on_print_complete(printer_id: int, data: dict):
     # nothing else legitimately needs the bytes; keeping them would only risk
     # handing a stale file to the next print if it reuses the same name.
     clear_3mf_cache(printer_id)
+
+    # Chamber light automation: schedule the light off (auto_chamber_light).
+    # Backgrounded — it waits out the finish-photo grace window first.
+    _light_off_tasks[printer_id] = asyncio.create_task(_auto_chamber_light(printer_id, False))
 
     try:
         ws_data = {

@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: '打开腔室灯',
+    autoChamberLightTooltip: '腔体灯随打印开关（开始时点亮，结束后熄灭）',
     chamberLightOff: '关闭腔室灯',
     // Files
     files: '文件',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: '保存检测区域失败',
       plateCheckEnabled: '打印板检查已启用',
       plateCheckDisabled: '打印板检查已禁用',
+      autoChamberLightEnabled: '自动腔体灯已开启',
+      autoChamberLightDisabled: '自动腔体灯已关闭',
       calibrationSaved: '校准已保存！',
       calibrationFailed: '校准失败',
       rfidRereadInitiated: '已发起 RFID 重新读取',

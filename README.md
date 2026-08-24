@@ -172,6 +172,7 @@ Optional but recommended — drop the [`slicer-api/` Compose stack](slicer-api/R
 - External camera support (MJPEG, RTSP, HTTP snapshot, USB/V4L2) with layer-based timelapse
 - **Build plate empty detection** - Auto-pause print if objects detected on plate (multi-reference calibration, ROI adjustment)
 - Fan monitoring and **speed control** for part-cooling, auxiliary, and chamber fans (0–100% with customizable quick-select presets)
+- **Chamber light follows the print** — optional per printer (off by default, wand button in the printer card's Controls row): the chamber light comes on when a print starts and goes off again shortly after it ends, with a grace window so the finish photo is still taken on a lit chamber. Manual light control is unaffected — the automation only acts at the start and the end of a print
 - Printer control (stop, pause, resume, chamber light, print speed, **airduct mode** for P2S/H2*, **temperature setpoints** for nozzle / bed / **chamber heater** on H2C/H2D/H2DPro/H2S/X2D, **Z-jog / XY-jog / extruder jog**, customizable temperature & fan presets under Settings → Workflow)
 - **Status badges on printer card**: SD Card (green / red), Enclosure Door (green / yellow — X1/P1S/P2S/H2*), Airduct Mode (cooling / heating)
 - **Force Refresh** menu item — request a full status push from the printer without reconnecting

@@ -385,6 +385,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: "Увімкнути світло в камері",
+    autoChamberLightTooltip: 'Підсвітка камери слідує за друком (вмикається на старті, вимикається після завершення)',
     chamberLightOff: "Вимкнути світло в камері",
     // Files
     files: "Файли",
@@ -488,6 +489,8 @@ export default {
       failedToSaveDetectionArea: "Не вдалося зберегти область виявлення",
       plateCheckEnabled: "Перевірку друкарської пластини ввімкнено",
       plateCheckDisabled: "Перевірку друкарської пластини вимкнено",
+      autoChamberLightEnabled: 'Автопідсвітку увімкнено',
+      autoChamberLightDisabled: 'Автопідсвітку вимкнено',
       calibrationSaved: "Калібрування збережено!",
       calibrationFailed: "Не вдалося виконати калібрування",
       rfidRereadInitiated: "Розпочато повторне зчитування RFID",

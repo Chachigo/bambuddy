@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: '開啟腔室燈',
+    autoChamberLightTooltip: '機箱燈隨列印開關（開始時點亮，結束後熄滅）',
     chamberLightOff: '關閉腔室燈',
     // Files
     files: '檔案',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: '儲存檢測區域失敗',
       plateCheckEnabled: '列印板檢查已啟用',
       plateCheckDisabled: '列印板檢查已停用',
+      autoChamberLightEnabled: '自動機箱燈已開啟',
+      autoChamberLightDisabled: '自動機箱燈已關閉',
       calibrationSaved: '校準已儲存！',
       calibrationFailed: '校準失敗',
       rfidRereadInitiated: '已發起 RFID 重新讀取',

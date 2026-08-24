@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'Allumer la lumière de la chambre',
+    autoChamberLightTooltip: 'La lumière du caisson suit l\'impression (allumée au démarrage, éteinte après la fin)',
     chamberLightOff: 'Éteindre la lumière de la chambre',
     // Files
     files: 'Fichiers',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: 'Échec enregistrement zone',
       plateCheckEnabled: 'Vérification plateau activée',
       plateCheckDisabled: 'Vérification plateau désactivée',
+      autoChamberLightEnabled: 'Lumière auto activée',
+      autoChamberLightDisabled: 'Lumière auto désactivée',
       calibrationSaved: 'Calibration enregistrée !',
       calibrationFailed: 'Échec de la calibration',
       rfidRereadInitiated: 'Lecture RFID initiée',

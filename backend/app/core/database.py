@@ -2101,6 +2101,9 @@ async def run_migrations(conn):
     await _safe_execute(conn, "ALTER TABLE library_folders ADD COLUMN external_show_hidden BOOLEAN DEFAULT 0")
     await _safe_execute(conn, "ALTER TABLE library_folders ADD COLUMN external_path VARCHAR(500)")
 
+    # Migration: Add auto_chamber_light column to printers
+    await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN auto_chamber_light BOOLEAN DEFAULT 0")
+
     # Migration: Add plate_detection_enabled column to printers
     await _safe_execute(conn, "ALTER TABLE printers ADD COLUMN plate_detection_enabled BOOLEAN DEFAULT 0")
 

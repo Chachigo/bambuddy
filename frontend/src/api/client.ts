@@ -372,6 +372,7 @@ export interface Printer {
   external_camera_enabled: boolean;
   external_camera_snapshot_url: string | null;  // optional single-frame override (#1177)
   camera_rotation: number;  // 0, 90, 180, 270 degrees
+  auto_chamber_light: boolean;  // Chamber light follows the print
   plate_detection_enabled: boolean;  // Check plate before print
   plate_detection_roi?: PlateDetectionROI;  // ROI for plate detection
   created_at: string;
@@ -612,6 +613,7 @@ export interface PrinterCreate {
   external_camera_enabled?: boolean;
   external_camera_snapshot_url?: string | null;
   camera_rotation?: number;
+  auto_chamber_light?: boolean;
   plate_detection_enabled?: boolean;
   plate_detection_roi?: PlateDetectionROI;
 }

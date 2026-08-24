@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'Accendi luce camera',
+    autoChamberLightTooltip: 'La luce della camera segue la stampa (accesa all\'avvio, spenta dopo la fine)',
     chamberLightOff: 'Spegni luce camera',
     // Files
     files: 'File',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: 'Impossibile salvare area rilevamento',
       plateCheckEnabled: 'Controllo piatto abilitato',
       plateCheckDisabled: 'Controllo piatto disabilitato',
+      autoChamberLightEnabled: 'Luce automatica attiva',
+      autoChamberLightDisabled: 'Luce automatica disattivata',
       calibrationSaved: 'Calibrazione salvata!',
       calibrationFailed: 'Calibrazione non riuscita',
       rfidRereadInitiated: 'Rilettura RFID avviata',

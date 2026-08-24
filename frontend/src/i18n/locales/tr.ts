@@ -382,6 +382,7 @@ export default {
     },
     // Hazne ışığı
     chamberLightOn: 'Hazne ışığını aç',
+    autoChamberLightTooltip: 'Hazne ışığı baskıyı takip eder (başlangıçta açılır, bitişten sonra kapanır)',
     chamberLightOff: 'Hazne ışığını kapat',
     // Dosyalar
     files: 'Dosyalar',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: 'Algılama alanı kaydedilemedi',
       plateCheckEnabled: 'Plaka kontrolü etkinleştirildi',
       plateCheckDisabled: 'Plaka kontrolü devre dışı bırakıldı',
+      autoChamberLightEnabled: 'Otomatik ışık açık',
+      autoChamberLightDisabled: 'Otomatik ışık kapalı',
       calibrationSaved: 'Kalibrasyon kaydedildi!',
       calibrationFailed: 'Kalibrasyon başarısız',
       rfidRereadInitiated: 'RFID yeniden okuma başlatıldı',

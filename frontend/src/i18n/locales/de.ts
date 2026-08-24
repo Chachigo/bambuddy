@@ -382,6 +382,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'Kammerbeleuchtung einschalten',
+    autoChamberLightTooltip: 'Kammerlicht folgt dem Druck (an beim Start, aus nach dem Ende)',
     chamberLightOff: 'Kammerbeleuchtung ausschalten',
     // Files
     files: 'Dateien',
@@ -485,6 +486,8 @@ export default {
       failedToSaveDetectionArea: 'Erkennungsbereich konnte nicht gespeichert werden',
       plateCheckEnabled: 'Plattenprüfung aktiviert',
       plateCheckDisabled: 'Plattenprüfung deaktiviert',
+      autoChamberLightEnabled: 'Auto-Kammerlicht an',
+      autoChamberLightDisabled: 'Auto-Kammerlicht aus',
       calibrationSaved: 'Kalibrierung gespeichert!',
       calibrationFailed: 'Kalibrierung fehlgeschlagen',
       rfidRereadInitiated: 'RFID-Neueinlesen gestartet',

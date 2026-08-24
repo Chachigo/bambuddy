@@ -385,6 +385,7 @@ export default {
     },
     // Chamber light
     chamberLightOn: 'Turn on chamber light',
+    autoChamberLightTooltip: 'Chamber light follows the print (on at start, off after the end)',
     chamberLightOff: 'Turn off chamber light',
     // Files
     files: 'Files',
@@ -488,6 +489,8 @@ export default {
       failedToSaveDetectionArea: 'Failed to save detection area',
       plateCheckEnabled: 'Plate check enabled',
       plateCheckDisabled: 'Plate check disabled',
+      autoChamberLightEnabled: 'Auto chamber light on',
+      autoChamberLightDisabled: 'Auto chamber light off',
       calibrationSaved: 'Calibration saved!',
       calibrationFailed: 'Calibration failed',
       rfidRereadInitiated: 'RFID re-read initiated',
