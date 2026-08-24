@@ -383,6 +383,7 @@ export default {
     // Chamber light
     chamberLightOn: 'Kammerbeleuchtung einschalten',
     autoChamberLightTooltip: 'Kammerlicht folgt dem Druck (an beim Start, aus nach dem Ende)',
+    cameraChamberLightTooltip: 'Kammerlicht an, solange jemand die Kamera dieses Druckers ansieht',
     chamberLightOff: 'Kammerbeleuchtung ausschalten',
     // Files
     files: 'Dateien',
@@ -488,6 +489,8 @@ export default {
       plateCheckDisabled: 'Plattenprüfung deaktiviert',
       autoChamberLightEnabled: 'Auto-Kammerlicht an',
       autoChamberLightDisabled: 'Auto-Kammerlicht aus',
+      cameraChamberLightEnabled: 'Kameralicht an',
+      cameraChamberLightDisabled: 'Kameralicht aus',
       calibrationSaved: 'Kalibrierung gespeichert!',
       calibrationFailed: 'Kalibrierung fehlgeschlagen',
       rfidRereadInitiated: 'RFID-Neueinlesen gestartet',

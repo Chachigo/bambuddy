@@ -39,6 +39,8 @@ class Printer(Base):
     # Plate detection - check if build plate is empty before starting print
     # Chamber light follows the print on this printer: on at start, off after the end.
     auto_chamber_light: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Chamber light on while someone is watching this printer's built-in camera.
+    camera_chamber_light: Mapped[bool] = mapped_column(Boolean, default=False)
     plate_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # ROI for plate detection (percentages: 0.0-1.0)
     plate_detection_roi_x: Mapped[float | None] = mapped_column(Float, nullable=True)  # X start %

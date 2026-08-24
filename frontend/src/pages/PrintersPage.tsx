@@ -79,6 +79,7 @@ import {
   Flame,
   Repeat,
   Wand2,
+  Videotape,
   Snowflake,
   Gauge,
   DoorOpen,
@@ -2760,6 +2761,16 @@ function PrinterCard({
     onError: (error: Error) => showToast(error.message || t('printers.toast.failedToUpdateSetting'), 'error'),
   });
 
+  // Camera-viewer chamber-light setting mutation (per printer)
+  const cameraChamberLightMutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updatePrinter(printer.id, { camera_chamber_light: enabled }),
+    onSuccess: (_data, enabled) => {
+      queryClient.invalidateQueries({ queryKey: ['printers'] });
+      showToast(enabled ? t('printers.toast.cameraChamberLightEnabled') : t('printers.toast.cameraChamberLightDisabled'));
+    },
+    onError: (error: Error) => showToast(error.message || t('printers.toast.failedToUpdateSetting'), 'error'),
+  });
+
   // Plate detection setting mutation
   const plateDetectionMutation = useMutation({
     mutationFn: (enabled: boolean) => api.updatePrinter(printer.id, { plate_detection_enabled: enabled }),
@@ -4450,6 +4461,20 @@ function PrinterCard({
                         title={!hasPermission('printers:update') ? t('printers.permission.noControl') : t('printers.autoChamberLightTooltip')}
                       >
                         <Wand2 className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
+                      </button>
+
+                      {/* Chamber light follows the camera: on while someone watches the stream. */}
+                      <button
+                        onClick={() => cameraChamberLightMutation.mutate(!printer.camera_chamber_light)}
+                        disabled={cameraChamberLightMutation.isPending || !hasPermission('printers:update')}
+                        className={`${iconControlClass} ${
+                          printer.camera_chamber_light
+                            ? 'bg-yellow-50 dark:bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/20'
+                            : 'bg-bambu-dark text-bambu-gray/50 hover:bg-bambu-dark-tertiary hover:text-white'
+                        }`}
+                        title={!hasPermission('printers:update') ? t('printers.permission.noControl') : t('printers.cameraChamberLightTooltip')}
+                      >
+                        <Videotape className="w-[var(--pc-i4,1rem)] h-[var(--pc-i4,1rem)]" />
                       </button>
 
                       {/* Airduct Mode (P2S / X2D / H2*) */}

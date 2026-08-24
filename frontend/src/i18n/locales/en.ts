@@ -386,6 +386,7 @@ export default {
     // Chamber light
     chamberLightOn: 'Turn on chamber light',
     autoChamberLightTooltip: 'Chamber light follows the print (on at start, off after the end)',
+    cameraChamberLightTooltip: 'Chamber light on while someone is watching this printer\'s camera',
     chamberLightOff: 'Turn off chamber light',
     // Files
     files: 'Files',
@@ -491,6 +492,8 @@ export default {
       plateCheckDisabled: 'Plate check disabled',
       autoChamberLightEnabled: 'Auto chamber light on',
       autoChamberLightDisabled: 'Auto chamber light off',
+      cameraChamberLightEnabled: 'Camera light on',
+      cameraChamberLightDisabled: 'Camera light off',
       calibrationSaved: 'Calibration saved!',
       calibrationFailed: 'Calibration failed',
       rfidRereadInitiated: 'RFID re-read initiated',

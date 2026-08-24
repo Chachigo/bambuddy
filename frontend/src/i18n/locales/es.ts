@@ -383,6 +383,7 @@ export default {
     // Chamber light
     chamberLightOn: 'Encender luz de la cámara',
     autoChamberLightTooltip: 'La luz de la cámara sigue la impresión (encendida al iniciar, apagada tras terminar)',
+    cameraChamberLightTooltip: 'Luz de la cámara encendida mientras alguien mira la cámara de esta impresora',
     chamberLightOff: 'Apagar luz de la cámara',
     // Files
     files: 'Archivos',
@@ -488,6 +489,8 @@ export default {
       plateCheckDisabled: 'Comprobación de cama desactivada',
       autoChamberLightEnabled: 'Luz automática activada',
       autoChamberLightDisabled: 'Luz automática desactivada',
+      cameraChamberLightEnabled: 'Luz de cámara activada',
+      cameraChamberLightDisabled: 'Luz de cámara desactivada',
       calibrationSaved: '¡Calibración guardada!',
       calibrationFailed: 'Error en la calibración',
       rfidRereadInitiated: 'Relectura de RFID iniciada',

@@ -867,6 +867,46 @@ async def create_stream_token(
     return {"token": await create_camera_stream_token()}
 
 
+# Printers whose chamber light *we* switched on for a camera viewer. The detach
+# path only ever undoes its own doing: a light that was already on when the
+# viewer arrived (manual click, or the print automation) is left alone.
+_camera_lit_printers: set[int] = set()
+
+
+def _camera_light_on(printer_id: int) -> None:
+    """Light the chamber for an arriving viewer."""
+    from backend.app.services.printer_manager import printer_manager
+
+    if printer_id in _camera_lit_printers:
+        return
+    client = printer_manager.get_client(printer_id)
+    if client is None or client.state.chamber_light:
+        return
+    logger.info("Turning chamber light on for camera viewer of printer %s", printer_id)
+    if client.set_chamber_light(True):
+        _camera_lit_printers.add(printer_id)
+
+
+def _camera_light_off(printer_id: int, keep_on: bool) -> None:
+    """Undo _camera_light_on once the last viewer of a printer leaves.
+
+    ``keep_on`` is the print automation's claim on the light — a print that
+    started while someone was watching must not go dark when they close the tab.
+    The printer is dropped from the set either way: the light is no longer ours.
+    """
+    if printer_id not in _camera_lit_printers:
+        return
+    _camera_lit_printers.discard(printer_id)
+    if keep_on:
+        return
+    from backend.app.services.printer_manager import printer_manager
+
+    client = printer_manager.get_client(printer_id)
+    if client:
+        logger.info("Turning chamber light off — last camera viewer of printer %s left", printer_id)
+        client.set_chamber_light(False)
+
+
 @router.get("/{printer_id}/camera/stream")
 async def camera_stream(
     printer_id: int,
@@ -1071,6 +1111,10 @@ async def camera_stream(
         broadcaster.subscriber_count,
     )
 
+    # Chamber light follows the camera, when the printer opted in.
+    if printer.camera_chamber_light:
+        _camera_light_on(printer_id)
+
     async def _is_disconnected() -> bool:
         try:
             return await request.is_disconnected()
@@ -1081,6 +1125,13 @@ async def camera_stream(
 
     def _log_detach(remaining: int) -> None:
         logger.info("Camera viewer detached from %s (subscribers=%d)", fanout_key, remaining)
+        if remaining == 0:
+            from backend.app.services.printer_manager import printer_manager
+
+            _camera_light_off(
+                printer_id,
+                keep_on=printer.auto_chamber_light and printer_manager.is_print_active(printer_id),
+            )
 
     async def _generate():
         async for chunk in iter_subscriber(

@@ -386,6 +386,7 @@ export default {
     // Chamber light
     chamberLightOn: "Увімкнути світло в камері",
     autoChamberLightTooltip: 'Підсвітка камери слідує за друком (вмикається на старті, вимикається після завершення)',
+    cameraChamberLightTooltip: 'Підсвітка камери увімкнена, поки хтось дивиться камеру цього принтера',
     chamberLightOff: "Вимкнути світло в камері",
     // Files
     files: "Файли",
@@ -491,6 +492,8 @@ export default {
       plateCheckDisabled: "Перевірку друкарської пластини вимкнено",
       autoChamberLightEnabled: 'Автопідсвітку увімкнено',
       autoChamberLightDisabled: 'Автопідсвітку вимкнено',
+      cameraChamberLightEnabled: 'Підсвітку для камери увімкнено',
+      cameraChamberLightDisabled: 'Підсвітку для камери вимкнено',
       calibrationSaved: "Калібрування збережено!",
       calibrationFailed: "Не вдалося виконати калібрування",
       rfidRereadInitiated: "Розпочато повторне зчитування RFID",

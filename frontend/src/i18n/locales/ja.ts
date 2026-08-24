@@ -382,6 +382,7 @@ export default {
     // Chamber light
     chamberLightOn: 'チャンバーライトをオンにしました',
     autoChamberLightTooltip: 'チャンバーライトが印刷に追従（開始時に点灯、終了後に消灯）',
+    cameraChamberLightTooltip: 'このプリンターのカメラを見ている間はチャンバーライトを点灯',
     chamberLightOff: 'チャンバーライトをオフにしました',
     // Files
     files: 'ファイル',
@@ -487,6 +488,8 @@ export default {
       plateCheckDisabled: 'プレートチェックを無効にしました',
       autoChamberLightEnabled: 'ライト自動制御 オン',
       autoChamberLightDisabled: 'ライト自動制御 オフ',
+      cameraChamberLightEnabled: 'カメラ連動ライト オン',
+      cameraChamberLightDisabled: 'カメラ連動ライト オフ',
       calibrationSaved: 'キャリブレーションを保存しました！',
       calibrationFailed: 'キャリブレーションに失敗しました',
       rfidRereadInitiated: 'RFID再読み取りを開始しました',
