@@ -383,6 +383,7 @@ export default {
     // Chamber light
     chamberLightOn: '開啟腔室燈',
     autoChamberLightTooltip: '機箱燈隨列印開關（開始時點亮，結束後熄滅）',
+    cameraChamberLightTooltip: '有人查看該印表機攝影機時保持機箱燈點亮',
     chamberLightOff: '關閉腔室燈',
     // Files
     files: '檔案',
@@ -488,6 +489,8 @@ export default {
       plateCheckDisabled: '列印板檢查已停用',
       autoChamberLightEnabled: '自動機箱燈已開啟',
       autoChamberLightDisabled: '自動機箱燈已關閉',
+      cameraChamberLightEnabled: '攝影機連動燈已開啟',
+      cameraChamberLightDisabled: '攝影機連動燈已關閉',
       calibrationSaved: '校準已儲存！',
       calibrationFailed: '校準失敗',
       rfidRereadInitiated: '已發起 RFID 重新讀取',

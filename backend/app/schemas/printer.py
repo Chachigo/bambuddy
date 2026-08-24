@@ -76,6 +76,7 @@ class PrinterUpdate(BaseModel):
     external_camera_snapshot_url: str | None = None  # #1177
     camera_rotation: int | None = None  # 0, 90, 180, 270 degrees
     auto_chamber_light: bool | None = None
+    camera_chamber_light: bool | None = None
     plate_detection_enabled: bool | None = None
     plate_detection_roi: PlateDetectionROI | None = None
 
@@ -96,6 +97,7 @@ class PrinterResponse(PrinterBase):
     external_camera_snapshot_url: str | None = None  # #1177
     camera_rotation: int = 0  # 0, 90, 180, 270 degrees
     auto_chamber_light: bool = False
+    camera_chamber_light: bool = False
     plate_detection_enabled: bool = False
     plate_detection_roi: PlateDetectionROI | None = None
     created_at: datetime
@@ -125,6 +127,7 @@ class PrinterResponse(PrinterBase):
             "supports_nozzle_flow_type": supports_nozzle_flow_type(printer.model),
             "print_hours_offset": printer.print_hours_offset,
             "auto_chamber_light": printer.auto_chamber_light,
+            "camera_chamber_light": printer.camera_chamber_light,
             "plate_detection_enabled": printer.plate_detection_enabled,
             "created_at": printer.created_at,
             "updated_at": printer.updated_at,

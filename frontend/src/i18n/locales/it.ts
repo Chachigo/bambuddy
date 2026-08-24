@@ -383,6 +383,7 @@ export default {
     // Chamber light
     chamberLightOn: 'Accendi luce camera',
     autoChamberLightTooltip: 'La luce della camera segue la stampa (accesa all\'avvio, spenta dopo la fine)',
+    cameraChamberLightTooltip: 'Luce della camera accesa finché qualcuno guarda la telecamera di questa stampante',
     chamberLightOff: 'Spegni luce camera',
     // Files
     files: 'File',
@@ -488,6 +489,8 @@ export default {
       plateCheckDisabled: 'Controllo piatto disabilitato',
       autoChamberLightEnabled: 'Luce automatica attiva',
       autoChamberLightDisabled: 'Luce automatica disattivata',
+      cameraChamberLightEnabled: 'Luce telecamera attiva',
+      cameraChamberLightDisabled: 'Luce telecamera disattivata',
       calibrationSaved: 'Calibrazione salvata!',
       calibrationFailed: 'Calibrazione non riuscita',
       rfidRereadInitiated: 'Rilettura RFID avviata',

@@ -383,6 +383,7 @@ export default {
     // Hazne ışığı
     chamberLightOn: 'Hazne ışığını aç',
     autoChamberLightTooltip: 'Hazne ışığı baskıyı takip eder (başlangıçta açılır, bitişten sonra kapanır)',
+    cameraChamberLightTooltip: 'Bu yazıcının kamerasını izleyen biri varken hazne ışığı açık kalır',
     chamberLightOff: 'Hazne ışığını kapat',
     // Dosyalar
     files: 'Dosyalar',
@@ -488,6 +489,8 @@ export default {
       plateCheckDisabled: 'Plaka kontrolü devre dışı bırakıldı',
       autoChamberLightEnabled: 'Otomatik ışık açık',
       autoChamberLightDisabled: 'Otomatik ışık kapalı',
+      cameraChamberLightEnabled: 'Kamera ışığı açık',
+      cameraChamberLightDisabled: 'Kamera ışığı kapalı',
       calibrationSaved: 'Kalibrasyon kaydedildi!',
       calibrationFailed: 'Kalibrasyon başarısız',
       rfidRereadInitiated: 'RFID yeniden okuma başlatıldı',
