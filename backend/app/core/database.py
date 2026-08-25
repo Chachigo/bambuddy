@@ -594,16 +594,64 @@ async def _migrate_encrypt_legacy_secrets() -> None:
         )
 
 
+# PostgreSQL SQLSTATE codes meaning "this DDL statement has already been applied".
+# We classify on these rather than on the error text because the server renders
+# messages in its own ``lc_messages`` locale: a Russian-locale server answers a
+# duplicate ADD COLUMN with "уже существует", which no English substring check can
+# recognise. That made Bambuddy unstartable on every non-English PostgreSQL server,
+# fresh or existing — create_all() runs before run_migrations(), so on a new database
+# essentially every ADD COLUMN below is expected to come back as a duplicate (#2949).
+_PG_ALREADY_APPLIED = frozenset(
+    {
+        "42701",  # duplicate_column — ALTER TABLE ADD COLUMN
+        "42P07",  # duplicate_table — CREATE TABLE, CREATE INDEX
+        "42710",  # duplicate_object — ADD CONSTRAINT, CREATE TRIGGER
+        "23505",  # unique_violation — duplicate key
+    }
+)
+
+# undefined_column. Idempotency only for RENAME COLUMN (the rename already ran);
+# on any other statement a missing column means a broken schema, not a re-run.
+_PG_UNDEFINED_COLUMN = "42703"
+
+
+def _sqlstate(exc) -> str | None:
+    """Return the PostgreSQL SQLSTATE behind a SQLAlchemy error, or None.
+
+    None on SQLite, whose DBAPI exceptions carry no such code — and which never
+    localises its messages, so the text match below stays correct there.
+    """
+    orig = getattr(exc, "orig", None)
+    for attr in ("sqlstate", "pgcode"):
+        code = getattr(orig, attr, None)
+        if code:
+            return str(code)
+    return None
+
+
+def _is_already_applied(exc, sql: str) -> bool:
+    """Return True if a failed DDL statement had simply already been applied."""
+    is_rename = "rename column" in sql.lower()
+
+    state = _sqlstate(exc)
+    if state is not None:
+        return state in _PG_ALREADY_APPLIED or (state == _PG_UNDEFINED_COLUMN and is_rename)
+
+    msg = str(exc).lower()
+    if any(k in msg for k in ("already exists", "duplicate key", "duplicate column name", "no such column")):
+        return True
+    return is_rename and "column" in msg and "does not exist" in msg
+
+
 async def _safe_execute(conn, sql):
     """Execute a DDL migration statement, silently ignoring idempotency errors.
 
-    'already exists', 'duplicate column name' (SQLite ADD COLUMN), 'no such column'
-    (SQLite RENAME COLUMN), 'duplicate key', and the compound
-    'column … does not exist' (PostgreSQL RENAME COLUMN idempotency) are swallowed
-    so that re-running DDL migrations is safe.  The compound check additionally
-    requires the SQL to be a RENAME COLUMN statement so that "does not exist" errors
-    from ADD COLUMN or CREATE INDEX (which would indicate schema corruption, not
-    idempotency) are never silently swallowed.
+    Statements that had already been applied are swallowed so that re-running DDL
+    migrations is safe — see :func:`_is_already_applied` for how that is decided
+    (SQLSTATE on PostgreSQL, message text on SQLite). Idempotency for a missing
+    column is narrowed to RENAME COLUMN, so a missing column on ADD COLUMN or
+    CREATE INDEX — which would indicate schema corruption, not a re-run — is never
+    silently swallowed.
     Any other error is logged and re-raised — callers must not assume silent
     recovery, as a failure will abort the migration sequence and prevent
     application startup.
@@ -621,14 +669,7 @@ async def _safe_execute(conn, sql):
         async with conn.begin_nested():
             await conn.execute(text(sql))
     except (OperationalError, ProgrammingError) as exc:
-        msg = str(exc).lower()
-        # Only swallow "column … does not exist" for RENAME COLUMN — not for ADD COLUMN
-        # or CREATE INDEX where it would indicate schema corruption, not idempotency.
-        column_not_exists = "rename column" in sql.lower() and "column" in msg and "does not exist" in msg
-        if (
-            not any(k in msg for k in ("already exists", "duplicate key", "duplicate column name", "no such column"))
-            and not column_not_exists
-        ):
+        if not _is_already_applied(exc, sql):
             logger.error("Migration statement failed: %s | SQL: %.200s", exc, sql)
             raise
 
@@ -1303,8 +1344,8 @@ async def run_migrations(conn):
 
     # Migration: Add source_archive_id column to pipeline_runs (#1425 PR B follow-up).
     # Allows a pipeline run to source from an archive's source 3MF in addition
-    # to a library file. Idempotent — _safe_execute swallows the "already exists"
-    # case on both SQLite and Postgres.
+    # to a library file. Idempotent — _safe_execute swallows an already-applied
+    # statement on both SQLite and Postgres.
     await _safe_execute(
         conn,
         "ALTER TABLE pipeline_runs ADD COLUMN source_archive_id INTEGER REFERENCES print_archives(id) ON DELETE SET NULL",
@@ -2065,7 +2106,7 @@ async def run_migrations(conn):
     # timestamp; the type differs by dialect (SQLite DATETIME vs Postgres
     # TIMESTAMP) so an existing-DB upgrade doesn't hit "type datetime does not
     # exist" on Postgres. On a fresh DB create_all() already built the column, so
-    # the ALTER is swallowed as "already exists".
+    # the ALTER is swallowed as already applied.
     #
     # Placed AFTER the print_queue_new2 table-recreate above: that recreate
     # (SQLite-only, and only on ancient DBs whose archive_id is still NOT NULL)
@@ -3259,17 +3300,17 @@ async def run_migrations(conn):
     # SQLite does not support ALTER TABLE ADD CONSTRAINT — handled by __table_args__ at creation.
     # Runs AFTER the backfill so Fall B rows don't fail constraint validation.
     if not is_sqlite():
+        add_constraint = (
+            "ALTER TABLE oidc_providers ADD CONSTRAINT ck_auto_link_requires_verified_email_claim "
+            "CHECK (auto_link_existing_accounts = FALSE OR email_claim != 'email' OR require_email_verified = TRUE)"
+        )
         try:
             async with conn.begin_nested():
-                await conn.execute(
-                    text(
-                        "ALTER TABLE oidc_providers ADD CONSTRAINT ck_auto_link_requires_verified_email_claim "
-                        "CHECK (auto_link_existing_accounts = FALSE OR email_claim != 'email' OR require_email_verified = TRUE)"
-                    )
-                )
+                await conn.execute(text(add_constraint))
         except (OperationalError, ProgrammingError) as exc:
-            msg = str(exc).lower()
-            if "already exists" not in msg:
+            # Classified by SQLSTATE, not by message text: a non-English server
+            # reports the constraint as already present in its own language (#2949).
+            if not _is_already_applied(exc, add_constraint):
                 logger.error(
                     "Security constraint migration FAILED — auto_link safety constraint may not be enforced: %s",
                     exc,
@@ -4336,7 +4377,7 @@ async def run_migrations(conn):
     # ordering was arbitrary. Nullable; the timestamp type differs by dialect
     # (SQLite DATETIME vs Postgres TIMESTAMP) so an existing-DB upgrade doesn't hit
     # "type datetime does not exist" on Postgres. On a fresh DB create_all() already
-    # built the column, so the ALTER is swallowed as "already exists".
+    # built the column, so the ALTER is swallowed as already applied.
     if is_sqlite():
         await _safe_execute(conn, "ALTER TABLE library_files ADD COLUMN fs_modified_at DATETIME")
         await _safe_execute(conn, "ALTER TABLE library_folders ADD COLUMN fs_modified_at DATETIME")
