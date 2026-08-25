@@ -65,9 +65,15 @@ class NotificationProviderBase(BaseModel):
         default=False, description="Notify when AMS-HT temperature exceeds threshold"
     )
 
-    # Event triggers - Home Assistant sensors (#1148)
+    # Event triggers - Home Assistant sensors bound to a printer (#1148)
     on_ha_sensor_alert: bool = Field(
         default=False, description="Notify when a bound Home Assistant sensor enters its alert state"
+    )
+
+    # Event triggers - Home Assistant sensors bound to a storage location (#2824)
+    on_location_ha_sensor_alert: bool = Field(
+        default=False,
+        description="Notify when a Home Assistant sensor bound to a storage location enters its alert state",
     )
 
     # Event triggers - Build plate detection
@@ -81,6 +87,19 @@ class NotificationProviderBase(BaseModel):
 
     # Event triggers - First layer complete
     on_first_layer_complete: bool = Field(default=False, description="Notify when first layer completes")
+
+    # Event triggers - Inventory stock alerts
+    # Missing from this schema until now, so every payload naming them was
+    # dropped silently: the UI's toggles round-tripped as 200 OK and the row
+    # never changed, and _provider_to_dict never returned them either, so they
+    # always read back off. The columns and the sending code have existed since
+    # the inventory forecast landed.
+    on_stock_reorder_alert: bool = Field(
+        default=False, description="Notify when an inventory SKU hits its reorder point"
+    )
+    on_stock_break_alert: bool = Field(
+        default=False, description="Notify when stock will run out before replenishment arrives"
+    )
 
     # Event triggers - Print queue
     on_queue_job_added: bool = Field(default=False, description="Notify when job is added to queue")
@@ -159,8 +178,11 @@ class NotificationProviderUpdate(BaseModel):
     on_ams_ht_humidity_high: bool | None = None
     on_ams_ht_temperature_high: bool | None = None
 
-    # Event triggers - Home Assistant sensors (#1148)
+    # Event triggers - Home Assistant sensors bound to a printer (#1148)
     on_ha_sensor_alert: bool | None = None
+
+    # Event triggers - Home Assistant sensors bound to a storage location (#2824)
+    on_location_ha_sensor_alert: bool | None = None
 
     # Event triggers - Build plate detection
     on_plate_not_empty: bool | None = None
@@ -171,6 +193,10 @@ class NotificationProviderUpdate(BaseModel):
 
     # Event triggers - First layer complete
     on_first_layer_complete: bool | None = None
+
+    # Event triggers - Inventory stock alerts
+    on_stock_reorder_alert: bool | None = None
+    on_stock_break_alert: bool | None = None
 
     # Event triggers - Print queue
     on_queue_job_added: bool | None = None

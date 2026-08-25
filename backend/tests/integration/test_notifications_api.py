@@ -446,6 +446,71 @@ class TestNotificationsAPI:
         response = await async_client.get(f"/api/v1/notifications/{provider.id}")
         assert response.json()["on_billing_charge_failed"] is False
 
+    # Per-event toggles that live only in these hand-maintained field maps.
+    #
+    # These have to be exercised through the route, not the ORM: both
+    # directions of notifications.py are hand-maintained field-by-field maps,
+    # and a column missing from either one is invisible to any test that
+    # builds NotificationProvider objects directly. The failure mode is
+    # silent — NotificationProviderResponse inherits the field from
+    # NotificationProviderBase, so FastAPI serialises the schema default
+    # (False) instead of raising on the missing key, and the UI reads a
+    # toggle that is on in the database as off.
+    #
+    # The Home Assistant pair (#1148, #2824) was the first to be caught this
+    # way. The stock pair was caught by the same reasoning: its columns, its
+    # templates, its sending code and its whole UI shipped, but the schema
+    # never carried the fields, so Pydantic dropped them from every payload and
+    # the toggles could not be turned on at all.
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        "field",
+        ["on_ha_sensor_alert", "on_location_ha_sensor_alert", "on_stock_reorder_alert", "on_stock_break_alert"],
+    )
+    async def test_create_persists_and_returns_the_toggle(self, async_client: AsyncClient, field: str):
+        response = await async_client.post(
+            "/api/v1/notifications/",
+            json={
+                "name": "Sensor Alert Test",
+                "provider_type": "ntfy",
+                "config": {"server": "https://ntfy.sh", "topic": "test"},
+                field: True,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()[field] is True
+
+        # Re-read it: a value dropped by the create constructor but echoed
+        # from the request body would still pass the assertion above.
+        provider_id = response.json()["id"]
+        response = await async_client.get(f"/api/v1/notifications/{provider_id}")
+        assert response.json()[field] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.integration
+    @pytest.mark.parametrize(
+        "field",
+        ["on_ha_sensor_alert", "on_location_ha_sensor_alert", "on_stock_reorder_alert", "on_stock_break_alert"],
+    )
+    async def test_patch_is_reflected_by_every_read_route(
+        self, async_client: AsyncClient, notification_provider_factory, field: str
+    ):
+        """PATCH already persisted (generic setattr loop) — the reads were the broken half."""
+        provider = await notification_provider_factory(**{field: False})
+
+        response = await async_client.patch(f"/api/v1/notifications/{provider.id}", json={field: True})
+        assert response.status_code == 200
+        assert response.json()[field] is True
+
+        response = await async_client.get(f"/api/v1/notifications/{provider.id}")
+        assert response.json()[field] is True
+
+        response = await async_client.get("/api/v1/notifications/")
+        listed = next(p for p in response.json() if p["id"] == provider.id)
+        assert listed[field] is True
+
 
 class TestNotificationTemplatesAPI:
     """Integration tests for /api/v1/notification-templates/ endpoints."""
