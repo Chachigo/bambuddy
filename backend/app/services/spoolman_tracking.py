@@ -40,6 +40,11 @@ _ZERO_TAG_UID = "0000000000000000"
 _MAX_REAL_TRAY_ID = 254
 
 
+def _is_real_tray_id(value) -> bool:
+    """True when ``value`` names a physical slot rather than "nothing loaded"."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= _MAX_REAL_TRAY_ID
+
+
 def _is_non_zero_identifier(value: str) -> bool:
     """Return True when identifier is non-empty and not all zeros."""
     if not value:
@@ -163,7 +168,73 @@ def _resolve_global_tray_id(slot_id: int, slot_to_tray: list | None, ams_trays: 
     return slot_id - 1
 
 
-def _resolve_slot_to_tray_fallback(printer_id: int, filament_usage: list[dict]) -> tuple[list[int] | None, str]:
+def _single_slot_tray_from_state(
+    state,
+    filament_usage: list[dict],
+    tray_now_at_start: int | None = None,
+) -> tuple[int, int] | None:
+    """The tray a single-slot print actually drew from, read off the printer.
+
+    A1, A1 mini, P1S and P2S publish no ``mapping`` field and drop the MQTT
+    connection when we subscribe to their request topic, so neither of the
+    other two fallbacks can answer for them. What they do report is which tray
+    the extruder is fed from, and for a print that uses exactly one filament
+    slot that is the same question: the one slot came from the one tray.
+
+    The ladder mirrors ``usage_tracker.on_print_complete`` step 5, which has
+    consulted these same fields since it started resolving mappings at
+    completion. Spoolman users were the only ones not getting them (#2953).
+
+    Gated on exactly one slot with usage, like the internal writer: on a
+    multi-colour print every filament change moves ``tray_now``, so a single
+    tray reading says nothing about which slot it belongs to.
+
+    More than one tray-change entry means the print switched trays mid-run
+    (AMS backup on runout, #957). ``report_usage`` splits those per segment
+    and must not be handed a single-tray mapping instead, so this declines.
+
+    Returns ``(slot_id, global_tray_id)``, or None when the printer offered no
+    usable reading and the positional default stands.
+    """
+    nonzero = [u for u in filament_usage or [] if u.get("used_g", 0) > 0]
+    if len(nonzero) != 1:
+        return None
+    slot_id = nonzero[0].get("slot_id", 0)
+    if slot_id <= 0:
+        return None
+
+    changes = list(getattr(state, "tray_change_log", None) or [])
+    if len(changes) > 1:
+        return None
+    if len(changes) == 1:
+        entry = changes[0]
+        if isinstance(entry, (tuple, list)) and entry and _is_real_tray_id(entry[0]):
+            # Strongest evidence there is: the printer announced this switch
+            # while the job was running, so it describes this print and no
+            # other. On the reporter's A1 it read (3, 0) -- tray 3 at layer 0
+            # -- while the positional default was charging tray 0.
+            return slot_id, entry[0]
+
+    # No mid-print switch recorded. Fall back to the standing tray readings,
+    # newest evidence first. ``tray_now`` is 255 both at rest and while
+    # nothing is loaded, which is why _MAX_REAL_TRAY_ID excludes it; A1
+    # firmware parks there the moment a print ends, leaving last_loaded_tray
+    # as the only survivor.
+    for candidate in (
+        tray_now_at_start,
+        getattr(state, "tray_now", None),
+        getattr(state, "last_loaded_tray", None),
+    ):
+        if _is_real_tray_id(candidate):
+            return slot_id, candidate
+    return None
+
+
+def _resolve_slot_to_tray_fallback(
+    printer_id: int,
+    filament_usage: list[dict],
+    tray_now_at_start: int | None = None,
+) -> tuple[list[int] | None, str]:
     """Recover a slot-to-tray mapping at completion when print start captured none.
 
     ``store_print_data`` can only learn the mapping from two sources: the
@@ -180,9 +251,17 @@ def _resolve_slot_to_tray_fallback(printer_id: int, filament_usage: list[dict]) 
     The printer knows the real answer. Its ``mapping`` field carries the actual
     slot-to-tray assignment for the running job, and for the models that never
     publish it (A1, P1S, P2S) the 3MF's per-slot colours can be matched against
-    the loaded trays instead. The built-in inventory writer has consulted both
-    for as long as it has resolved mappings at completion; this gives the
-    Spoolman writer the same two fallbacks at the same moment.
+    the loaded trays instead. Failing both, a print that used a single filament
+    slot can be pinned to the tray the printer reported feeding from
+    (``_single_slot_tray_from_state``).
+
+    The built-in inventory writer has consulted all three for as long as it has
+    resolved mappings at completion. The first version of this function offered
+    only the first two, which left A1-class printers -- no ``mapping`` field, no
+    request topic -- with nothing but the colour match, and that needs the
+    slicer's filament colour to equal the tray's exactly. A generic black
+    profile against a tray set to #111111 does not match, and the print is
+    charged to whichever spool happens to sit in the first tray (#2953).
 
     Deliberately at completion rather than inside ``store_print_data``: the
     printer keeps publishing ``mapping`` long after a job ends — it is still in
@@ -193,28 +272,46 @@ def _resolve_slot_to_tray_fallback(printer_id: int, filament_usage: list[dict]) 
 
     Args:
         printer_id: Printer whose live state is consulted.
-        filament_usage: The 3MF's per-slot estimates, needed by the colour
-            match. Only the ``slot_id``/``color`` keys are read.
+        filament_usage: The 3MF's per-slot estimates. The colour match reads
+            ``slot_id``/``color``; the tray-state fallback reads
+            ``slot_id``/``used_g``.
+        tray_now_at_start: The tray the printer was feeding from when the print
+            began, as captured by ``store_print_data``. Only consulted by the
+            tray-state fallback.
 
     Returns:
-        ``(mapping, source)``, or ``(None, "none")`` when neither fallback
-        produced anything and the positional default stands.
+        ``(mapping, source)``, or ``(None, "none")`` when no fallback produced
+        anything and the positional default stands.
     """
     from backend.app.services.printer_manager import printer_manager
     from backend.app.services.usage_tracker import _decode_mqtt_mapping, _match_slots_by_color
 
     state = printer_manager.get_status(printer_id)
     raw_data = getattr(state, "raw_data", None) if state else None
-    if not raw_data:
-        return None, "none"
 
-    decoded = _decode_mqtt_mapping(raw_data.get("mapping"))
-    if decoded:
-        return decoded, "mqtt"
+    # Both of the first two fallbacks read the status payload; the third reads
+    # fields ``bambu_mqtt`` maintains on the state object itself, so an empty
+    # payload must not short-circuit past it.
+    if raw_data:
+        decoded = _decode_mqtt_mapping(raw_data.get("mapping"))
+        if decoded:
+            return decoded, "mqtt"
 
-    matched = _match_slots_by_color(filament_usage, raw_data.get("ams"))
-    if matched:
-        return matched, "color_match"
+        matched = _match_slots_by_color(filament_usage, raw_data.get("ams"))
+        if matched:
+            return matched, "color_match"
+
+    single = _single_slot_tray_from_state(state, filament_usage, tray_now_at_start)
+    if single is not None:
+        slot_id, global_tray_id = single
+        # Only the one slot is claimed. The -1 padding is the array's existing
+        # "not an AMS tray" value, and the slots carrying it consumed nothing,
+        # so no caller resolves them: ``_report_spool_usage_for_slots`` skips
+        # zero-gram slots before resolving, ``_print_used_tray_keys`` skips
+        # negatives, and report_usage's handled-set skips them too.
+        mapping = [-1] * slot_id
+        mapping[slot_id - 1] = global_tray_id
+        return mapping, "tray_state"
 
     return None, "none"
 
@@ -929,7 +1026,11 @@ async def _report_partial_usage(
     # ``_resolve_global_tray_id`` (#2768). An aborted print charges the wrong
     # spool just as readily as a finished one.
     if not slot_to_tray:
-        slot_to_tray, _partial_mapping_source = _resolve_slot_to_tray_fallback(printer_id, filament_usage)
+        slot_to_tray, _partial_mapping_source = _resolve_slot_to_tray_fallback(
+            printer_id,
+            filament_usage,
+            getattr(tracking, "tray_now_at_start", None),
+        )
         logger.info(
             "[SPOOLMAN] Partial usage: slot_to_tray=%s (source: %s)",
             slot_to_tray,
@@ -1124,13 +1225,34 @@ async def report_usage(printer_id: int, archive_id: int):
         # AMS slot directly, so there is nothing to recover for it.
         mapping_source = "stored" if slot_to_tray else "none"
         if filament_usage and not slot_to_tray:
-            slot_to_tray, mapping_source = _resolve_slot_to_tray_fallback(printer_id, filament_usage)
+            slot_to_tray, mapping_source = _resolve_slot_to_tray_fallback(printer_id, filament_usage, tray_now_at_start)
         logger.info(
             "[SPOOLMAN] Archive %s: slot_to_tray=%s (source: %s)",
             archive_id,
             slot_to_tray,
             mapping_source,
         )
+        # Nothing named a tray for this print and no fallback could recover
+        # one, so every slot is about to be resolved by position -- slicer slot
+        # 1 to the first loaded tray, and so on. That guess is right for an AMS
+        # loaded in slicer order and wrong for any other, and the caller has no
+        # way to tell which it got. Say so at a level that survives the default
+        # log filter, so a support bundle carries the reason (#2953).
+        #
+        # Excludes the tray-split path. It never reads ``slot_to_tray`` at all:
+        # it charges each segment to the tray the printer announced switching
+        # to, which is the same evidence the tray-state fallback is built on and
+        # is not a guess. Calling it one would suppress the archive rewrite for
+        # exactly the prints -- an AMS-backup runout on a Studio job (#1793 in
+        # #2768's conditions) -- whose attribution is best supported.
+        mapping_is_guess = bool(filament_usage) and mapping_source == "none" and len(tray_changes) <= 1
+        if mapping_is_guess:
+            logger.warning(
+                "[SPOOLMAN] Archive %s: no slot-to-tray mapping from any source -- "
+                "charging by tray position, which is a guess. Verify the spool weights "
+                "if the AMS is not loaded in slicer order.",
+                archive_id,
+            )
 
         slot_colors: dict[int, str] = {}
         slot_materials: dict[int, str] = {}
@@ -1199,6 +1321,13 @@ async def report_usage(printer_id: int, archive_id: int):
                 # Track which physical slots the 3MF path already covered so
                 # Path 2 doesn't double-charge them.
                 for u in filament_usage:
+                    if u.get("used_g", 0) <= 0:
+                        # ``_report_spool_usage_for_slots`` skipped this slot
+                        # before resolving a tray for it, so nothing was
+                        # charged and Path 2 is free to cover the slot from
+                        # remain% -- claiming it here would suppress a real
+                        # drop on the strength of a zero-gram estimate.
+                        continue
                     slot_id = u.get("slot_id", 0)
                     handled_global_tray_ids.add(_resolve_global_tray_id(slot_id, slot_to_tray, ams_trays))
 
@@ -1231,11 +1360,25 @@ async def report_usage(printer_id: int, archive_id: int):
         # Stamp the archive's filament colour from the matched Spoolman spools
         # so it reflects the curated inventory colour, not the slicer's 3MF
         # value (#1494) — mirrors the built-in inventory path in usage_tracker.
-        await _apply_spool_colors_to_archive(db, archive_id, filament_usage, slot_colors)
+        #
+        # Skipped when the mapping was a positional guess. Charging the wrong
+        # spool costs grams the owner can put back; rewriting the archive's
+        # colour and material on top of it overwrites what the slicer actually
+        # recorded, and the print then reads as a different filament than the
+        # one that made it, with nothing left to compare against (#2953).
+        if mapping_is_guess:
+            if slot_colors or slot_materials:
+                logger.info(
+                    "[SPOOLMAN] Archive %s: leaving filament colour/type as sliced — "
+                    "the spools were matched by position, not by a known mapping",
+                    archive_id,
+                )
+        else:
+            await _apply_spool_colors_to_archive(db, archive_id, filament_usage, slot_colors)
 
-        # Same for the material: a slot mapped to a differently-typed spool than
-        # it was sliced for otherwise records the sliced type (#2563).
-        await _apply_spool_types_to_archive(db, archive_id, filament_usage, slot_materials)
+            # Same for the material: a slot mapped to a differently-typed spool
+            # than it was sliced for otherwise records the sliced type (#2563).
+            await _apply_spool_types_to_archive(db, archive_id, filament_usage, slot_materials)
 
 
 def _print_used_tray_keys(

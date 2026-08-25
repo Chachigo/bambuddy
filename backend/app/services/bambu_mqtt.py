@@ -1085,6 +1085,17 @@ class BambuMQTTClient:
     # Class-level cache: serial_number -> False when request topic is known unsupported.
     # Persists across client instances so reconnects don't re-trigger failed subscriptions.
     _request_topic_cache: dict[str, bool] = {}
+    # serial_number -> consecutive disconnects seen shortly after subscribing to
+    # the request topic. A SUBACK failure is the broker answering the question;
+    # a disconnect is only circumstantial, and any drop inside the window looks
+    # identical -- a network blip, the printer rebooting, the container being
+    # stopped mid-probe. Latching on the first one costs ams_mapping capture for
+    # the rest of the process on a printer that supports it perfectly well
+    # (#2953). Require the drop to repeat before believing it; a printer that
+    # really does refuse the topic answers the same way every time and pays one
+    # extra reconnect for it.
+    _request_topic_probe_failures: dict[str, int] = {}
+    _REQUEST_TOPIC_PROBE_LIMIT: int = 2
     # Counter for generating unique MQTT client IDs across instances.
     _client_instance_counter: int = 0
 
@@ -1698,6 +1709,7 @@ class BambuMQTTClient:
                     )
                     self._request_topic_confirmed = True
                     BambuMQTTClient._request_topic_cache[self.serial_number] = True
+                    BambuMQTTClient._request_topic_probe_failures.pop(self.serial_number, None)
             self._request_topic_sub_mid = None
             self._request_topic_sub_time = 0.0
 
@@ -1754,13 +1766,30 @@ class BambuMQTTClient:
             self._request_topic_sub_time > 0
             and not self._request_topic_confirmed
             and time.time() - self._request_topic_sub_time < 10.0
+            # A disconnect we asked for says nothing about the subscription.
+            and self._disconnection_event is None
         ):
-            logger.warning(
-                "[%s] Disconnected shortly after request topic subscription. Disabling request topic for this printer.",
-                self.serial_number,
-            )
-            self._request_topic_supported = False
-            BambuMQTTClient._request_topic_cache[self.serial_number] = False
+            failures = BambuMQTTClient._request_topic_probe_failures.get(self.serial_number, 0) + 1
+            BambuMQTTClient._request_topic_probe_failures[self.serial_number] = failures
+            if failures >= BambuMQTTClient._REQUEST_TOPIC_PROBE_LIMIT:
+                logger.warning(
+                    "[%s] Disconnected shortly after request topic subscription %d times. "
+                    "Disabling request topic for this printer — ams_mapping capture from "
+                    "slicer-initiated prints is unavailable, and their filament will be "
+                    "attributed from the printer's own tray reporting instead.",
+                    self.serial_number,
+                    failures,
+                )
+                self._request_topic_supported = False
+                BambuMQTTClient._request_topic_cache[self.serial_number] = False
+            else:
+                logger.info(
+                    "[%s] Disconnected shortly after request topic subscription (%d/%d). "
+                    "Retrying it on the next connection before giving up.",
+                    self.serial_number,
+                    failures,
+                    BambuMQTTClient._REQUEST_TOPIC_PROBE_LIMIT,
+                )
         self._request_topic_sub_mid = None
         self._request_topic_sub_time = 0.0
 
