@@ -3939,6 +3939,34 @@ async def run_migrations(conn):
             conn, "ALTER TABLE notification_providers ADD COLUMN on_stock_break_alert BOOLEAN DEFAULT false"
         )
 
+    # Backfill the two flags above. The DEFAULT on those ALTERs only reaches
+    # existing rows when the ALTER is the statement that adds the column -- and
+    # on an install whose notification_providers table was (re)created from
+    # Base.metadata, create_all() had already added them by the time migrations
+    # ran, so _safe_execute swallowed the ALTER as a duplicate column and every
+    # pre-existing row kept NULL. Harmless while nothing read the flags; a 500
+    # on the whole provider list once #2827 declared them on the response
+    # schema, because pydantic will not accept None for a bool.
+    #
+    # false matches both the intent of the DEFAULT above and the behaviour the
+    # rows already have: _get_providers_for_event filters on `.is_(True)`, so a
+    # NULL flag never sent anything. Idempotent -- the WHERE matches nothing on
+    # the second run.
+    async with conn.begin_nested():
+        stock_backfill = await conn.execute(
+            text(
+                "UPDATE notification_providers SET on_stock_reorder_alert = :off WHERE on_stock_reorder_alert IS NULL"
+            ),
+            {"off": False},
+        )
+        stock_backfill_break = await conn.execute(
+            text("UPDATE notification_providers SET on_stock_break_alert = :off WHERE on_stock_break_alert IS NULL"),
+            {"off": False},
+        )
+    repaired = (stock_backfill.rowcount or 0) + (stock_backfill_break.rowcount or 0)
+    if repaired:
+        logger.info("Backfilled %s NULL inventory stock alert flag(s) on notification_providers", repaired)
+
     # Migration: Heal orphan auth-related rows left behind by user-delete
     # on SQLite. user_oidc_links, user_totp, user_otp_codes (introduced in
     # PR #933) and long_lived_tokens (PR #1108) all declare ON DELETE
