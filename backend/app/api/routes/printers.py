@@ -90,6 +90,7 @@ from backend.app.utils.filament_ids import filament_id_to_setting_id
 from backend.app.utils.filament_types import printer_filament_type
 from backend.app.utils.fts_routing import slot_extruder
 from backend.app.utils.http import build_content_disposition, download_error_response, safe_download_filename
+from backend.app.utils.kprofile_lookup import build_slot_k_resolver
 from backend.app.utils.printer_models import MAX_CHAMBER_TEMP_C, uses_exhaust_fan_label
 
 logger = logging.getLogger(__name__)
@@ -523,31 +524,14 @@ async def get_printer_status(
     ams_exists = False
     raw_data = state.raw_data or {}
 
-    # Build K-profile lookup map: (extruder_id, cali_idx) -> k_value.
+    # K value for a slot's bound profile, resolved against its own nozzle.
     #
-    # Keyed on the pair, not on cali_idx alone: the printer numbers its
-    # calibration table per nozzle, so entry 16 exists on both and means a
-    # different profile on each. A cali_idx-only map let whichever profile the
-    # printer happened to list last overwrite the other, and the slot then
-    # displayed the wrong nozzle's K — on the maintainer's H2C, 0.018 and 0.020
-    # for the same spool.
-    kprofile_map: dict[tuple[int, int], float] = {}
-    for kp in state.kprofiles or []:
-        if kp.slot_id is not None and kp.k_value:
-            try:
-                kprofile_map[(int(kp.extruder_id or 0), kp.slot_id)] = float(kp.k_value)
-            except (ValueError, TypeError):
-                pass  # Skip K-profile entries with unparseable values
-
-    def _kprofile_k(cali_idx: int | None, ams_id: int, tray_id: int) -> float | None:
-        """K value for a slot's bound profile, resolved against its own nozzle."""
-        if cali_idx is None:
-            return None
-        extruder = slot_extruder(ams_id, tray_id, state.ams_extruder_map, state.ams_switch_inlet)
-        if extruder is not None:
-            return kprofile_map.get((extruder, cali_idx))
-        # Single-nozzle printers report everything under extruder 0.
-        return kprofile_map.get((0, cali_idx))
+    # Keyed on more than cali_idx: the printer numbers its calibration table
+    # per nozzle, so entry 16 exists on each and means a different profile on
+    # each. A cali_idx-only map let whichever profile the printer happened to
+    # list last overwrite the other, and the slot then displayed the wrong
+    # nozzle's K — on the maintainer's H2C, 0.018 and 0.020 for the same spool.
+    _kprofile_k = build_slot_k_resolver(state)
 
     # Cached active-cycle drying params (filament + target temp) we sent
     # last; Bambu doesn't echo them on the per-tick AMS push, so the badge
