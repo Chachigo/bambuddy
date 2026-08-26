@@ -2578,6 +2578,9 @@ export interface PrintBatchPlateProgress {
   estimated_remaining_cost: number | null;
   filament_used_grams: number | null;
   print_time_seconds: number;
+  /** False when this plate owes runs but has no queue item left to clone
+   *  their configuration from, so queueing it could only fail (#2960). */
+  can_dispatch: boolean;
 }
 
 export interface PrintBatch {
@@ -2605,6 +2608,8 @@ export interface PrintBatch {
   has_targets: boolean;
   target_count: number;
   remaining_count: number;
+  /** Of remaining_count, how many runs can actually be queued (#2960). */
+  dispatchable_count: number;
   actual_cost: number | null;
   estimated_remaining_cost: number | null;
   filament_used_grams: number | null;
@@ -5855,8 +5860,10 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+  /** `deleted` is false when the item was kept as cancelled instead: it is the
+   *  last run a batch order could re-queue its plate from (#2960). */
   removeFromQueue: (id: number) =>
-    request<{ message: string }>(`/queue/${id}`, { method: 'DELETE' }),
+    request<{ message: string; deleted: boolean }>(`/queue/${id}`, { method: 'DELETE' }),
   reorderQueue: (items: { id: number; position: number }[]) =>
     request<{ message: string }>('/queue/reorder', {
       method: 'POST',
