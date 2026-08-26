@@ -1805,6 +1805,7 @@ class TestRequestTopicFailSafe:
         from backend.app.services.bambu_mqtt import BambuMQTTClient
 
         BambuMQTTClient._request_topic_cache.clear()
+        BambuMQTTClient._request_topic_probe_failures.clear()
 
     @pytest.fixture
     def mqtt_client(self):
@@ -1858,13 +1859,26 @@ class TestRequestTopicFailSafe:
         assert mqtt_client._request_topic_supported is True
 
     def test_disconnect_after_subscription_disables_topic(self, mqtt_client):
-        """Disconnect within 10s of subscription attempt disables request topic."""
+        """Repeated disconnects within 10s of a subscription attempt disable the
+        request topic.
+
+        One is not enough (#2953). Any drop inside the window looks the same as
+        the broker refusing the topic, so the first is treated as circumstantial
+        and the subscription is retried on the next connection. A printer that
+        really does refuse answers the same way every time.
+        """
         import time
 
         mqtt_client._request_topic_sub_time = time.time()
         mqtt_client._request_topic_confirmed = False
         mqtt_client._last_message_time = 0.0
 
+        mqtt_client._on_disconnect(None, None)
+
+        assert mqtt_client._request_topic_supported is True
+        assert mqtt_client._request_topic_sub_time == 0.0
+
+        mqtt_client._request_topic_sub_time = time.time()
         mqtt_client._on_disconnect(None, None)
 
         assert mqtt_client._request_topic_supported is False
@@ -1924,11 +1938,13 @@ class TestRequestTopicFailSafe:
         )
         assert client1._request_topic_supported is True
 
-        # Simulate disconnect-after-subscribe disabling the topic
-        client1._request_topic_sub_time = __import__("time").time()
+        # Simulate disconnect-after-subscribe disabling the topic. Takes two
+        # (#2953) — the first drop is not treated as an answer.
         client1._request_topic_confirmed = False
         client1._last_message_time = 0.0
-        client1._on_disconnect(None, None)
+        for _ in range(BambuMQTTClient._REQUEST_TOPIC_PROBE_LIMIT):
+            client1._request_topic_sub_time = __import__("time").time()
+            client1._on_disconnect(None, None)
         assert client1._request_topic_supported is False
 
         # New instance for same serial should inherit the cached state
