@@ -4330,6 +4330,10 @@ export default {
       'Il file imposta {{value}} mentre il profilo scelto usa {{preset}}. Selezionalo solo se deve prevalere il file.',
     useFromFile: 'Usa il valore del file di origine per {{option}}',
     otherFromFile: 'Altre impostazioni da questo file',
+    fromFileSummary: 'Il progettista ha modificato {{count}} impostazioni di processo in questo file. Vengono usate solo quelle che spunti.',
+    fromFileUseAll: 'Usa le impostazioni del progettista',
+    fromFileUseAllHint: 'Spunta le impostazioni che si trasferiscono ad altre stampanti. Quelle tarate sulla stampante del progettista, e quelle che definiscono il preset scelto, restano disattivate.',
+    fromFileClear: 'Azzera {{count}}',
     loading: 'Caricamento impostazioni dello slicer…',
     mode: {
       simple: 'Semplice',

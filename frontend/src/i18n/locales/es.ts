@@ -4344,6 +4344,10 @@ export default {
       'El archivo lo fija en {{value}} mientras que el perfil elegido usa {{preset}}. Actívalo solo si debe mandar el archivo.',
     useFromFile: 'Usar el valor del archivo de origen para {{option}}',
     otherFromFile: 'Otros ajustes de este archivo',
+    fromFileSummary: 'El diseñador cambió {{count}} ajustes de proceso en este archivo. Solo se usan los que marques.',
+    fromFileUseAll: 'Usar los ajustes del diseñador',
+    fromFileUseAllHint: 'Marca los ajustes que se trasladan a otras impresoras. Los ajustados a la impresora del diseñador, y los que definen el perfil que elegiste, quedan sin marcar.',
+    fromFileClear: 'Borrar {{count}}',
     loading: 'Cargando ajustes del laminador…',
     mode: {
       simple: 'Simple',

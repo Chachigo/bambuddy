@@ -4331,6 +4331,10 @@ export default {
       'Le fichier impose {{value}} alors que le profil choisi utilise {{preset}}. À cocher uniquement si le fichier doit primer.',
     useFromFile: 'Utiliser la valeur du fichier source pour {{option}}',
     otherFromFile: 'Autres paramètres de ce fichier',
+    fromFileSummary: 'Le concepteur a modifié {{count}} réglages de process dans ce fichier. Seuls ceux que vous cochez sont utilisés.',
+    fromFileUseAll: 'Utiliser les réglages du concepteur',
+    fromFileUseAllHint: "Coche les réglages transposables d'une imprimante à l'autre. Ceux calés sur l'imprimante du concepteur, et ceux qui définissent le profil choisi, restent décochés.",
+    fromFileClear: 'Effacer {{count}}',
     loading: 'Chargement des paramètres du trancheur…',
     mode: {
       simple: 'Simple',

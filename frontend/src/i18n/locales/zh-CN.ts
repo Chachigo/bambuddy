@@ -4330,6 +4330,10 @@ export default {
       '文件将其设为 {{value}}，而所选预设使用 {{preset}}。仅当应以文件为准时才勾选。',
     useFromFile: '对 {{option}} 使用源文件中的值',
     otherFromFile: '此文件中的其他设置',
+    fromFileSummary: '设计者在此文件中改动了 {{count}} 项工艺设置。只有你勾选的才会生效。',
+    fromFileUseAll: '使用设计者的设置',
+    fromFileUseAllHint: '勾选可跨打印机通用的设置。针对设计者自己打印机调校的，以及决定你所选预设的那些，保持不勾选。',
+    fromFileClear: '清除 {{count}} 项',
     loading: '正在加载切片设置…',
     mode: {
       simple: '简单',

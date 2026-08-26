@@ -4330,6 +4330,10 @@ export default {
       '檔案將其設為 {{value}}，而所選預設使用 {{preset}}。僅在應以檔案為準時才勾選。',
     useFromFile: '對 {{option}} 使用來源檔案中的值',
     otherFromFile: '此檔案中的其他設定',
+    fromFileSummary: '設計者在此檔案中改動了 {{count}} 項製程設定。只有你勾選的才會生效。',
+    fromFileUseAll: '使用設計者的設定',
+    fromFileUseAllHint: '勾選可跨印表機通用的設定。針對設計者自己印表機調校的，以及決定你所選預設集的那些，維持不勾選。',
+    fromFileClear: '清除 {{count}} 項',
     loading: '正在載入切片設定…',
     mode: {
       simple: '簡易',
