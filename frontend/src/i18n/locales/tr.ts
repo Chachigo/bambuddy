@@ -520,6 +520,12 @@ export default {
     ams: {
       load: 'Yükle',
       unload: 'Çıkar',
+      feedTitle: '{{slot}} hangi nozüle yüklensin?',
+      feedPrompt: 'Filament Track Switch bu yuvayı her iki hotend\'e de yönlendirebilir. Hangisinin besleneceğini seçin.',
+      feedLeft: 'Sol nozül',
+      feedRight: 'Sağ nozül',
+      feedAlreadyLoaded: 'Zaten yüklü',
+      switchNotReady: 'Filament Track Switch henüz kurulmadı. Yazıcıda her AMS\'yi bir girişe atayın ve tekrar deneyin.',
     },
     bedJog: {
       limitWarning: 'Manuel hareketlerde hareket sınırları uygulanmaz — bir Bambu donanım yazılımı hatası, uzaktan komutlarda yazılım limit anahtarlarını yok sayar. Çarpışmayı önlemek için dikkatlice hareket ettirin.',

@@ -523,6 +523,12 @@ export default {
     ams: {
       load: 'Load',
       unload: 'Unload',
+      feedTitle: 'Load {{slot}} to which nozzle?',
+      feedPrompt: 'The Filament Track Switch can route this slot to either hotend. Choose which one to feed.',
+      feedLeft: 'Left nozzle',
+      feedRight: 'Right nozzle',
+      feedAlreadyLoaded: 'Already loaded',
+      switchNotReady: 'The Filament Track Switch is not set up yet. Assign every AMS to an inlet on the printer, then try again.',
     },
     bedJog: {
       limitWarning: 'Travel limits are not enforced during manual moves — a Bambu firmware bug ignores software endstops for remote commands. Move carefully to avoid a collision.',

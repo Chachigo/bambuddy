@@ -519,6 +519,12 @@ export default {
     ams: {
       load: 'ロード',
       unload: 'アンロード',
+      feedTitle: '{{slot}} をどちらのノズルにロードしますか？',
+      feedPrompt: 'Filament Track Switch はこのスロットをどちらのホットエンドにも送れます。送り先を選択してください。',
+      feedLeft: '左ノズル',
+      feedRight: '右ノズル',
+      feedAlreadyLoaded: 'ロード済み',
+      switchNotReady: 'Filament Track Switch がまだ設定されていません。プリンター側で各 AMS を入口に割り当ててから、もう一度お試しください。',
     },
     bedJog: {
       limitWarning: '手動移動では可動範囲の制限が適用されません。Bambu のファームウェアの不具合により、リモートコマンドではソフトウェアリミットが無視されます。衝突しないよう注意して操作してください。',

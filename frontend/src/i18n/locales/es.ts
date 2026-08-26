@@ -520,6 +520,12 @@ export default {
     ams: {
       load: 'Cargar',
       unload: 'Descargar',
+      feedTitle: '¿En qué boquilla cargar {{slot}}?',
+      feedPrompt: 'El Filament Track Switch puede dirigir esta ranura a cualquiera de los dos hotends. Elige cuál alimentar.',
+      feedLeft: 'Boquilla izquierda',
+      feedRight: 'Boquilla derecha',
+      feedAlreadyLoaded: 'Ya cargado',
+      switchNotReady: 'El Filament Track Switch aún no está configurado. Asigna cada AMS a una entrada en la impresora e inténtalo de nuevo.',
     },
     bedJog: {
       limitWarning: 'Los límites de recorrido no se aplican en los movimientos manuales: un error del firmware de Bambu ignora los finales de carrera por software en los comandos remotos. Muévelo con cuidado para evitar colisiones.',

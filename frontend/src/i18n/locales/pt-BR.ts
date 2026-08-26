@@ -520,6 +520,12 @@ export default {
     ams: {
       load: 'Carregar',
       unload: 'Descarregar',
+      feedTitle: 'Carregar {{slot}} em qual bico?',
+      feedPrompt: 'O Filament Track Switch pode direcionar este slot para qualquer um dos hotends. Escolha qual alimentar.',
+      feedLeft: 'Bico esquerdo',
+      feedRight: 'Bico direito',
+      feedAlreadyLoaded: 'Já carregado',
+      switchNotReady: 'O Filament Track Switch ainda não foi configurado. Atribua cada AMS a uma entrada na impressora e tente novamente.',
     },
     bedJog: {
       limitWarning: 'Os limites de curso não são aplicados durante movimentos manuais — um bug do firmware da Bambu ignora os fins de curso por software em comandos remotos. Mova com cuidado para evitar colisões.',

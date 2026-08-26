@@ -520,6 +520,12 @@ export default {
     ams: {
       load: 'Carica',
       unload: 'Scarica',
+      feedTitle: 'Caricare {{slot}} in quale ugello?',
+      feedPrompt: 'Il Filament Track Switch può instradare questo slot verso entrambi gli hotend. Scegli quale alimentare.',
+      feedLeft: 'Ugello sinistro',
+      feedRight: 'Ugello destro',
+      feedAlreadyLoaded: 'Già caricato',
+      switchNotReady: 'Il Filament Track Switch non è ancora configurato. Assegna ogni AMS a un ingresso sulla stampante, poi riprova.',
     },
     bedJog: {
       limitWarning: 'I limiti di corsa non vengono applicati durante i movimenti manuali: un bug del firmware Bambu ignora i finecorsa software per i comandi remoti. Muovi con cautela per evitare collisioni.',
