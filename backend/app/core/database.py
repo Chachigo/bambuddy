@@ -303,6 +303,7 @@ async def init_db():
         library,
         local_preset,
         location,
+        location_ha_sensor,
         long_lived_token,
         maintenance,
         notification,
@@ -3938,6 +3939,34 @@ async def run_migrations(conn):
             conn, "ALTER TABLE notification_providers ADD COLUMN on_stock_break_alert BOOLEAN DEFAULT false"
         )
 
+    # Backfill the two flags above. The DEFAULT on those ALTERs only reaches
+    # existing rows when the ALTER is the statement that adds the column -- and
+    # on an install whose notification_providers table was (re)created from
+    # Base.metadata, create_all() had already added them by the time migrations
+    # ran, so _safe_execute swallowed the ALTER as a duplicate column and every
+    # pre-existing row kept NULL. Harmless while nothing read the flags; a 500
+    # on the whole provider list once #2827 declared them on the response
+    # schema, because pydantic will not accept None for a bool.
+    #
+    # false matches both the intent of the DEFAULT above and the behaviour the
+    # rows already have: _get_providers_for_event filters on `.is_(True)`, so a
+    # NULL flag never sent anything. Idempotent -- the WHERE matches nothing on
+    # the second run.
+    async with conn.begin_nested():
+        stock_backfill = await conn.execute(
+            text(
+                "UPDATE notification_providers SET on_stock_reorder_alert = :off WHERE on_stock_reorder_alert IS NULL"
+            ),
+            {"off": False},
+        )
+        stock_backfill_break = await conn.execute(
+            text("UPDATE notification_providers SET on_stock_break_alert = :off WHERE on_stock_break_alert IS NULL"),
+            {"off": False},
+        )
+    repaired = (stock_backfill.rowcount or 0) + (stock_backfill_break.rowcount or 0)
+    if repaired:
+        logger.info("Backfilled %s NULL inventory stock alert flag(s) on notification_providers", repaired)
+
     # Migration: Heal orphan auth-related rows left behind by user-delete
     # on SQLite. user_oidc_links, user_totp, user_otp_codes (introduced in
     # PR #933) and long_lived_tokens (PR #1108) all declare ON DELETE
@@ -4468,6 +4497,30 @@ async def run_migrations(conn):
         conn, "ALTER TABLE notification_providers ADD COLUMN on_ams_drying_suspended BOOLEAN DEFAULT TRUE"
     )
 
+    # Migration: storage location sensor alerts (#2824), own column rather than
+    # reusing on_ha_sensor_alert. That column can be scoped to one printer
+    # (printer_id), and a location alert has no printer to scope by — sharing
+    # the column meant a provider narrowed to one printer's sensors silently
+    # also received every drybox alert, with no toggle to separate the two.
+    await _safe_execute(
+        conn, "ALTER TABLE notification_providers ADD COLUMN on_location_ha_sensor_alert BOOLEAN DEFAULT FALSE"
+    )
+
+    # Migration: rename the ha_sensor_alert template (#2824). "Home Assistant
+    # Sensor Alert" was fine as a name while it was the only such template;
+    # next to the new "Storage Location Sensor Alert" it no longer says which
+    # one is the printer's. See _migrate_rename_user_print_template_names for
+    # why this is a plain UPDATE guarded on the old name rather than a
+    # DEFAULT_TEMPLATES re-seed.
+    await _migrate_rename_ha_sensor_alert_template(conn)
+
+    # Migration: back the one-binding-per-(location, entity) rule with a unique
+    # index (#2824). The API's duplicate check is read-then-insert, so two
+    # concurrent creates could both pass it; the index turns the loser into an
+    # IntegrityError the route maps back to the same 400. create_all() adds it
+    # on fresh installs only — this covers databases whose table predates it.
+    await _migrate_location_ha_sensor_unique_binding(conn)
+
     # Migration: repair the tare of spools the RFID auto-add gave the wrong
     # Bambu spool row (#2909). Runs last so the spool catalogue it reads is
     # whatever this database actually holds.
@@ -4476,6 +4529,48 @@ async def run_migrations(conn):
     # Migration: drop the AMS slot markers an older Bambuddy wrote into
     # Spoolman and the location sync then imported as storage locations.
     await _migrate_drop_ams_slot_locations(conn)
+
+
+async def _migrate_rename_ha_sensor_alert_template(conn) -> None:
+    """Rename the ha_sensor_alert template to "Printer Sensor Alert" (#2824).
+
+    Renames only if ``name`` is still the old default — an admin who renamed
+    the template themselves keeps their custom name.
+    """
+    from sqlalchemy import text
+
+    await conn.execute(
+        text("UPDATE notification_templates SET name = :new WHERE event_type = :et AND name = :old"),
+        {"new": "Printer Sensor Alert", "et": "ha_sensor_alert", "old": "Home Assistant Sensor Alert"},
+    )
+
+
+async def _migrate_location_ha_sensor_unique_binding(conn) -> None:
+    """Unique index on location_ha_sensors (location_id, entity_id) (#2824).
+
+    Same name and shape as the Index in the model, so fresh installs (which
+    get it from create_all) and upgraded ones end up identical.
+
+    Rows that already violate it — duplicates slipped in through the pre-index
+    race — are collapsed to the oldest row first, because CREATE UNIQUE INDEX
+    refuses to build over duplicates and _safe_execute would re-raise that,
+    aborting startup. The oldest row wins: it is the one the card and the
+    poller cache were already keyed on.
+    """
+    from sqlalchemy import text
+
+    async with conn.begin_nested():
+        await conn.execute(
+            text(
+                "DELETE FROM location_ha_sensors WHERE id NOT IN ("
+                "SELECT MIN(id) FROM location_ha_sensors GROUP BY location_id, entity_id)"
+            )
+        )
+    await _safe_execute(
+        conn,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_location_ha_sensors_location_entity "
+        "ON location_ha_sensors (location_id, entity_id)",
+    )
 
 
 async def _migrate_drop_ams_slot_locations(conn) -> None:
