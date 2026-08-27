@@ -128,10 +128,12 @@ from backend.app.services.printer_manager import (
     resolve_plate_id,
 )
 from backend.app.services.slot_kprofile import find_slot_kprofile_for_extruder
+from backend.app.services.slot_nozzle import nozzle_diameter_for_extruder, resolve_slot_nozzle
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.services.spool_assignment_notifications import (
     notify_missing_spool_assignments_on_print_start,
 )
+from backend.app.services.spool_filament_preset import printer_safe_filament_id
 from backend.app.services.spoolman import close_spoolman_client, get_spoolman_client, init_spoolman_client
 from backend.app.services.spoolman_tracking import (
     cleanup_tracking as _cleanup_spoolman_tracking,
@@ -141,7 +143,7 @@ from backend.app.services.spoolman_tracking import (
 from backend.app.services.tasmota import tasmota_service
 from backend.app.utils.ams_drying import is_drying_active, temperature_alarm_suppressed
 from backend.app.utils.filament_types import printer_filament_type
-from backend.app.utils.fts_routing import extruder_for_inlet, slot_extruder as resolve_slot_extruder
+from backend.app.utils.fts_routing import extruder_for_inlet
 from backend.app.utils.local_time import utcnow_naive
 from backend.app.utils.print_jobs import is_internal_printer_job
 
@@ -1892,9 +1894,11 @@ async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
     if not client or not state or not state.raw_data:
         return
 
-    nozzle_diameter = "0.4"
-    if state.nozzles and state.nozzles[0].nozzle_diameter:
-        nozzle_diameter = state.nozzles[0].nozzle_diameter
+    # The nozzle the AMS now feeds -- the diameter of the TARGET extruder, not
+    # of nozzle 0. On a machine with two sizes fitted, moving the inlet changes
+    # the nozzle width, which changes both the K profile to select and the
+    # preset the slot should carry.
+    nozzle_diameter = nozzle_diameter_for_extruder(state, target_extruder, printer_manager.get_model(printer_id))
 
     ams_raw = state.raw_data.get("ams")
     ams_list = ams_raw.get("ams", []) if isinstance(ams_raw, dict) else ams_raw if isinstance(ams_raw, list) else []
@@ -1911,7 +1915,13 @@ async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
                 current_idx = tray.get("cali_idx")
 
                 profile = await find_slot_kprofile_for_extruder(
-                    db, printer_id, ams_id, tray_id, target_extruder, nozzle_diameter
+                    db,
+                    printer_id,
+                    ams_id,
+                    tray_id,
+                    target_extruder,
+                    nozzle_diameter,
+                    printer_manager.get_model(printer_id),
                 )
                 if profile is None or profile.cali_idx is None:
                     continue
@@ -1935,7 +1945,7 @@ async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
                     ams_id=ams_id,
                     tray_id=tray_id,
                     cali_idx=profile.cali_idx,
-                    filament_id=profile.filament_id or tray.get("tray_info_idx", "") or "",
+                    filament_id=printer_safe_filament_id(profile.filament_id, tray.get("tray_info_idx", "")),
                     nozzle_diameter=nozzle_diameter,
                 )
     except Exception as e:
@@ -2364,17 +2374,11 @@ async def on_ams_change(printer_id: int, ams_data: list):
                                     and spool.k_profiles
                                 ):
                                     state = printer_manager.get_status(printer_id)
-                                    nozzle_diameter = "0.4"
-                                    if state and state.nozzles:
-                                        nd = state.nozzles[0].nozzle_diameter
-                                        if nd:
-                                            nozzle_diameter = nd
-                                    slot_extruder = resolve_slot_extruder(
-                                        ams_id,
-                                        tray_id,
-                                        state.ams_extruder_map if state else None,
-                                        state.ams_switch_inlet if state else None,
+                                    slot_nozzle = resolve_slot_nozzle(
+                                        state, ams_id, tray_id, printer_manager.get_model(printer_id)
                                     )
+                                    nozzle_diameter = slot_nozzle.diameter
+                                    slot_extruder = slot_nozzle.extruder
                                     # Prefer exact extruder match, fall back to
                                     # extruder-agnostic kp for the same printer +
                                     # nozzle. Avoids hard-skipping when the AMS is

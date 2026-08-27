@@ -4766,6 +4766,8 @@ export default {
     // Tabs
     filamentInfoTab: 'Infos Filament',
     paProfileTab: 'Profil PA',
+    colorAndCostTab: 'Couleur et coût',
+    printersTab: 'Imprimantes',
     filamentInfo: 'Filament',
     additional: 'Additionnel',
     // Cloud
@@ -4822,6 +4824,22 @@ export default {
     leftNozzle: 'Buse Gauche',
     rightNozzle: 'Buse Droite',
     profilesSelected: 'profil(s) de calibration sélectionné(s)',
+    // Printers tab: per-model filament preset + per-hotend K profile
+    filamentPreset: 'Préréglage de filament',
+    presetUseSpoolDefault: 'Utiliser le préréglage de la bobine',
+    presetInherited: 'hérité',
+    presetOverride: 'personnalisé',
+    presetNeedsModel: 'Cette imprimante n\'a pas encore indiqué son modèle, elle ne peut donc pas avoir son propre préréglage.',
+    autoMatchPresets: 'Association automatique',
+    autoMatchPresetsHint: 'Trouver la variante du préréglage de la bobine qui nomme chaque modèle',
+    kProfilesPerPrinter: 'Profils K',
+    kProfileNotSet: 'Non défini',
+    nozzle: 'Buse',
+    unknownModel: 'Modèle inconnu',
+    onePrinter: '1 imprimante',
+    nPrinters: '{{n}} imprimantes',
+    filamentPresetsLoadFailed: 'Impossible de charger les préréglages par modèle de cette bobine',
+    filamentPresetSaveFailed: 'Impossible d\'enregistrer les préréglages par modèle',
     // Stats & enhanced table
     totalInventory: 'Total Inventaire',
     totalConsumed: 'Total Consommé',

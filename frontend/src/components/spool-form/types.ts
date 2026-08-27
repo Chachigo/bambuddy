@@ -72,6 +72,20 @@ export const defaultFormData: SpoolFormData = {
 export interface PrinterWithCalibrations {
   printer: Printer & { connected?: boolean };
   calibrations: CalibrationProfile[];
+  // Nozzle hardware as the printer reports it, kept so the Printers tab can
+  // list a model's installed diameters. Read as a SET of diameters only --
+  // never indexed by extruder, because which array position belongs to which
+  // extruder is unsettled between the two MQTT parsers. Optional: callers that
+  // predate the Printers tab (SpoolBuddy's write-tag page) do not supply it.
+  nozzles?: { nozzle_diameter?: string }[];
+}
+
+// One spool's chosen preset for a printer model, as the Printers tab holds it
+// before it is saved. `name` is kept alongside the code so the row can be
+// rendered without re-searching the preset list.
+export interface PresetChoice {
+  code: string;
+  name: string;
 }
 
 // Calibration profile from printer status
@@ -86,6 +100,39 @@ export interface CalibrationProfile {
   nozzle_diameter?: string;
 }
 
+// Printers tab props. `modelPresets` is keyed by `presetKey(model, diameter)`
+// and holds only the models the user has overridden -- an absent entry is
+// "inherit the spool's own preset", which is exactly what the backend cascade
+// does with a missing row. `selectedProfiles` is keyed by hotend
+// (`printerId:extruder:diameter`), one K profile per hotend by construction.
+export interface PrinterProfilesSectionProps {
+  formData: SpoolFormData;
+  printersWithCalibrations: PrinterWithCalibrations[];
+  filamentOptions: FilamentOption[];
+  modelPresets: Map<string, PresetChoice>;
+  setModelPresets: React.Dispatch<React.SetStateAction<Map<string, PresetChoice>>>;
+  selectedProfiles: Map<string, CalibrationProfile>;
+  setSelectedProfiles: React.Dispatch<React.SetStateAction<Map<string, CalibrationProfile>>>;
+  // Which row of the model list is open. A group id (see ModelGroup), not a
+  // model name: a printer that has not reported its model still gets a row.
+  selectedGroupId: string;
+  setSelectedGroupId: (groupId: string) => void;
+  // Backend printer-model registry ("Bambu Lab X1 Carbon" -> "X1C"), used to
+  // read the model out of a preset name so each model is offered only the
+  // presets that belong to it. Undefined until the query resolves, which just
+  // means no filtering yet rather than an empty list.
+  printerModels?: Record<string, string>;
+  // True while the printers are still being asked for their calibration
+  // tables. Distinguishes "no printers" from "not answered yet": the fetch is
+  // several MQTT round trips per machine, so the gap is seconds, not a frame.
+  isLoading?: boolean;
+}
+
+// Where a filament option came from. Shown as a badge beside the name, using
+// the same wording and colours as the Configure AMS Slot modal, so "which of
+// my four preset sources is this?" reads the same everywhere in the app.
+export type FilamentOptionSource = 'cloud' | 'orca_cloud' | 'local' | 'builtin';
+
 // Filament option from presets
 export interface FilamentOption {
   code: string;
@@ -93,6 +140,7 @@ export interface FilamentOption {
   displayName: string;
   isCustom: boolean;
   allCodes: string[];
+  source: FilamentOptionSource;
 }
 
 // Color preset
