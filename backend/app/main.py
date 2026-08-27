@@ -4440,6 +4440,28 @@ async def on_print_start(printer_id: int, data: dict):
                 # Send notification without archive data (file not found)
                 if not notification_sent:
                     await _send_print_start_notification(printer_id, data, logger=logger)
+
+                # The same baseline the other two on_print_start branches take
+                # (#2704), and last for the same reason they are: it lists the
+                # printer's timelapse directory, so a slow card must not delay
+                # the _active_prints registration, the energy reading, the
+                # archive-created event or the start notification above it.
+                #
+                # This branch never took one, so every no-3MF archive reached
+                # completion with no baseline in memory and none on the row, and
+                # the completion scan fell into its "snapshot now" fallback --
+                # which runs after the printer has written the video, so the new
+                # file landed inside the baseline and no diff ever matched
+                # (#2957 follow-up).
+                #
+                # Skipped when the FTPS cool-off is what produced this fallback:
+                # the listing needs the same connection that just failed, so it
+                # could only record that the card was unreadable. The scan
+                # handles that case by refusing to choose between candidates.
+                if not blocked_by_ftps_cooloff:
+                    await _capture_timelapse_baseline_at_start(
+                        printer, printer_id, logger, archive_id=fallback_archive.id
+                    )
                 return
             except Exception as e:
                 logger.error("Failed to create fallback archive: %s", e)
@@ -4614,12 +4636,38 @@ async def _claimed_timelapse_names(db, printer_id: int, exclude_archive_id: int)
     return {Path(p).stem for p in rows.scalars().all() if p}
 
 
+def _timelapse_listing_is_trustworthy(printer) -> bool:
+    """Whether an *empty* timelapse listing for *printer* can be believed.
+
+    ``list_files_async`` answers ``[]`` when its connect fails rather than
+    raising, so a card behind the FTPS handshake cool-off is indistinguishable
+    from one holding no videos. Everywhere that only wants to know "is there a
+    video yet" the difference does not matter — both mean "not yet, retry".
+
+    It matters where an empty listing is recorded as a *baseline*. Recording
+    "the card held nothing" for a card that was never read means every video on
+    it counts as new once the cool-off expires, and the completion scan then
+    attaches a stale video to this print and deletes it from the printer
+    (#2957 follow-up). Those two callers ask this first.
+    """
+    from backend.app.services.bambu_ftp import ftps_handshake_blocked
+
+    ip_address = getattr(printer, "ip_address", None)
+    if not ip_address:
+        return True
+    return not ftps_handshake_blocked(ip_address)
+
+
 async def _list_timelapse_videos(printer) -> tuple[list[dict], str | None]:
     """List video files from printer's timelapse directory.
 
     Finds MP4 (X1/A1 series) and AVI (P1 series) timelapse files.
     Returns (video_files, found_path) where video_files is a list of file dicts
     and found_path is the directory where they were found, or ([], None).
+
+    An empty return does not distinguish "no videos" from "could not read the
+    card" — see :func:`_timelapse_listing_is_trustworthy`, which the two
+    baseline callers consult before believing one.
     """
     from backend.app.services.bambu_ftp import list_files_async
 
@@ -4682,6 +4730,21 @@ async def _capture_timelapse_baseline_at_start(
     """
     names: set[str] | None = None
     try:
+        if not _timelapse_listing_is_trustworthy(printer):
+            # Recorded anyway, deliberately. An empty baseline taken off a card
+            # we could not read is not authoritative, but it is still the right
+            # *default*: Bambuddy deletes each video from the printer once it is
+            # attached, so the usual card holds exactly one video at completion
+            # and an empty baseline resolves it correctly. Persisting NULL
+            # instead would send completion to take its own snapshot, by which
+            # point this print's video is on the card and would be swallowed by
+            # it. The ambiguity is handled where it actually bites — see
+            # ``require_unambiguous`` in the scan (#2957 follow-up).
+            logger.warning(
+                "[TIMELAPSE] Baseline for printer %s taken while its file service is in the FTPS "
+                "handshake cool-off, so the card could not be read — treating it as empty",
+                printer_id,
+            )
         baseline_files, _ = await _list_timelapse_videos(printer)
         names = {f.get("name", "") for f in baseline_files}
         _timelapse_baselines[printer_id] = names
@@ -4735,6 +4798,10 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
     """
     logger = logging.getLogger(__name__)
 
+    # Cleared when the baseline had to be taken off a card we could not read, so
+    # the attach step refuses to choose between several candidates (#2957).
+    baseline_trusted = True
+
     # --- Phase 1: establish the baseline -------------------------------------
     try:
         async with async_session() as db:
@@ -4773,6 +4840,23 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                 if not printer:
                     logger.warning("[TIMELAPSE] Printer not found for archive %s, aborting", archive_id)
                     return
+
+                if not _timelapse_listing_is_trustworthy(printer):
+                    # The card is unreadable at the one moment a baseline has to
+                    # be taken, so the empty listing below means "we never
+                    # looked", not "these are all new". Carry on with it anyway
+                    # — the usual card holds exactly one video, which resolves
+                    # correctly — but stop the poll from *choosing* between
+                    # several, which is how a stale video got attached to this
+                    # print and then deleted off the printer (#2957 follow-up).
+                    baseline_trusted = False
+                    logger.warning(
+                        "[TIMELAPSE] Baseline for archive %s taken while printer %s is in the FTPS "
+                        "handshake cool-off. A single new video still resolves; several will not be "
+                        "guessed between — use Scan for Timelapse to pick one by hand",
+                        archive_id,
+                        archive.printer_id,
+                    )
 
                 baseline_files, _ = await _list_timelapse_videos(printer)
                 baseline_names = {f.get("name", "") for f in baseline_files}
@@ -4842,7 +4926,15 @@ async def _scan_for_timelapse_with_retries(archive_id: int, baseline_names: set[
                         logger.info("[TIMELAPSE]   - %s", f.get("name"))
 
                 attached = await _attach_first_unclaimed_timelapse(
-                    archive_id, printer, video_files, baseline_names, claimed, attempt, logger, quiet=not changed
+                    archive_id,
+                    printer,
+                    video_files,
+                    baseline_names,
+                    claimed,
+                    attempt,
+                    logger,
+                    quiet=not changed,
+                    require_unambiguous=not baseline_trusted,
                 )
                 if attached:
                     return
@@ -4876,6 +4968,7 @@ async def _attach_first_unclaimed_timelapse(
     logger: logging.Logger,
     *,
     quiet: bool = False,
+    require_unambiguous: bool = False,
 ) -> bool:
     """Download and attach the one video that belongs to this print.
 
@@ -4915,6 +5008,19 @@ async def _attach_first_unclaimed_timelapse(
         )
         return False
     if len(candidates) > 1:
+        if require_unambiguous:
+            # The baseline is not evidence -- it was taken off a card that could
+            # not be read -- so "new since the baseline" does not narrow these
+            # down at all. Taking the first would attach an arbitrary video to
+            # this print and then delete it from the printer.
+            logger.warning(
+                "[TIMELAPSE] Attempt %s: %s unclaimed videos (%s) and no baseline to tell them apart — "
+                "leaving all of them on the printer for manual selection",
+                attempt,
+                len(candidates),
+                ", ".join(str(f.get("name")) for f in candidates),
+            )
+            return False
         logger.warning(
             "[TIMELAPSE] Attempt %s: %s unclaimed new files (%s) — taking the first; "
             "the rest stay on the printer for manual selection",
