@@ -4833,6 +4833,7 @@ export default {
     autoMatchPresetsHint: 'Trova la variante del preset della bobina che nomina ciascun modello',
     kProfilesPerPrinter: 'Profili K',
     kProfileNotSet: 'Non impostato',
+    kProfileFlowMismatch: 'Questo profilo è stato misurato con un ugello {{profile}} ma è montato un ugello {{fitted}}, quindi non verrà applicato',
     nozzle: 'Ugello',
     unknownModel: 'Modello sconosciuto',
     onePrinter: '1 stampante',

@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from backend.app.services.slot_nozzle import (
     DEFAULT_NOZZLE_DIAMETER,
+    SlotNozzle,
+    normalise_flow,
     nozzle_diameter_for_extruder,
+    nozzle_flow_for_extruder,
     resolve_slot_nozzle,
 )
 
@@ -24,11 +27,14 @@ from backend.app.services.slot_nozzle import (
 class _Nozzle:
     def __init__(self, diameter: str):
         self.nozzle_diameter = diameter
+        self.nozzle_type = ""
 
 
 class _State:
-    def __init__(self, diameters, ams_extruder_map=None, ams_switch_inlet=None):
+    def __init__(self, diameters, ams_extruder_map=None, ams_switch_inlet=None, types=()):
         self.nozzles = [_Nozzle(d) for d in diameters]
+        for nozzle, nozzle_type in zip(self.nozzles, types, strict=False):
+            nozzle.nozzle_type = nozzle_type
         self.ams_extruder_map = ams_extruder_map
         self.ams_switch_inlet = ams_switch_inlet
 
@@ -118,3 +124,56 @@ class TestMatchingNozzles:
         state = _State(["0.4", "0.4"], ams_extruder_map={"0": 1})
         assert nozzle_diameter_for_extruder(state, 0, "H2C") == "0.4"
         assert nozzle_diameter_for_extruder(state, 1, "H2C") == "0.4"
+
+
+class TestFlowType:
+    """High Flow vs Standard. The same filament reads a different K through
+    each, and a printer files them as separate calibration entries."""
+
+    def test_the_fitted_nozzles_flow_is_read_per_hotend(self):
+        # Measured spelling: a fitted nozzle reports HH01/HS01, while a
+        # calibration entry says HH00-0.4 -- two characters is the comparison.
+        state = _State(MIXED, types=("HH01", "HS01"))
+        assert nozzle_flow_for_extruder(state, 0, "H2C") == "HH"
+        assert nozzle_flow_for_extruder(state, 1, "H2C") == "HS"
+
+    def test_a_printer_that_declares_no_flow_answers_none(self):
+        # An X1C sends no flow on any profile, and legacy printers put the
+        # nozzle MATERIAL in this field. Neither is a flow type.
+        assert nozzle_flow_for_extruder(_State(["0.4"], types=("",)), 0, "X1C") is None
+        assert nozzle_flow_for_extruder(_State(["0.4"], types=("hardened_steel",)), 0, "X1C") is None
+
+    def test_normalise_accepts_both_spellings(self):
+        assert normalise_flow("HH00-0.4") == "HH"
+        assert normalise_flow("HH01") == "HH"
+        assert normalise_flow("hs00-0.4") == "HS"
+        assert normalise_flow("") is None
+        assert normalise_flow(None) is None
+
+
+class TestFlowMatching:
+    """Which stored profiles apply to the nozzle now fitted."""
+
+    def test_the_flows_must_agree_once_both_are_known(self):
+        high = SlotNozzle(extruder=0, diameter="0.4", flow="HH")
+        assert high.flow_matches("HH00") is True
+        assert high.flow_matches("HS00") is False
+
+    def test_a_profile_with_no_stored_flow_still_applies(self):
+        # Every profile saved before flow was recorded has NULL here -- a
+        # strict comparison would stop applying all of them at once.
+        high = SlotNozzle(extruder=0, diameter="0.4", flow="HH")
+        assert high.flow_matches(None) is True
+        assert high.flow_matches("") is True
+
+    def test_a_printer_with_no_fitted_flow_applies_everything(self):
+        # The X1C case: filtering on an invented Standard would drop every
+        # profile the moment a high-flow nozzle was fitted.
+        unknown = SlotNozzle(extruder=0, diameter="0.4", flow=None)
+        assert unknown.flow_matches("HH00") is True
+        assert unknown.flow_matches("HS00") is True
+
+    def test_resolve_carries_the_flow_with_the_diameter(self):
+        state = _State(MIXED, ams_extruder_map={"0": 1, "1": 0}, types=("HH01", "HS01"))
+        left = resolve_slot_nozzle(state, 0, 0, "H2C")
+        assert (left.extruder, left.diameter, left.flow) == (1, "0.2", "HS")

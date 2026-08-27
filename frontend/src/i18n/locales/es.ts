@@ -4852,6 +4852,7 @@ export default {
     autoMatchPresetsHint: 'Buscar la variante del perfil de la bobina que nombra cada modelo',
     kProfilesPerPrinter: 'Perfiles K',
     kProfileNotSet: 'Sin definir',
+    kProfileFlowMismatch: 'Este perfil se midió con una boquilla {{profile}} pero hay montada una {{fitted}}, así que no se aplicará',
     nozzle: 'Boquilla',
     unknownModel: 'Modelo desconocido',
     onePrinter: '1 impresora',

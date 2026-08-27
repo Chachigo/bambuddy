@@ -4845,6 +4845,7 @@ export default {
     autoMatchPresetsHint: 'Die Variante der Spulen-Voreinstellung suchen, die das jeweilige Modell nennt',
     kProfilesPerPrinter: 'K-Profile',
     kProfileNotSet: 'Nicht gesetzt',
+    kProfileFlowMismatch: 'Dieses Profil wurde mit einer {{profile}}-Düse gemessen, eingebaut ist aber eine {{fitted}}-Düse — es wird daher nicht angewendet',
     nozzle: 'Düse',
     unknownModel: 'Unbekanntes Modell',
     onePrinter: '1 Drucker',

@@ -4833,6 +4833,7 @@ export default {
     autoMatchPresetsHint: 'Encontrar a variante da predefinição do carretel que nomeia cada modelo',
     kProfilesPerPrinter: 'Perfis K',
     kProfileNotSet: 'Não definido',
+    kProfileFlowMismatch: 'Este perfil foi medido com um bico {{profile}}, mas há um bico {{fitted}} instalado, portanto não será aplicado',
     nozzle: 'Bico',
     unknownModel: 'Modelo desconhecido',
     onePrinter: '1 impressora',

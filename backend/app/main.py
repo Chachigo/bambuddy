@@ -128,7 +128,11 @@ from backend.app.services.printer_manager import (
     resolve_plate_id,
 )
 from backend.app.services.slot_kprofile import find_slot_kprofile_for_extruder
-from backend.app.services.slot_nozzle import nozzle_diameter_for_extruder, resolve_slot_nozzle
+from backend.app.services.slot_nozzle import (
+    nozzle_diameter_for_extruder,
+    nozzle_flow_for_extruder,
+    resolve_slot_nozzle,
+)
 from backend.app.services.smart_plug_manager import smart_plug_manager
 from backend.app.services.spool_assignment_notifications import (
     notify_missing_spool_assignments_on_print_start,
@@ -1922,6 +1926,7 @@ async def on_fts_inlet_change(printer_id: int, ams_id: int, inlet: str):
                     target_extruder,
                     nozzle_diameter,
                     printer_manager.get_model(printer_id),
+                    nozzle_flow_for_extruder(state, target_extruder, printer_manager.get_model(printer_id)),
                 )
                 if profile is None or profile.cali_idx is None:
                     continue
@@ -2390,6 +2395,7 @@ async def on_ams_change(printer_id: int, ams_data: list):
                                             kp.printer_id != printer_id
                                             or kp.nozzle_diameter != nozzle_diameter
                                             or kp.cali_idx is None
+                                            or not slot_nozzle.flow_matches(kp.nozzle_type)
                                         ):
                                             continue
                                         if (

@@ -56,6 +56,7 @@ export async function fetchPrinterCalibrations(
         n_coef: parseFloat(p.n_coef) || 0,
         extruder_id: p.extruder_id,
         nozzle_diameter: p.nozzle_diameter,
+        nozzle_id: p.nozzle_id,
       });
     }
   }

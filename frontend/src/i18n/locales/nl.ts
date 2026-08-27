@@ -4890,6 +4890,7 @@ export default {
     autoMatchPresetsHint: 'Zoek de variant van de spoelvoorinstelling die elk model noemt',
     kProfilesPerPrinter: 'K-profielen',
     kProfileNotSet: 'Niet ingesteld',
+    kProfileFlowMismatch: 'Dit profiel is gemeten met een {{profile}}-nozzle, maar er is een {{fitted}}-nozzle gemonteerd; het wordt dus niet toegepast',
     nozzle: 'Nozzle',
     unknownModel: 'Onbekend model',
     onePrinter: '1 printer',

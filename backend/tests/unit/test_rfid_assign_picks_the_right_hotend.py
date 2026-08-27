@@ -30,15 +30,16 @@ RIGHT, LEFT = 0, 1
 
 
 class _Nozzle:
-    def __init__(self, diameter):
+    def __init__(self, diameter, nozzle_type=""):
         self.nozzle_diameter = diameter
+        self.nozzle_type = nozzle_type
 
 
 class _State:
     """Dual-nozzle printer, AMS 0 on the left hotend and AMS 1 on the right."""
 
-    def __init__(self, diameters=("0.4", "0.4")):
-        self.nozzles = [_Nozzle(d) for d in diameters]
+    def __init__(self, diameters=("0.4", "0.4"), types=("", "")):
+        self.nozzles = [_Nozzle(d, t) for d, t in zip(diameters, types, strict=False)]
         self.ams_extruder_map = {"0": LEFT, "1": RIGHT}
         self.ams_switch_inlet = None
         self.raw_data = {}
@@ -243,3 +244,78 @@ class TestFallbacks:
         # No stored profile for 0.4 -- nothing is selected from the store.
         selected = [c for c in client.extrusion_cali_sel.call_args_list if c.kwargs.get("cali_idx") == 20]
         assert selected == []
+
+
+class TestFlowType:
+    """A K value measured through a high-flow nozzle is not a fact about a
+    standard one -- the printer files them as separate calibration entries, and
+    a machine can hold both for the same diameter."""
+
+    async def _spool_with_flows(self, engine, printer_id):
+        from backend.app.models.spool_k_profile import SpoolKProfile
+
+        maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with maker() as db:
+            spool = Spool(brand="Bambu", material="PLA", color_name="Black", slicer_filament="GFSA00")
+            db.add(spool)
+            await db.commit()
+            await db.refresh(spool)
+            db.add_all(
+                [
+                    SpoolKProfile(
+                        spool_id=spool.id,
+                        printer_id=printer_id,
+                        extruder=LEFT,
+                        nozzle_diameter="0.4",
+                        nozzle_type="HS",
+                        k_value=0.019,
+                        cali_idx=30,
+                    ),
+                    SpoolKProfile(
+                        spool_id=spool.id,
+                        printer_id=printer_id,
+                        extruder=LEFT,
+                        nozzle_diameter="0.4",
+                        nozzle_type="HH",
+                        k_value=0.026,
+                        cali_idx=31,
+                    ),
+                ]
+            )
+            await db.commit()
+        return maker, spool.id
+
+    async def test_the_fitted_flow_decides_which_profile_applies(self, test_engine, printer_factory):
+        printer = await printer_factory(model="H2D")
+        maker, spool_id = await self._spool_with_flows(test_engine, printer.id)
+        spool = await _load(maker, spool_id)
+
+        high = await _assign(maker, spool, printer, 0, _State(types=("HH01", "HH01")))
+        assert high.extrusion_cali_sel.call_args.kwargs["cali_idx"] == 31
+
+        spool = await _load(maker, spool_id)
+        standard = await _assign(maker, spool, printer, 0, _State(types=("HS01", "HS01")))
+        assert standard.extrusion_cali_sel.call_args.kwargs["cali_idx"] == 30
+
+    async def test_a_profile_with_no_stored_flow_still_applies(self, test_engine, printer_factory):
+        """Every profile saved before flow was recorded has none, so a strict
+        comparison would stop applying all of them at once."""
+        printer = await printer_factory(model="H2D")
+        maker, spool_id = await _spool_with_both_hotends(test_engine, printer.id)
+        spool = await _load(maker, spool_id)
+
+        client = await _assign(maker, spool, printer, 0, _State(types=("HH01", "HH01")))
+
+        assert client.extrusion_cali_sel.call_args.kwargs["cali_idx"] == 16
+
+    async def test_a_printer_that_declares_no_flow_applies_everything(self, test_engine, printer_factory):
+        """The X1C case, measured: it answers with nozzle_id '' on every
+        profile, so filtering on an invented Standard would drop the lot."""
+        printer = await printer_factory(model="H2D")
+        maker, spool_id = await self._spool_with_flows(test_engine, printer.id)
+        spool = await _load(maker, spool_id)
+
+        client = await _assign(maker, spool, printer, 0, _State(types=("", "")))
+
+        # Nothing is excluded, so the first stored row wins as it always did.
+        assert client.extrusion_cali_sel.call_args.kwargs["cali_idx"] in (30, 31)

@@ -54,6 +54,7 @@ function cal(overrides: Partial<CalibrationProfile>): CalibrationProfile {
     n_coef: 1.0,
     extruder_id: 0,
     nozzle_diameter: '0.4',
+    nozzle_id: '',
     ...overrides,
   };
 }
@@ -66,7 +67,7 @@ function printer(
     connected?: boolean;
     nozzleCount?: number;
     calibrations?: CalibrationProfile[];
-    nozzles?: { nozzle_diameter?: string }[];
+    nozzles?: { nozzle_diameter?: string; nozzle_type?: string }[];
   } = {},
 ): PrinterWithCalibrations {
   return {
@@ -556,6 +557,74 @@ describe('PrinterProfilesSection — K profiles', () => {
     fireEvent.click(modelRow('X1C'));
     expect(screen.queryByText('Right Nozzle')).not.toBeInTheDocument();
     expect(screen.getAllByText('Nozzle').length).toBeGreaterThan(0);
+  });
+});
+
+describe('PrinterProfilesSection — nozzle flow type', () => {
+  function flowFleet() {
+    return [
+      printer(1, 'H2D-1', 'H2D', {
+        nozzleCount: 2,
+        nozzles: [
+          { nozzle_diameter: '0.4', nozzle_type: 'HH01' },
+          { nozzle_diameter: '0.4', nozzle_type: 'HH01' },
+        ],
+        calibrations: [
+          cal({ cali_idx: 4, nozzle_id: 'HH00-0.4', name: 'High Flow_PLA' }),
+          cal({ cali_idx: 5, nozzle_id: 'HS00-0.4', name: 'Standard_PLA', k_value: 0.019 }),
+        ],
+      }),
+    ];
+  }
+
+  it('labels each profile with the flow it was measured on', () => {
+    // A printer can hold both for one diameter -- this H2D has 102 high-flow
+    // entries and 6 standard -- and the same filament reads a different K
+    // through each, so the list has to say which is which.
+    render(<Harness printers={flowFleet()} />);
+    const options = within(screen.getByLabelText('H2D-1 Right Nozzle 0.4mm'))
+      .getAllByRole('option')
+      .map(o => o.textContent ?? '');
+
+    expect(options.some(o => o.startsWith('[HF]'))).toBe(true);
+    expect(options.some(o => o.startsWith('[S]'))).toBe(true);
+  });
+
+  it('says nothing about flow when the printer declares none', () => {
+    // Measured on an X1C: every profile comes back with nozzle_id ''. A label
+    // there would be invented rather than reported.
+    render(<Harness />);
+    const options = within(screen.getByLabelText('H2C-1 Right Nozzle 0.4mm'))
+      .getAllByRole('option')
+      .map(o => o.textContent ?? '');
+
+    expect(options.some(o => o.includes('[HF]') || o.includes('[S]'))).toBe(false);
+  });
+
+  it('marks a chosen profile that does not match the fitted nozzle', () => {
+    // Standard profile chosen, high-flow nozzle fitted: the backend will not
+    // apply it, so the control must not look quietly configured.
+    const chosen = new Map([
+      [
+        hotendKey(1, 0, '0.4'),
+        cal({ cali_idx: 5, nozzle_id: 'HS00-0.4', name: 'Standard_PLA' }),
+      ],
+    ]);
+    render(<Harness printers={flowFleet()} profiles={chosen} />);
+
+    const select = screen.getByLabelText('H2D-1 Right Nozzle 0.4mm');
+    expect(select.getAttribute('title')).toMatch(/will not be applied/i);
+    expect(select.className).toContain('border-amber');
+  });
+
+  it('does not mark a profile whose flow agrees', () => {
+    const chosen = new Map([
+      [hotendKey(1, 0, '0.4'), cal({ cali_idx: 4, nozzle_id: 'HH00-0.4' })],
+    ]);
+    render(<Harness printers={flowFleet()} profiles={chosen} />);
+
+    const select = screen.getByLabelText('H2D-1 Right Nozzle 0.4mm');
+    expect(select.getAttribute('title')).toBeNull();
   });
 });
 

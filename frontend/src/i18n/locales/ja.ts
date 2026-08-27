@@ -4845,6 +4845,7 @@ export default {
     autoMatchPresetsHint: '各モデル名を含むスプールプリセットのバリアントを探します',
     kProfilesPerPrinter: 'Kプロファイル',
     kProfileNotSet: '未設定',
+    kProfileFlowMismatch: 'このプロファイルは{{profile}}ノズルで測定されましたが、装着されているのは{{fitted}}ノズルのため適用されません',
     nozzle: 'ノズル',
     unknownModel: '不明なモデル',
     onePrinter: 'プリンター1台',

@@ -4828,6 +4828,7 @@ export default {
     autoMatchPresetsHint: 'Makara ön ayarının her modeli adıyla anan çeşidini bul',
     kProfilesPerPrinter: 'K profilleri',
     kProfileNotSet: 'Ayarlanmadı',
+    kProfileFlowMismatch: 'Bu profil {{profile}} nozul ile ölçüldü ancak takılı nozul {{fitted}}, bu yüzden uygulanmayacak',
     nozzle: 'Nozul',
     unknownModel: 'Bilinmeyen model',
     onePrinter: '1 yazıcı',

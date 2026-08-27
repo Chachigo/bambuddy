@@ -77,7 +77,7 @@ export interface PrinterWithCalibrations {
   // never indexed by extruder, because which array position belongs to which
   // extruder is unsettled between the two MQTT parsers. Optional: callers that
   // predate the Printers tab (SpoolBuddy's write-tag page) do not supply it.
-  nozzles?: { nozzle_diameter?: string }[];
+  nozzles?: { nozzle_diameter?: string; nozzle_type?: string }[];
 }
 
 // One spool's chosen preset for a printer model, as the Printers tab holds it
@@ -98,6 +98,10 @@ export interface CalibrationProfile {
   n_coef: number;
   extruder_id?: number | null;
   nozzle_diameter?: string;
+  // The nozzle this profile was filed under, e.g. "HH00-0.4" (high flow) or
+  // "HS00-0.4" (standard). Empty on printers that declare none -- an X1C sends
+  // none at all -- which means "unknown", never Standard. See utils/nozzleFlow.
+  nozzle_id?: string;
 }
 
 // Printers tab props. `modelPresets` is keyed by `presetKey(model, diameter)`

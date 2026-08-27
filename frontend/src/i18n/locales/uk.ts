@@ -4887,6 +4887,7 @@ export default {
     autoMatchPresetsHint: 'Знайти варіант пресета котушки, у назві якого вказано кожну модель',
     kProfilesPerPrinter: 'K-профілі',
     kProfileNotSet: 'Не задано',
+    kProfileFlowMismatch: 'Цей профіль виміряно на соплі {{profile}}, але встановлено сопло {{fitted}}, тому його не буде застосовано',
     nozzle: 'Сопло',
     unknownModel: 'Невідома модель',
     onePrinter: '1 принтер',

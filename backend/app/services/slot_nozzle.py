@@ -64,11 +64,72 @@ class SlotNozzle:
     # row keep the None so "unknown" is not written as "the right-hand nozzle".
     extruder: int | None
     diameter: str
+    # "HH" (high flow), "HS" (standard), or None when the printer has not said.
+    flow: str | None = None
 
     @property
     def extruder_or_default(self) -> int:
         """0 when unknown -- correct on a single-nozzle machine, a guess on a dual."""
         return 0 if self.extruder is None else self.extruder
+
+    def flow_matches(self, stored_flow: str | None) -> bool:
+        """Whether a stored K profile's flow type applies to this nozzle.
+
+        Unknown on either side matches anything, and that is the load-bearing
+        case rather than a nicety:
+
+        * Every K profile stored before this existed has NULL here, so a strict
+          comparison would stop applying all of them at once.
+        * An X1C declares no flow on any calibration entry -- measured: all
+          eight come back with ``nozzle_id: ''`` -- so profiles saved from one
+          have nothing truthful to store. Treating "no answer" as "Standard"
+          and then filtering on it would break the moment a high-flow nozzle is
+          fitted to a machine whose table never mentioned flow.
+
+        Once BOTH sides do declare one, they have to agree: a K value measured
+        on a high-flow nozzle is not a fact about a standard one, the same way
+        a 0.6 measurement says nothing about a 0.4.
+        """
+        if not stored_flow or not self.flow:
+            return True
+        return normalise_flow(stored_flow) == self.flow
+
+
+def normalise_flow(raw: str | None) -> str | None:
+    """The flow-type code in a nozzle id or type string, or None.
+
+    Both spellings reduce to the same two letters, which is the whole point:
+    a calibration entry files its nozzle as ``HH00-0.4`` / ``HS00-0.4`` while
+    the fitted nozzle reports its type as ``HH01`` -- measured on an H2D, and
+    the reason this compares two characters rather than four. The trailing
+    digits are a hardware variant the calibration table normalises to ``00``.
+    """
+    text = (raw or "").strip().upper()
+    return text[:2] if text[:2] in ("HH", "HS") else None
+
+
+def nozzle_flow_for_extruder(state, extruder: int | None, model: str | None = None) -> str | None:
+    """The flow type fitted to ``extruder``, or None when the printer is silent.
+
+    Read from the same array as the diameter and indexed the same way. A
+    printer that reports no nozzle type -- an X1C sends none at all -- yields
+    None, which ``flow_matches`` treats as "applies to anything" rather than
+    inventing Standard.
+    """
+    nozzles = getattr(state, "nozzles", None) or []
+    if not nozzles:
+        return None
+
+    index = 0
+    if extruder is not None and extruder > 0 and is_dual_nozzle_model(model):
+        index = extruder
+
+    for candidate in (index, 0):
+        if candidate < len(nozzles):
+            flow = normalise_flow(getattr(nozzles[candidate], "nozzle_type", ""))
+            if flow:
+                return flow
+    return None
 
 
 def nozzle_diameter_for_extruder(state, extruder: int | None, model: str | None = None) -> str:
@@ -114,4 +175,5 @@ def resolve_slot_nozzle(state, ams_id: int, tray_id: int, model: str | None = No
     return SlotNozzle(
         extruder=extruder,
         diameter=nozzle_diameter_for_extruder(state, extruder, model),
+        flow=nozzle_flow_for_extruder(state, extruder, model),
     )

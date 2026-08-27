@@ -39,6 +39,13 @@ class SlotKProfile:
     filament_id: str | None
 
 
+def _flow_applies(stored_flow: str | None, fitted_flow: str | None) -> bool:
+    """``SlotNozzle.flow_matches`` for callers that hold only the two strings."""
+    from backend.app.services.slot_nozzle import SlotNozzle
+
+    return SlotNozzle(extruder=None, diameter="", flow=fitted_flow).flow_matches(stored_flow)
+
+
 async def find_slot_kprofile_for_extruder(
     db: AsyncSession,
     printer_id: int,
@@ -47,6 +54,7 @@ async def find_slot_kprofile_for_extruder(
     extruder: int,
     nozzle_diameter: str,
     printer_model: str | None = None,
+    flow: str | None = None,
 ) -> SlotKProfile | None:
     """Stored profile for whatever is in this slot, calibrated for ``extruder``.
 
@@ -91,8 +99,12 @@ async def find_slot_kprofile_for_extruder(
                 )
             )
             .scalars()
-            .first()
+            .all()
         )
+        # Flow is filtered here rather than in SQL: a stored NULL matches any
+        # fitted nozzle (see SlotNozzle.flow_matches), which is not an equality
+        # test and would need an OR IS NULL that reads worse than this.
+        profile = next((p for p in profile if _flow_applies(p.nozzle_type, flow)), None)
         if profile is not None:
             spool = (await db.execute(select(Spool).where(Spool.id == assignment.spool_id))).scalar_one_or_none()
             # The preset this profile was calibrated under, through the
@@ -148,8 +160,9 @@ async def find_slot_kprofile_for_extruder(
             )
         )
         .scalars()
-        .first()
+        .all()
     )
+    sm_profile = next((p for p in sm_profile if _flow_applies(p.nozzle_type, flow)), None)
     if sm_profile is None:
         return None
 
