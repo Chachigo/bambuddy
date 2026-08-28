@@ -520,6 +520,12 @@ export default {
     ams: {
       load: 'Charger',
       unload: 'Décharger',
+      feedTitle: 'Charger {{slot}} vers quelle buse ?',
+      feedPrompt: 'Le Filament Track Switch peut diriger cet emplacement vers les deux buses. Choisissez celle à alimenter.',
+      feedLeft: 'Buse gauche',
+      feedRight: 'Buse droite',
+      feedAlreadyLoaded: 'Déjà chargé',
+      switchNotReady: 'Le Filament Track Switch n\'est pas encore configuré. Affectez chaque AMS à une entrée sur l\'imprimante, puis réessayez.',
     },
     bedJog: {
       limitWarning: 'Les limites de déplacement ne sont pas appliquées lors des mouvements manuels : un bug du firmware Bambu ignore les butées logicielles pour les commandes à distance. Déplacez avec précaution pour éviter une collision.',

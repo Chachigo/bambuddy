@@ -1551,6 +1551,19 @@ async def on_printer_status_change(printer_id: int, state: PrinterState):
     fts_key = (
         state.fila_switch.installed if state.fila_switch else False,
         tuple(sorted(state.ams_switch_inlet.items())),
+        # Which hotend holds which slot. Unlike the two above this does move
+        # mid-print, on every filament change — but only between discrete slots,
+        # so it adds a push per toolchange, not a stream. The AMS slot menu needs
+        # it live: it decides which hotend the Load dialog may offer and whether
+        # Unload has anything to act on.
+        tuple(
+            sorted(
+                ((ext, slot.ams_id, slot.slot_id, slot.has_filament) for ext, slot in state.extruder_slots.items()),
+                # Sort on the extruder id alone: the other members are nullable
+                # and comparing None with an int raises.
+                key=lambda entry: entry[0],
+            )
+        ),
     )
     status_key = (
         f"{state.connected}:{state.state}:{state.progress}:{state.layer_num}:"

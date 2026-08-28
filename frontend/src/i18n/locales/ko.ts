@@ -488,7 +488,13 @@ export default {
     },
     ams: {
       load: '로드',
-      unload: '언로드'
+      unload: '언로드',
+      feedTitle: '{{slot}}을(를) 어느 노즐로 로드할까요?',
+      feedPrompt: 'Filament Track Switch는 이 슬롯을 양쪽 핫엔드로 보낼 수 있습니다. 공급할 쪽을 선택하세요.',
+      feedLeft: '왼쪽 노즐',
+      feedRight: '오른쪽 노즐',
+      feedAlreadyLoaded: '이미 로드됨',
+      switchNotReady: 'Filament Track Switch가 아직 설정되지 않았습니다. 프린터에서 각 AMS를 입구에 할당한 뒤 다시 시도하세요.'
     },
     bedJog: {
       limitWarning: '수동 이동 중에는 이동 한계가 적용되지 않습니다. Bambu 펌웨어 버그로 인해 원격 명령에서는 소프트웨어 엔드스톱이 무시됩니다. 충돌하지 않도록 주의해서 이동하세요.',

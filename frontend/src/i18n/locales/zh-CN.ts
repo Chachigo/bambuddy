@@ -520,6 +520,12 @@ export default {
     ams: {
       load: '加载',
       unload: '卸载',
+      feedTitle: '将 {{slot}} 装载到哪个喷嘴？',
+      feedPrompt: 'Filament Track Switch 可以把该槽位送往任一热端。请选择要送入的一侧。',
+      feedLeft: '左喷嘴',
+      feedRight: '右喷嘴',
+      feedAlreadyLoaded: '已装载',
+      switchNotReady: 'Filament Track Switch 尚未设置。请在打印机上为每个 AMS 分配入口后重试。',
     },
     bedJog: {
       limitWarning: '手动移动时不会强制执行行程限位——Bambu 固件存在缺陷，远程指令会忽略软件限位。请小心移动以避免碰撞。',

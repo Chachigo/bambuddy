@@ -520,6 +520,12 @@ export default {
     ams: {
       load: 'Laden',
       unload: 'Entladen',
+      feedTitle: '{{slot}} in welche Düse laden?',
+      feedPrompt: 'Der Filament Track Switch kann diesen Slot zu beiden Hotends leiten. Wähle, welches beschickt werden soll.',
+      feedLeft: 'Linke Düse',
+      feedRight: 'Rechte Düse',
+      feedAlreadyLoaded: 'Bereits geladen',
+      switchNotReady: 'Der Filament Track Switch ist noch nicht eingerichtet. Weise am Drucker jedem AMS einen Eingang zu und versuche es erneut.',
     },
     bedJog: {
       limitWarning: 'Verfahrwege werden bei manuellen Bewegungen nicht begrenzt – ein Firmware-Fehler von Bambu ignoriert die Software-Endschalter bei Remote-Befehlen. Bewegen Sie vorsichtig, um Kollisionen zu vermeiden.',
