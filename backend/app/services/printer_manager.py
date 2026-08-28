@@ -8,7 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.printer import Printer
-from backend.app.services.bambu_mqtt import BambuMQTTClient, MQTTLogEntry, PrinterState, get_stage_name
+from backend.app.services.bambu_mqtt import (
+    STAGE_NAMES,
+    BambuMQTTClient,
+    MQTTLogEntry,
+    PrinterState,
+    get_stage_name,
+)
 from backend.app.utils.kprofile_lookup import build_slot_k_resolver
 
 logger = logging.getLogger(__name__)
@@ -1170,6 +1176,23 @@ def get_derived_status_name(state: PrinterState, model: str | None = None) -> st
     # X1 models use -1 for idle, A1/P1 models use 255 for idle
     # Valid stage numbers are 0-254
     if 0 <= state.stg_cur < 255:
+        # A stage number the table does not cover is named "Preparing" rather
+        # than "Unknown stage (72)". New models report stages before Bambuddy
+        # learns their names -- the H2C still has several -- and the card is
+        # the wrong place to say so: the number means nothing to the person
+        # reading it, and every stage that has ever turned out to be unnamed
+        # was part of the run-up to printing, so "Preparing" is both the more
+        # useful answer and the more likely one.
+        #
+        # This is display only, and deliberately not pushed down into
+        # `get_stage_name`. That function also feeds the stage-transition log
+        # line and the once-per-session warning that exists precisely to
+        # capture unnamed stages so they can be named later (bambu_mqtt.py
+        # ~4100) -- there the number is the entire diagnostic value, and
+        # replacing it with "Preparing" would hide the very thing that
+        # reports these.
+        if state.stg_cur not in STAGE_NAMES:
+            return "Preparing"
         return get_stage_name(state.stg_cur)
 
     # If not in RUNNING state, no derived status needed
