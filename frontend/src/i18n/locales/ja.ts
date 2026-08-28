@@ -4777,6 +4777,8 @@ export default {
     // Tabs
     filamentInfoTab: 'フィラメント情報',
     paProfileTab: 'PAプロファイル',
+    colorAndCostTab: '色とコスト',
+    printersTab: 'プリンター',
     filamentInfo: 'フィラメント',
     additional: '追加情報',
     // Cloud
@@ -4833,6 +4835,22 @@ export default {
     leftNozzle: '左ノズル',
     rightNozzle: '右ノズル',
     profilesSelected: 'キャリブレーションプロファイル選択済み',
+    // Printers tab: per-model filament preset + per-hotend K profile
+    filamentPreset: 'フィラメントプリセット',
+    presetUseSpoolDefault: 'スプールのプリセットを使用',
+    presetInherited: '継承',
+    presetOverride: '上書き',
+    presetNeedsModel: 'このプリンターはまだモデルを報告していないため、専用のプリセットを設定できません。',
+    autoMatchPresets: '自動で割り当て',
+    autoMatchPresetsHint: '各モデル名を含むスプールプリセットのバリアントを探します',
+    kProfilesPerPrinter: 'Kプロファイル',
+    kProfileNotSet: '未設定',
+    nozzle: 'ノズル',
+    unknownModel: '不明なモデル',
+    onePrinter: 'プリンター1台',
+    nPrinters: 'プリンター{{n}}台',
+    filamentPresetsLoadFailed: 'このスプールのモデル別プリセットを読み込めませんでした',
+    filamentPresetSaveFailed: 'モデル別プリセットを保存できませんでした',
     // Stats & enhanced table
     totalInventory: '在庫合計',
     totalConsumed: '総消費量',
