@@ -2694,6 +2694,7 @@ async def get_slot_spool_defaults(
         slot_nozzle.extruder_or_default,
         slot_nozzle.diameter,
         model,
+        slot_nozzle.flow,
     )
 
     slicer_filament: str | None = None
@@ -4335,6 +4336,8 @@ async def _apply_pa_after_refresh(printer_id: int, ams_id: int, slot_id: int):
                 exact_kp = None
                 fallback_kp = None
                 for kp in spool.k_profiles:
+                    if not slot_nozzle.flow_matches(kp.nozzle_type):
+                        continue
                     if kp.printer_id != printer_id or kp.nozzle_diameter != nozzle_diameter or kp.cali_idx is None:
                         continue
                     if resolved_extruder is not None and kp.extruder is not None and kp.extruder == resolved_extruder:

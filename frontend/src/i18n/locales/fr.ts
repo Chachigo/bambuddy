@@ -4834,6 +4834,7 @@ export default {
     autoMatchPresetsHint: 'Trouver la variante du préréglage de la bobine qui nomme chaque modèle',
     kProfilesPerPrinter: 'Profils K',
     kProfileNotSet: 'Non défini',
+    kProfileFlowMismatch: 'Ce profil a été mesuré avec une buse {{profile}} alors qu\'une buse {{fitted}} est installée : il ne sera pas appliqué',
     nozzle: 'Buse',
     unknownModel: 'Modèle inconnu',
     onePrinter: '1 imprimante',

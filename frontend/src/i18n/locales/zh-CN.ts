@@ -4839,6 +4839,7 @@ export default {
     autoMatchPresetsHint: '查找料卷预设中标明各机型的对应版本',
     kProfilesPerPrinter: 'K 值配置',
     kProfileNotSet: '未设置',
+    kProfileFlowMismatch: '此配置是在 {{profile}} 喷嘴上测得的，但当前装的是 {{fitted}} 喷嘴，因此不会应用',
     nozzle: '喷嘴',
     unknownModel: '未知机型',
     onePrinter: '1 台打印机',

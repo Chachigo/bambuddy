@@ -1603,6 +1603,8 @@ async def assign_spoolman_slot(
             for kp in kp_rows:
                 if kp.nozzle_diameter != nozzle_diameter or kp.cali_idx is None:
                     continue
+                if not slot_nozzle.flow_matches(kp.nozzle_type):
+                    continue
                 if slot_extruder is not None and kp.extruder is not None and kp.extruder == slot_extruder:
                     exact_kp = kp
                     break

@@ -234,6 +234,12 @@ async def apply_spool_to_slot_via_mqtt(
     for kp in spool.k_profiles:
         if kp.printer_id != printer_id or kp.nozzle_diameter != nozzle_diameter:
             continue
+        # A profile measured on a high-flow nozzle is not a fact about a
+        # standard one. Rows with no stored flow -- everything saved before
+        # this, and everything from a printer whose table declares none --
+        # still match, see SlotNozzle.flow_matches.
+        if not slot_nozzle.flow_matches(kp.nozzle_type):
+            continue
         if slot_extruder is not None and kp.extruder is not None and kp.extruder == slot_extruder:
             exact_kp = kp
             break

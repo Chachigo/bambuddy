@@ -4625,6 +4625,7 @@ export default {
     autoMatchPresetsHint: '각 모델 이름이 들어간 스풀 프리셋 변형을 찾습니다',
     kProfilesPerPrinter: 'K 프로파일',
     kProfileNotSet: '설정 안 됨',
+    kProfileFlowMismatch: '이 프로파일은 {{profile}} 노즐에서 측정되었지만 장착된 노즐은 {{fitted}}이므로 적용되지 않습니다',
     nozzle: '노즐',
     unknownModel: '알 수 없는 모델',
     onePrinter: '프린터 1대',

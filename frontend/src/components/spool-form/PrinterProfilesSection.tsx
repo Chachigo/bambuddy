@@ -11,6 +11,8 @@ import { hotendKey, isMatchingCalibration, presetKey } from './utils';
 import { STANDARD_NOZZLE_DIAMETERS } from './constants';
 import { PresetPicker } from './PresetPicker';
 import { extractPresetModel, matchesPrinterModelSuffix } from '../../utils/slicerPrinterMatch';
+import { flowLabel, normaliseFlow } from '../../utils/nozzleFlow';
+import type { NozzleFlow } from '../../utils/nozzleFlow';
 
 /**
  * The spool form's Printers tab: which filament preset this spool uses on each
@@ -48,6 +50,20 @@ interface ModelGroup {
   printers: PrinterWithCalibrations[];
   /** Distinct nozzle diameters across this model's machines. Order-independent. */
   diameters: string[];
+}
+
+/**
+ * The flow type fitted to one hotend, or null when the printer does not say.
+ *
+ * Same array and the same indexing as the diameter. Legacy printers put the
+ * nozzle MATERIAL in this field ("hardened_steel"), which normaliseFlow reads
+ * as "unknown" -- correct, since those machines never report a flow.
+ */
+function fittedFlow(entry: PrinterWithCalibrations, extruder: number): NozzleFlow | null {
+  const nozzles = entry.nozzles ?? [];
+  const isDual = (entry.printer.nozzle_count ?? 1) > 1;
+  const index = isDual && extruder > 0 ? extruder : 0;
+  return normaliseFlow(nozzles[index]?.nozzle_type) ?? normaliseFlow(nozzles[0]?.nozzle_type);
 }
 
 function distinctDiameters(entry: PrinterWithCalibrations): string[] {
@@ -564,9 +580,26 @@ export function PrinterProfilesSection({
                                     </span>
                                   );
                                 }
+                                // A stored profile whose flow disagrees with
+                                // the nozzle now fitted is not applied at
+                                // assign time -- a K value measured on a
+                                // high-flow nozzle is not a fact about a
+                                // standard one. Say so here rather than let it
+                                // look configured and quietly do nothing.
+                                const fitted = fittedFlow(entry, column.extruder);
+                                const chosenFlow = normaliseFlow(chosen?.nozzle_id);
+                                const flowMismatch = !!(fitted && chosenFlow && fitted !== chosenFlow);
                                 return (
                                   <select
                                     key={key}
+                                    title={
+                                      flowMismatch
+                                        ? t('inventory.kProfileFlowMismatch', {
+                                            profile: flowLabel(chosenFlow),
+                                            fitted: flowLabel(fitted),
+                                          })
+                                        : undefined
+                                    }
                                     aria-label={`${entry.printer.name} ${column.label} ${diameter}mm`}
                                     value={chosen ? String(chosen.cali_idx) : ''}
                                     onChange={e => {
@@ -575,14 +608,27 @@ export function PrinterProfilesSection({
                                         ?? null;
                                       chooseProfile(entry.printer.id, column.extruder, diameter, cal);
                                     }}
-                                    className="min-w-0 px-2 py-1.5 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg text-sm text-white focus:outline-none focus:border-bambu-green"
+                                    className={`min-w-0 px-2 py-1.5 bg-bambu-dark-secondary border rounded-lg text-sm text-white focus:outline-none focus:border-bambu-green ${
+                                      flowMismatch ? 'border-amber-500/60' : 'border-bambu-dark-tertiary'
+                                    }`}
                                   >
                                     <option value="">{t('inventory.kProfileNotSet')}</option>
-                                    {candidates.map(cal => (
-                                      <option key={cal.cali_idx} value={cal.cali_idx}>
-                                        {`${cal.name || cal.filament_id}  K=${cal.k_value.toFixed(3)}`}
-                                      </option>
-                                    ))}
+                                    {candidates.map(cal => {
+                                      // The flow the profile was measured on.
+                                      // Shown because the same filament reads a
+                                      // different K through a high-flow nozzle,
+                                      // and a printer can hold both -- this H2D
+                                      // has 102 high-flow entries and 6
+                                      // standard. Omitted where the printer
+                                      // declares none (an X1C declares none at
+                                      // all), since there is nothing to say.
+                                      const label = flowLabel(normaliseFlow(cal.nozzle_id));
+                                      return (
+                                        <option key={cal.cali_idx} value={cal.cali_idx}>
+                                          {`${label ? `[${label}] ` : ''}${cal.name || cal.filament_id}  K=${cal.k_value.toFixed(3)}`}
+                                        </option>
+                                      );
+                                    })}
                                   </select>
                                 );
                               })}

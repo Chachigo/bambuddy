@@ -4839,6 +4839,7 @@ export default {
     autoMatchPresetsHint: '尋找線材捲預設中標示各機型的對應版本',
     kProfilesPerPrinter: 'K 值設定檔',
     kProfileNotSet: '未設定',
+    kProfileFlowMismatch: '此設定檔是在 {{profile}} 噴嘴上測得的，但目前裝的是 {{fitted}} 噴嘴，因此不會套用',
     nozzle: '噴嘴',
     unknownModel: '未知機型',
     onePrinter: '1 台印表機',

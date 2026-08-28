@@ -22,6 +22,7 @@ import { ColorSection } from './spool-form/ColorSection';
 import { AdditionalSection } from './spool-form/AdditionalSection';
 import { SpoolmanFilamentPicker } from './spool-form/SpoolmanFilamentPicker';
 import { PrinterProfilesSection } from './spool-form/PrinterProfilesSection';
+import { normaliseFlow } from '../utils/nozzleFlow';
 import { SpoolUsageHistory } from './SpoolUsageHistory';
 import {
   invalidateInventoryLocations,
@@ -432,6 +433,9 @@ export function SpoolFormModal({
               n_coef: 0,
               extruder_id: extruder,
               nozzle_diameter: diameter,
+              // Stored as the bare flow code; the picker re-derives its label
+              // from the same field it reads off a live profile.
+              nozzle_id: p.nozzle_type || '',
             });
           }
           setSelectedProfiles(chosen);
@@ -781,6 +785,11 @@ export function SpoolFormModal({
         printer_id: parseInt(printerIdStr),
         extruder: parseInt(extruderStr),
         nozzle_diameter: diameter || '0.4',
+        // The flow the profile was measured on, when the printer declares one.
+        // Null where it does not (an X1C declares none on any profile), which
+        // the backend reads as "applies to whatever is fitted" -- the same rule
+        // that keeps every profile stored before this working.
+        nozzle_type: normaliseFlow(cal.nozzle_id),
         k_value: cal.k_value,
         name: cal.name || null,
         cali_idx: cal.cali_idx,

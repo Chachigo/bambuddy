@@ -584,6 +584,8 @@ async def auto_assign_spool(
             for kp in spool.k_profiles:
                 if kp.printer_id != printer_id or kp.nozzle_diameter != nozzle_diameter:
                     continue
+                if not slot_nozzle.flow_matches(kp.nozzle_type):
+                    continue
                 if slot_nozzle.extruder is not None and kp.extruder == slot_nozzle.extruder:
                     exact_kp = kp
                     break

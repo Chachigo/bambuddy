@@ -4890,6 +4890,7 @@ export default {
     autoMatchPresetsHint: 'Find the variant of this spool\'s preset that names each model',
     kProfilesPerPrinter: 'K profiles',
     kProfileNotSet: 'Not set',
+    kProfileFlowMismatch: 'This profile was measured on a {{profile}} nozzle but a {{fitted}} nozzle is fitted, so it will not be applied',
     nozzle: 'Nozzle',
     unknownModel: 'Unknown model',
     onePrinter: '1 printer',
