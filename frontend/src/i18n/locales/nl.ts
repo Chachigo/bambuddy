@@ -4434,6 +4434,7 @@ export default {
     process: 'Procesprofiel',
     filament: 'Filamentprofiel',
     filamentSlot: 'Filament {{index}} ({{type}})',
+    filamentColour: 'Filamentkleur',
     selectPreset: '— Selecteer een preset —',
     loadingPresets: 'Presets laden…',
     analyzingPlateFilaments: 'Filamenten op plaat analyseren…',

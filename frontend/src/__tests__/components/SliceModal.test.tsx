@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { render } from '../utils';
 import { SliceModal } from '../../components/SliceModal';
@@ -259,6 +259,10 @@ describe('SliceModal', () => {
         process_preset: { source: 'local', id: '2' },
         filament_preset: { source: 'local', id: '3' },
         filament_presets: [{ source: 'local', id: '3' }],
+        // An STL has no designed colour and the swatch was not touched, so
+        // the slot is handed back to the backend's fallback chain rather
+        // than being pinned to the picker's displayed default (#2977).
+        filament_colours: [''],
       });
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
@@ -1720,6 +1724,287 @@ describe('SliceModal', () => {
       expect(body.printer_preset.source).toBe('local');
       expect(body.process_preset.source).toBe('local');
       expect(body.filament_presets[0].source).toBe('local');
+    });
+  });
+
+  /**
+   * Per-slot filament colour (#2977).
+   *
+   * A filament preset carries no colour in either slicer -- colour is a
+   * per-project property their GUIs set from the plate -- so a slice that
+   * supplies none records the CLI's compiled-in #00AE42 for every slot. That
+   * is what made every internal-slicer thumbnail Bambu green regardless of
+   * the filament picked, and what made the print dialog report a colour
+   * mismatch against the AMS slot it had just correctly mapped to.
+   *
+   * The swatch is the only place the colour can come from for an STL, which
+   * has none anywhere else, so it is offered for single-slot sources too.
+   */
+  describe('filament colour swatch', () => {
+    function colourInputs(): HTMLInputElement[] {
+      return screen
+        .getAllByLabelText('Filament colour')
+        .filter((el): el is HTMLInputElement => el instanceof HTMLInputElement);
+    }
+
+    it('shows the hex beside the swatch so it reads as a control, not a decoration', async () => {
+      // The reason this exists: a bare dot next to a label was taken for the
+      // read-only swatch multi-colour rows already had, so on the STL -- the
+      // one source with no colour to inherit -- nothing said it was settable.
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      expect(screen.getByText('#00AE42')).toBeDefined();
+    });
+
+    it('puts the whole control on the dropdown row, not in the label', async () => {
+      // Sitting beside the <select> and styled like it is what makes it read
+      // as a control. In the label row it read as a caption on the label.
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      const row = colourInputs()[0].closest('div');
+      expect(row?.querySelector('select')).not.toBeNull();
+    });
+
+    it('wraps the swatch and its hex in one label bound to the input', async () => {
+      // So a click anywhere on the pill opens the picker, rather than only a
+      // 16px dot being live.
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      const pill = screen.getByText('#00AE42').closest('label');
+      expect(pill?.getAttribute('for')).toBe(colourInputs()[0].id);
+      expect(pill?.contains(colourInputs()[0])).toBe(true);
+    });
+
+    it('the hex follows the swatch when it is changed', async () => {
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      fireEvent.change(colourInputs()[0], { target: { value: '#e8b00c' } });
+      await waitFor(() => expect(screen.getByText('#E8B00C')).toBeDefined());
+    });
+
+    it('paints the colour on the input itself, not only via the native swatch', async () => {
+      // An engine that does not paint ::-webkit-color-swatch would otherwise
+      // leave an empty ring, which is indistinguishable from no swatch.
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      expect(colourInputs()[0].style.backgroundColor).not.toBe('');
+    });
+
+    it('offers a colour swatch for a single-slot STL, which has no colour of its own', async () => {
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      expect(colourInputs()).toHaveLength(1);
+    });
+
+    it("shows the slicer's own default for a source that carries no colour", async () => {
+      // Not an invented placeholder: #00AE42 is exactly what the slice would
+      // record if nothing were sent, so the swatch tells the truth about the
+      // file that is about to be produced.
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      expect(colourInputs()[0].value).toBe('#00ae42');
+    });
+
+    it("pre-fills each slot from the source plate's designed colour", async () => {
+      mockApi.getLibraryFilePlates.mockResolvedValue(makeMultiColorPlateResponse());
+      mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(makeMultiColorRequirementsResponse());
+      mockApi.getSlicerPresets.mockResolvedValue(makeColorAwarePresets());
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'TwoColor.3mf' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('X1C')).toBeDefined());
+      expect(colourInputs().map((i) => i.value)).toEqual(['#000000', '#ffffff']);
+    });
+
+    it("sends the source plate's colours when the swatches are left alone", async () => {
+      mockApi.getLibraryFilePlates.mockResolvedValue(makeMultiColorPlateResponse());
+      mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(makeMultiColorRequirementsResponse());
+      mockApi.getSlicerPresets.mockResolvedValue(makeColorAwarePresets());
+      mockApi.sliceLibraryFile.mockResolvedValue({
+        job_id: 42,
+        status: 'pending',
+        status_url: '/api/v1/slice-jobs/42',
+      });
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'TwoColor.3mf' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('X1C')).toBeDefined());
+      await userEvent.setup().click(screen.getByRole('button', { name: /^Slice$/ }));
+
+      await waitFor(() => {
+        expect(mockApi.sliceLibraryFile).toHaveBeenCalledWith(
+          100,
+          expect.objectContaining({ filament_colours: ['#000000', '#FFFFFF'] }),
+        );
+      });
+    });
+
+    it('sends an empty string for a slot with no colour, so the backend fallbacks still run', async () => {
+      // A sent colour outranks the preset's own default_filament_colour, so
+      // pinning the picker's displayed #00AE42 here would silently discard
+      // the real colour of an Orca-imported profile that carries one.
+      mockApi.sliceLibraryFile.mockResolvedValue({
+        job_id: 42,
+        status: 'pending',
+        status_url: '/api/v1/slice-jobs/42',
+      });
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      await userEvent.setup().click(screen.getByRole('button', { name: /^Slice$/ }));
+
+      await waitFor(() => {
+        expect(mockApi.sliceLibraryFile).toHaveBeenCalledWith(
+          100,
+          expect.objectContaining({ filament_colours: [''] }),
+        );
+      });
+    });
+
+    it('sends the user\'s pick, upper-cased, once a swatch is changed', async () => {
+      mockApi.sliceLibraryFile.mockResolvedValue({
+        job_id: 42,
+        status: 'pending',
+        status_url: '/api/v1/slice-jobs/42',
+      });
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Cube.stl' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      const user = userEvent.setup();
+      // A colour input has no text entry; fire the change the picker would.
+      fireEvent.change(colourInputs()[0], { target: { value: '#e8b00c' } });
+      await waitFor(() => expect(colourInputs()[0].value).toBe('#e8b00c'));
+
+      await user.click(screen.getByRole('button', { name: /^Slice$/ }));
+      await waitFor(() => {
+        expect(mockApi.sliceLibraryFile).toHaveBeenCalledWith(
+          100,
+          expect.objectContaining({ filament_colours: ['#E8B00C'] }),
+        );
+      });
+    });
+
+    it('only overrides the slot that was changed', async () => {
+      mockApi.getLibraryFilePlates.mockResolvedValue(makeMultiColorPlateResponse());
+      mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(makeMultiColorRequirementsResponse());
+      mockApi.getSlicerPresets.mockResolvedValue(makeColorAwarePresets());
+      mockApi.sliceLibraryFile.mockResolvedValue({
+        job_id: 42,
+        status: 'pending',
+        status_url: '/api/v1/slice-jobs/42',
+      });
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'TwoColor.3mf' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('X1C')).toBeDefined());
+      fireEvent.change(colourInputs()[1], { target: { value: '#112233' } });
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /^Slice$/ }));
+      await waitFor(() => {
+        expect(mockApi.sliceLibraryFile).toHaveBeenCalledWith(
+          100,
+          expect.objectContaining({ filament_colours: ['#000000', '#112233'] }),
+        );
+      });
+    });
+
+    it('trims the alpha byte for display but submits the colour whole', async () => {
+      // The AMS reports colours with an alpha byte and a source 3MF can carry
+      // one; <input type="color"> accepts only the 6-digit form.
+      mockApi.getLibraryFileFilamentRequirements.mockResolvedValue({
+        file_id: 100,
+        filename: 'Alpha.3mf',
+        plate_id: 1,
+        filaments: [{ slot_id: 1, type: 'PLA', color: '#E8B00CFF', used_grams: 10, used_meters: 3 }],
+      });
+      mockApi.sliceLibraryFile.mockResolvedValue({
+        job_id: 42,
+        status: 'pending',
+        status_url: '/api/v1/slice-jobs/42',
+      });
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Alpha.3mf' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      expect(colourInputs()[0].value).toBe('#e8b00c');
+
+      await userEvent.setup().click(screen.getByRole('button', { name: /^Slice$/ }));
+      await waitFor(() => {
+        expect(mockApi.sliceLibraryFile).toHaveBeenCalledWith(
+          100,
+          expect.objectContaining({ filament_colours: ['#E8B00CFF'] }),
+        );
+      });
+    });
+
+    it('is disabled in "slice as designed" mode, which sends no filament profiles', async () => {
+      mockApi.getLibraryFilePlates.mockResolvedValue({
+        file_id: 100,
+        filename: 'Designed.3mf',
+        plates: [],
+        is_multi_plate: false,
+        embedded_printer: 'Imported X1C 0.4',
+        embedded_process: '0.20mm Standard',
+      });
+
+      renderWithTracker({
+        source: { kind: 'libraryFile', id: 100, filename: 'Designed.3mf' },
+        onClose: vi.fn(),
+      });
+
+      await waitFor(() => expect(screen.getByText('My Custom X1C')).toBeDefined());
+      const toggle = screen.getByRole('checkbox', { name: /built-in settings/i });
+      expect(colourInputs()[0].disabled).toBe(false);
+      await userEvent.setup().click(toggle);
+      expect(colourInputs()[0].disabled).toBe(true);
     });
   });
 
