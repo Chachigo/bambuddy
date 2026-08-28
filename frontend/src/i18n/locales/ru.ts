@@ -5169,6 +5169,7 @@ export default {
       underExtrusion: "Недоэкструзия",
       powerFailure: "Сбой питания",
       userCancelled: "Отменено пользователем",
+      noStatusUpdate: "Обновление статуса не получено",
       other: "Другое",
     },
     statuses: {

@@ -5181,6 +5181,7 @@ export default {
       underExtrusion: '압출 부족',
       powerFailure: '전원 실패',
       userCancelled: '사용자 취소',
+      noStatusUpdate: '상태 업데이트를 받지 못함',
       other: '기타'
     },
     statuses: {

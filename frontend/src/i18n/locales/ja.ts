@@ -5433,6 +5433,7 @@ export default {
       underExtrusion: '押出不足',
       powerFailure: '電源障害',
       userCancelled: 'ユーザーによるキャンセル',
+      noStatusUpdate: 'ステータス更新を受信できませんでした',
       other: 'その他',
     },
     // Archive statuses

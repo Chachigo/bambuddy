@@ -5421,6 +5421,7 @@ export default {
       underExtrusion: '擠出不足',
       powerFailure: '斷電',
       userCancelled: '使用者取消',
+      noStatusUpdate: '未收到狀態更新',
       other: '其他',
     },
     // Archive statuses

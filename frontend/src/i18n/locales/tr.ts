@@ -5405,6 +5405,7 @@ export default {
       underExtrusion: 'Az ekstrüzyon',
       powerFailure: 'Güç kesintisi',
       userCancelled: 'Kullanıcı iptal etti',
+      noStatusUpdate: 'Durum güncellemesi alınmadı',
       other: 'Diğer',
     },
     statuses: {
