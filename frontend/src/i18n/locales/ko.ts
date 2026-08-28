@@ -4187,6 +4187,7 @@ export default {
     process: '프로세스 프로필',
     filament: '필라멘트 프로필',
     filamentSlot: '필라멘트 {{index}} ({{type}})',
+    filamentColour: '필라멘트 색상',
     selectPreset: '— 프리셋 선택 —',
     loadingPresets: '프리셋 불러오는 중…',
     analyzingPlateFilaments: '플레이트 필라멘트 분석 중…',

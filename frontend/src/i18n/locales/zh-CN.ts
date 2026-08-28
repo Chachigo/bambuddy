@@ -4387,6 +4387,7 @@ export default {
     process: '工艺配置',
     filament: '耗材配置',
     filamentSlot: '耗材 {{index}}（{{type}}）',
+    filamentColour: '耗材颜色',
     selectPreset: '— 选择预设 —',
     loadingPresets: '加载预设中…',
     analyzingPlateFilaments: '分析打印板耗材中…',

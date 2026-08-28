@@ -4387,6 +4387,7 @@ export default {
     process: 'Perfil de processo',
     filament: 'Perfil de filamento',
     filamentSlot: 'Filamento {{index}} ({{type}})',
+    filamentColour: 'Cor do filamento',
     selectPreset: '— Selecione uma predefinição —',
     loadingPresets: 'Carregando predefinições…',
     analyzingPlateFilaments: 'Analisando filamentos da mesa…',

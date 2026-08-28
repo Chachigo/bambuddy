@@ -4399,6 +4399,7 @@ export default {
     process: 'プロセスプロファイル',
     filament: 'フィラメントプロファイル',
     filamentSlot: 'フィラメント {{index}}（{{type}}）',
+    filamentColour: 'フィラメントの色',
     selectPreset: '— プリセットを選択 —',
     loadingPresets: 'プリセットを読み込み中…',
     analyzingPlateFilaments: 'プレートのフィラメントを分析中…',

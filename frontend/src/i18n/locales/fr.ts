@@ -4388,6 +4388,7 @@ export default {
     process: 'Profil de processus',
     filament: 'Profil de filament',
     filamentSlot: 'Filament {{index}} – {{type}}',
+    filamentColour: 'Couleur du filament',
     selectPreset: '— Sélectionner un préréglage —',
     loadingPresets: 'Chargement des préréglages…',
     analyzingPlateFilaments: 'Analyse des filaments de la plaque…',

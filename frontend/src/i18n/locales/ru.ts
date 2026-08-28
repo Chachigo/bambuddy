@@ -4182,6 +4182,7 @@ export default {
     process: "Профиль процесса",
     filament: "Профиль филамента",
     filamentSlot: "Филамент {{index}} ({{type}})",
+    filamentColour: "Цвет филамента",
     selectPreset: "— Выберите профиль —",
     loadingPresets: "Загрузка профилей…",
     analyzingPlateFilaments: "Анализ филаментов пластины…",

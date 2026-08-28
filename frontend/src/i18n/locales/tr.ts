@@ -4388,6 +4388,7 @@ export default {
     process: 'İşlem profili',
     filament: 'Filament profili',
     filamentSlot: 'Filament {{index}} ({{type}})',
+    filamentColour: 'Filament rengi',
     selectPreset: '— Bir ön ayar seçin —',
     loadingPresets: 'Ön ayarlar yükleniyor…',
     analyzingPlateFilaments: 'Plaka filamentleri analiz ediliyor…',

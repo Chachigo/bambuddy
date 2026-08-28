@@ -1742,6 +1742,14 @@ export interface SliceRequest {
   // backend validator promotes a singular into a one-element list when this
   // is omitted, so legacy single-color clients keep working unchanged.
   filament_presets?: PresetRef[];
+  // Per-slot filament colour as `#RRGGBB` / `#RRGGBBAA`, same plate order as
+  // `filament_presets` (#2977). Neither slicer stores a colour on a filament
+  // *preset* -- it is a per-project property -- so without this every sliced
+  // file records the CLI's built-in #00AE42 and the print dialog reports a
+  // colour mismatch against whatever is loaded in the AMS. An empty string in
+  // any position hands that slot back to the backend's fallback chain (the
+  // preset's own default_filament_colour, then the source plate's colour).
+  filament_colours?: string[];
   plate?: number;
   export_3mf?: boolean;
   // Build-plate override (#1337). When omitted, the slicer uses the process

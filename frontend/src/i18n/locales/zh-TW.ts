@@ -4387,6 +4387,7 @@ export default {
     process: '製程設定檔',
     filament: '耗材設定檔',
     filamentSlot: '耗材 {{index}}（{{type}}）',
+    filamentColour: '耗材顏色',
     selectPreset: '— 選擇預設 —',
     loadingPresets: '載入預設中…',
     analyzingPlateFilaments: '分析列印板耗材中…',

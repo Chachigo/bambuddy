@@ -4399,6 +4399,7 @@ export default {
     process: 'Prozess-Profil',
     filament: 'Filament-Profil',
     filamentSlot: 'Filament {{index}} – {{type}}',
+    filamentColour: 'Filamentfarbe',
     selectPreset: '— Profil auswählen —',
     loadingPresets: 'Profile werden geladen…',
     analyzingPlateFilaments: 'Plattenfilamente werden analysiert…',

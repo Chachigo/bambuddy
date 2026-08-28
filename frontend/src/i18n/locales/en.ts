@@ -4434,6 +4434,7 @@ export default {
     process: 'Process profile',
     filament: 'Filament profile',
     filamentSlot: 'Filament {{index}} ({{type}})',
+    filamentColour: 'Filament colour',
     selectPreset: '— Select a preset —',
     loadingPresets: 'Loading presets…',
     analyzingPlateFilaments: 'Analyzing plate filaments…',
