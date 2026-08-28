@@ -521,33 +521,42 @@ _PRINTER_OFFLINE_NOTIFY_DEBOUNCE_SECONDS = 60.0
 #      alone caused user-cancellations to be archived as "Layer shift" failures.
 # We now match by full short code only — anything not in this map leaves
 # failure_reason=None rather than guessing.
+# Values are the canonical camelCase failure-reason keys, NOT display labels
+# (issue #2974). The vocabulary is enforced on writes by
+# ``_FAILURE_REASON_KEYS`` in ``api/routes/print_log.py`` and rendered through
+# ``t('editArchive.failureReasons.<key>')`` on both the archive editor and the
+# Statistics breakdown. Storing a label here instead put a second spelling of
+# the same cause into one column: the Failure Analysis widget groups on the raw
+# value, so a print the backend classified and an identical one a user
+# classified counted as two different reasons, and the label form could never
+# be translated because there was no key for ``t()`` to resolve.
 _HMS_FAILURE_REASONS: dict[str, str] = {
     # Layer shift / step loss
-    "0300_4057": "Layer shift",
-    "0300_4068": "Layer shift",
-    "0300_800C": "Layer shift",
+    "0300_4057": "layerShift",
+    "0300_4068": "layerShift",
+    "0300_800C": "layerShift",
     # Filament runout (printer-side & per-AMS-slot)
-    "0300_8004": "Filament runout",
-    "0700_8011": "Filament runout",
-    "0701_8011": "Filament runout",
-    "0702_8011": "Filament runout",
-    "0703_8011": "Filament runout",
-    "0704_8011": "Filament runout",
-    "0705_8011": "Filament runout",
-    "0706_8011": "Filament runout",
-    "0707_8011": "Filament runout",
-    "07FF_8011": "Filament runout",
+    "0300_8004": "filamentRunout",
+    "0700_8011": "filamentRunout",
+    "0701_8011": "filamentRunout",
+    "0702_8011": "filamentRunout",
+    "0703_8011": "filamentRunout",
+    "0704_8011": "filamentRunout",
+    "0705_8011": "filamentRunout",
+    "0706_8011": "filamentRunout",
+    "0707_8011": "filamentRunout",
+    "07FF_8011": "filamentRunout",
     # Clogged nozzle / extruder
-    "0300_4006": "Clogged nozzle",
-    "0300_8016": "Clogged nozzle",
-    "0300_801C": "Clogged nozzle",
-    "0700_8003": "Clogged nozzle",
-    "0700_8007": "Clogged nozzle",
-    "0700_8013": "Clogged nozzle",
-    "0701_8003": "Clogged nozzle",
-    "0701_8007": "Clogged nozzle",
-    "0701_8013": "Clogged nozzle",
-    "0702_8003": "Clogged nozzle",
+    "0300_4006": "cloggedNozzle",
+    "0300_8016": "cloggedNozzle",
+    "0300_801C": "cloggedNozzle",
+    "0700_8003": "cloggedNozzle",
+    "0700_8007": "cloggedNozzle",
+    "0700_8013": "cloggedNozzle",
+    "0701_8003": "cloggedNozzle",
+    "0701_8007": "cloggedNozzle",
+    "0701_8013": "cloggedNozzle",
+    "0702_8003": "cloggedNozzle",
 }
 
 
@@ -569,7 +578,7 @@ def derive_failure_reason(status: str, hms_errors: list[dict] | None) -> str | N
     no HMS code matches (don't guess — null is honest).
     """
     if status in ("aborted", "cancelled"):
-        return "User cancelled"
+        return "userCancelled"
     if status != "failed":
         return None
     for err in hms_errors or []:
@@ -3873,7 +3882,13 @@ async def on_print_start(printer_id: int, data: dict):
                     f"printer progress {live_progress:.0f}%) — marking cancelled and creating new archive"
                 )
                 existing_archive.status = "cancelled"
-                existing_archive.failure_reason = "Stale - print likely cancelled or failed without status update"
+                # Canonical key, not a sentence (issue #2974). "No status update
+                # received" is what both stale paths actually observed; which of
+                # the two it was is already carried by ``status`` -- cancelled
+                # here, the reconciled outcome at the reconnect site -- so one
+                # key loses no information and gives the Statistics breakdown a
+                # single bucket instead of two untranslatable prose strings.
+                existing_archive.failure_reason = "noStatusUpdate"
                 await db.commit()
                 # Fall through to create new archive (don't return)
             else:
@@ -6808,10 +6823,10 @@ async def on_print_complete(printer_id: int, data: dict):
             if data.get("_reconciled"):
                 # A reconciled completion closes out a stale archive at
                 # reconnect — it is not a user action, so don't mislabel it
-                # "User cancelled". The "Stale" prefix matches the existing
-                # stale-cleanup convention and records that the real end time
-                # is unknown, which is also why its logged duration is 0 (#2592).
-                failure_reason = "Stale - reconciled after reconnect, end time unknown"
+                # "userCancelled". It shares the stale-cleanup path's key
+                # (issue #2974) and records that the real end time is unknown,
+                # which is also why its logged duration is 0 (#2592).
+                failure_reason = "noStatusUpdate"
             if failure_reason:
                 logger.info("[ARCHIVE] failure_reason=%r (status=%s)", failure_reason, status)
             elif status == "failed" and hms_errors:

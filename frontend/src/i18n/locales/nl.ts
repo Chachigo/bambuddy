@@ -5483,6 +5483,7 @@ export default {
       underExtrusion: 'Onderextrusie',
       powerFailure: 'Stroomuitval',
       userCancelled: 'Door gebruiker geannuleerd',
+      noStatusUpdate: 'Geen statusupdate ontvangen',
       other: 'Overig',
     },
     // Archive statuses

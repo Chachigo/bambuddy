@@ -5475,6 +5475,7 @@ export default {
       underExtrusion: "Підвидавлювання",
       powerFailure: "Збій живлення",
       userCancelled: "Користувач скасовано",
+      noStatusUpdate: "Оновлення статусу не отримано",
       other: "інше",
     },
     // Archive statuses

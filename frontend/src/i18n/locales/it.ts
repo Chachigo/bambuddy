@@ -5421,6 +5421,7 @@ export default {
       underExtrusion: 'Sotto-estrusione',
       powerFailure: 'Mancanza corrente',
       userCancelled: 'Annullato dall\'utente',
+      noStatusUpdate: 'Nessun aggiornamento di stato ricevuto',
       other: 'Altro',
     },
     // Archive statuses

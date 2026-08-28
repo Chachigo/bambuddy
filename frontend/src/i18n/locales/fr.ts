@@ -5422,6 +5422,7 @@ export default {
       underExtrusion: 'Sous-extrusion',
       powerFailure: 'Coupure courant',
       userCancelled: 'Annulé par l\'utilisateur',
+      noStatusUpdate: 'Aucune mise à jour d\'état reçue',
       other: 'Autre',
     },
     // Archive statuses

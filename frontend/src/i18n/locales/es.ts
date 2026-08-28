@@ -5440,6 +5440,7 @@ export default {
       underExtrusion: 'Subextrusión',
       powerFailure: 'Corte de corriente',
       userCancelled: 'Cancelada por el usuario',
+      noStatusUpdate: 'No se recibió actualización de estado',
       other: 'Otro',
     },
     // Archive statuses
