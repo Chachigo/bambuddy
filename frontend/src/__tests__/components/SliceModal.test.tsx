@@ -2442,3 +2442,246 @@ describe('pickFilamentForSlot — long-form printer tag (#2628)', () => {
     expect(pick).toEqual({ source: 'cloud', id: 'sunlu-tpu-h2d' });
   });
 });
+
+describe('SliceModal — material and printer filtering (#2982)', () => {
+  const A1 = 'Bambu Lab A1 0.4 nozzle';
+  const P1S = 'Bambu Lab P1S 0.4 nozzle';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSlicerPresetValues.mockResolvedValue({ resolved: true, values: {}, reason: 'ok' });
+    mockApi.getSlicerPrinterModels.mockResolvedValue({
+      'Bambu Lab A1': 'A1',
+      'Bambu Lab P1S': 'P1S',
+      'Bambu Lab X1 Carbon': 'X1C',
+    });
+    mockApi.listSlicerPipelines.mockResolvedValue({ pipelines: [] });
+    mockApi.getLibraryFilePlates.mockResolvedValue({ file_id: 100, filename: 'Plate.3mf', plates: [] });
+    mockApi.sliceLibraryFile.mockResolvedValue({
+      job_id: 42,
+      status: 'pending',
+      status_url: '/api/v1/slice-jobs/42',
+    });
+    mockApi.getSliceJob.mockResolvedValue({
+      job_id: 42,
+      status: 'running',
+      kind: 'library_file',
+      source_id: 100,
+      source_name: 'Plate.3mf',
+      created_at: new Date().toISOString(),
+      started_at: null,
+      completed_at: null,
+    });
+  });
+
+  // One PLA plate slot — the case the report is about.
+  function plaPlate() {
+    return {
+      file_id: 100,
+      filename: 'Plate.3mf',
+      plate_id: 1,
+      filaments: [{ slot_id: 1, type: 'PLA', color: '#FF0000', used_grams: 10, used_meters: 3 }],
+    };
+  }
+
+  function presetsFor(printer: string, filaments: UnifiedPresetsResponse['standard']['filament']) {
+    return makeUnified({
+      standard: {
+        printer: [{ id: printer, name: printer, source: 'standard' }],
+        process: [
+          {
+            id: '0.20mm Standard @BBL X1C',
+            name: '0.20mm Standard @BBL X1C',
+            source: 'standard',
+            compatible_printers: [P1S, 'Bambu Lab X1 Carbon 0.4 nozzle'],
+          },
+        ],
+        filament: filaments,
+      },
+    });
+  }
+
+  it('does not auto-pick a stated PETG for a PLA plate', async () => {
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(plaPlate());
+    mockApi.getSlicerPresets.mockResolvedValue(
+      presetsFor(A1, [
+        { id: 'petg', name: 'eSUN PETG Basic @BBL A1', source: 'standard', filament_type: 'PETG', filament_colour: '#FF0000' },
+        { id: 'pla', name: 'Bambu PLA Basic @BBL A1', source: 'standard', filament_type: 'PLA', filament_colour: '#FFFFFF' },
+      ]),
+    );
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Plate.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText(A1)).toBeDefined());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => {
+      const [, body] = mockApi.sliceLibraryFile.mock.calls[0];
+      expect(body.filament_presets).toEqual([{ source: 'standard', id: 'pla' }]);
+    });
+  });
+
+  it('drops a wrong-material pick once the listing learns the material', async () => {
+    // The sequence a user upgrading their sidecar actually goes through. The
+    // first listing reports no material for anything, so the pre-pick has
+    // only colour to go on and lands on the PETG. The second reports the
+    // materials — and the wrong pick has to go, which it did not, because the
+    // slot was held on printer-compatibility alone.
+    const colourless = presetsFor(A1, [
+      { id: 'petg', name: 'eSUN PETG Basic @BBL A1', source: 'standard', filament_type: null, filament_colour: '#FF0000' },
+      { id: 'pla', name: 'Bambu PLA Basic @BBL A1', source: 'standard', filament_type: null, filament_colour: '#FFFFFF' },
+    ]);
+    const typed = presetsFor(A1, [
+      { id: 'petg', name: 'eSUN PETG Basic @BBL A1', source: 'standard', filament_type: 'PETG', filament_colour: '#FF0000' },
+      { id: 'pla', name: 'Bambu PLA Basic @BBL A1', source: 'standard', filament_type: 'PLA', filament_colour: '#FFFFFF' },
+    ]);
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(plaPlate());
+    mockApi.getSlicerPresets.mockResolvedValueOnce(colourless).mockResolvedValue(typed);
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Plate.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText(A1)).toBeDefined());
+    const user = userEvent.setup();
+
+    // The colour-matched PETG is what the first listing produces.
+    await waitFor(() => {
+      const select = presetSelects().find((el) => el.value.startsWith('standard:p'));
+      expect(select?.value).toBe('standard:petg');
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      const select = presetSelects().find((el) => el.value.startsWith('standard:p'));
+      expect(select?.value).toBe('standard:pla');
+    });
+  });
+
+  it('keeps a wrong-material preset the user picked on purpose', async () => {
+    // Printing PETG on a plate a designer labelled PLA is a legitimate thing
+    // to do. The material rule corrects the auto-pick; it must not overrule
+    // a choice made in the dropdown.
+    const pla = { id: 'pla', name: 'Bambu PLA Basic @BBL A1', source: 'standard' as const, filament_type: 'PLA', filament_colour: '#FF0000' };
+    const petg = { id: 'petg', name: 'eSUN PETG Basic @BBL A1', source: 'standard' as const, filament_type: 'PETG', filament_colour: '#FFFFFF' };
+    const matte = { id: 'matte', name: 'Bambu PLA Matte @BBL A1', source: 'standard' as const, filament_type: 'PLA', filament_colour: '#00FF00' };
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(plaPlate());
+    // The refresh has to return a *different* listing, or React Query's
+    // structural sharing hands back the same object and the pre-pick never
+    // re-runs — which would make this test pass without proving anything.
+    mockApi.getSlicerPresets
+      .mockResolvedValueOnce(presetsFor(A1, [pla, petg]))
+      .mockResolvedValue(presetsFor(A1, [pla, petg, matte]));
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Plate.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText(A1)).toBeDefined());
+
+    const user = userEvent.setup();
+    const filamentSelect = presetSelects().find((el) =>
+      Array.from(el.options).some((o) => o.textContent?.includes('eSUN PETG Basic')),
+    );
+    expect(filamentSelect).toBeDefined();
+    await user.selectOptions(filamentSelect!, 'standard:petg');
+
+    // Refreshing re-runs the pre-pick over the same slots. That is exactly
+    // where an un-exempted material rule would quietly undo the choice.
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    await waitFor(() => {
+      const select = presetSelects().find((el) => el.value.startsWith('standard:p'));
+      expect(select?.value).toBe('standard:petg');
+    });
+
+    await user.click(screen.getByRole('button', { name: /^Slice$/ }));
+
+    await waitFor(() => {
+      const [, body] = mockApi.sliceLibraryFile.mock.calls[0];
+      expect(body.filament_presets).toEqual([{ source: 'standard', id: 'petg' }]);
+    });
+  });
+
+  it('shows every process when the printer filter would leave the list empty', async () => {
+    // A P1S against a sidecar too old to report compatible_printers: all 198
+    // processes read as another printer's, so the dropdown held one
+    // auto-picked entry and a "Show all" link, with nothing saying the list
+    // itself was the problem.
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(plaPlate());
+    mockApi.getSlicerPresets.mockResolvedValue(
+      makeUnified({
+        standard: {
+          printer: [{ id: P1S, name: P1S, source: 'standard' }],
+          process: [
+            { id: 'x1c', name: '0.20mm Standard @BBL X1C', source: 'standard' },
+            { id: 'a1', name: '0.06mm Fine @BBL A1 0.2 nozzle', source: 'standard' },
+          ],
+          filament: [
+            { id: 'pla', name: 'Bambu PLA Basic @BBL A1', source: 'standard', filament_type: 'PLA' },
+          ],
+        },
+      }),
+    );
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Plate.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText(P1S)).toBeDefined());
+
+    const processSelect = presetSelects().find((el) =>
+      Array.from(el.options).some((o) => o.textContent?.includes('0.20mm Standard @BBL X1C')),
+    );
+    expect(processSelect).toBeDefined();
+    // Both are visible rather than one hidden behind "Show all".
+    const labels = Array.from(processSelect!.options).map((o) => o.textContent);
+    expect(labels.some((l) => l?.includes('0.20mm Standard @BBL X1C'))).toBe(true);
+    expect(labels.some((l) => l?.includes('0.06mm Fine @BBL A1 0.2 nozzle'))).toBe(true);
+  });
+
+  it('still hides other-printer presets when some do match', async () => {
+    // The guard is for an empty list only — the normal filter must survive.
+    mockApi.getLibraryFileFilamentRequirements.mockResolvedValue(plaPlate());
+    mockApi.getSlicerPresets.mockResolvedValue(
+      makeUnified({
+        standard: {
+          printer: [{ id: P1S, name: P1S, source: 'standard' }],
+          process: [
+            {
+              id: 'x1c',
+              name: '0.20mm Standard @BBL X1C',
+              source: 'standard',
+              compatible_printers: [P1S],
+            },
+            { id: 'a1', name: '0.06mm Fine @BBL A1 0.2 nozzle', source: 'standard' },
+          ],
+          filament: [
+            { id: 'pla', name: 'Bambu PLA Basic @BBL A1', source: 'standard', filament_type: 'PLA' },
+          ],
+        },
+      }),
+    );
+
+    renderWithTracker({
+      source: { kind: 'libraryFile', id: 100, filename: 'Plate.3mf' },
+      onClose: vi.fn(),
+    });
+
+    await waitFor(() => expect(screen.getByText(P1S)).toBeDefined());
+
+    const processSelect = presetSelects().find((el) =>
+      Array.from(el.options).some((o) => o.textContent?.includes('0.20mm Standard @BBL X1C')),
+    );
+    const labels = Array.from(processSelect!.options).map((o) => o.textContent);
+    expect(labels.some((l) => l?.includes('0.06mm Fine @BBL A1 0.2 nozzle'))).toBe(false);
+  });
+});
