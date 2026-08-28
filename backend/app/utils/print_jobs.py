@@ -29,10 +29,17 @@ print-complete callbacks can share one answer.
 # ``auto_pa_line_calib_mode`` is the pressure-advance (K profile) line. This one
 # is reported as a *subtask name* with no ``/usr/`` path at all, which is why
 # the path rule alone was never enough.
+#
+# ``pa_pattern_calib_mode`` is the same calibration started by hand rather than
+# automatically before a print -- the manual flow-dynamics run prints a pattern
+# where the automatic one prints a line, and it carries its own name with no
+# ``auto_`` prefix. It reaches Bambuddy exactly the way the automatic one does,
+# so leaving it off the list produced the same no-3MF archive.
 INTERNAL_JOB_NAMES = frozenset(
     {
         "auto_cali_for_user",
         "auto_pa_line_calib_mode",
+        "pa_pattern_calib_mode",
     }
 )
 
