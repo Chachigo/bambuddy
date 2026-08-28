@@ -11,6 +11,10 @@ a no-3MF archive named after itself in the user's history.
 The same name is already known to the completion guard: #2829's capture of
 queue item 649 has ``auto_pa_line_calib_mode`` arriving as the subtask name of a
 completion that had to be refused against a running job.
+
+The manual flow-dynamics run reaches Bambuddy the same way under a different
+name -- ``pa_pattern_calib_mode``, a pattern rather than a line and with no
+``auto_`` prefix -- so the automatic entry never covered it.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -29,6 +33,16 @@ class TestTheCalibrationIsRecognised:
         """Both fields are tested, because which one carries it is not fixed."""
         assert is_internal_printer_job("auto_pa_line_calib_mode", None)
 
+    def test_the_manual_pressure_advance_pattern_by_subtask_name(self):
+        """The same calibration run by hand rather than before a print. It
+        prints a pattern where the automatic one prints a line, and carries its
+        own name with no ``auto_`` prefix -- so the automatic entry never
+        covered it and it left the same no-3MF archive."""
+        assert is_internal_printer_job("", "pa_pattern_calib_mode")
+
+    def test_the_manual_pressure_advance_pattern_by_filename(self):
+        assert is_internal_printer_job("pa_pattern_calib_mode", None)
+
     def test_the_levelling_run_by_its_system_path(self):
         assert is_internal_printer_job("/usr/etc/print/auto_cali_for_user.gcode", "auto_cali_for_user")
 
@@ -45,6 +59,10 @@ class TestTheCalibrationIsRecognised:
             "auto_pa_line_calib_mode.gcode.3mf",
             "AUTO_PA_LINE_CALIB_MODE",
             "/data/auto_pa_line_calib_mode.gcode.3mf",
+            "pa_pattern_calib_mode",
+            "pa_pattern_calib_mode.gcode.3mf",
+            "PA_Pattern_Calib_Mode",
+            "/data/pa_pattern_calib_mode.gcode",
         ],
     )
     def test_however_the_name_is_dressed_up(self, reported):
@@ -72,6 +90,8 @@ class TestItLeavesRealPrintsAlone:
             "auto_pa_line_calib_mode_v2.3mf",
             "my_auto_pa_line_calib_mode.3mf",
             "auto_cali_for_user_test.gcode.3mf",
+            "pa_pattern_calib_mode_v2.3mf",
+            "my_pa_pattern_calib_mode.3mf",
         ],
     )
     def test_a_users_file_that_merely_contains_the_name(self, reported):
