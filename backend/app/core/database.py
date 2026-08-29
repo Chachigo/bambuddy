@@ -1709,11 +1709,15 @@ async def _migrate_failure_reason_vocabulary(conn):
 
     total = 0
     async with conn.begin_nested():
+        # nosec B608 — the only interpolated fragment is `table`, which the loop
+        # below draws from a literal tuple; no caller value reaches the string.
+        # Both the key and the label list are bound parameters. A table name
+        # cannot be expressed as one, which is why it is interpolated at all.
         for table in ("print_archives", "print_log_entries"):
             for key, labels in by_key.items():
                 result = await conn.execute(
                     text(
-                        f"UPDATE {table} SET failure_reason = :key "  # noqa: S608 - table name is a literal
+                        f"UPDATE {table} SET failure_reason = :key "  # noqa: S608  # nosec B608
                         "WHERE failure_reason IN :labels"
                     ).bindparams(bindparam("key"), bindparam("labels", expanding=True)),
                     {"key": key, "labels": labels},
