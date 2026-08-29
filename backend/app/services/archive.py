@@ -92,6 +92,25 @@ def _read_plate_index(plate) -> int | None:
     return None
 
 
+def plate_indexes_in_3mf(file_path: Path) -> list[int | None]:
+    """Return one entry per ``<plate>`` a Bambu 3MF declares, in file order.
+
+    Reads only ``Metadata/slice_info.config``. An entry is None when that plate
+    carries no readable index, and the list is empty for a file that could not
+    be read at all — callers must not confuse either with "this file has plates
+    and yours is not among them". An unreadable 3MF is a parse this code does
+    not understand, not evidence about which plate it holds (#2957).
+    """
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            if "Metadata/slice_info.config" not in zf.namelist():
+                return []
+            root = ET.fromstring(zf.read("Metadata/slice_info.config").decode())
+            return [_read_plate_index(plate) for plate in root.findall(".//plate")]
+    except Exception:
+        return []
+
+
 def peek_plate_index_in_3mf(file_path: Path) -> int | None:
     """Return the plate index a single-plate Bambu 3MF represents, or None.
 
@@ -105,18 +124,8 @@ def peek_plate_index_in_3mf(file_path: Path) -> int | None:
     plate 1 out of such a file, declaring a mismatch against the plate that
     is really running, and discarding a perfectly good 3MF (#2522).
     """
-    try:
-        with zipfile.ZipFile(file_path, "r") as zf:
-            if "Metadata/slice_info.config" not in zf.namelist():
-                return None
-            content = zf.read("Metadata/slice_info.config").decode()
-            root = ET.fromstring(content)
-            plates = root.findall(".//plate")
-            if len(plates) != 1:
-                return None
-            return _read_plate_index(plates[0])
-    except Exception:
-        return None
+    plates = plate_indexes_in_3mf(file_path)
+    return plates[0] if len(plates) == 1 else None
 
 
 _PLATE_SUFFIX_RE = re.compile(r"^(.*?)(\s*-\s*Plate\s+|_plate_)(\d+)$", re.IGNORECASE)
