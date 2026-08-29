@@ -2,7 +2,7 @@
 
 All notable changes to Bambuddy will be documented in this file.
 
-## [1.2.5.4] - Unreleased
+## [1.2.5.4] - 2026-08-29
 
 ### Added
 - **Sub-projects on the Projects page can be folded away (#2991)** — A project with sub-projects drew every one of them expanded underneath it, at every level, with nothing to shut. That is fine for two projects and unusable for a three-level hierarchy over a couple of hundred archives, where the page becomes one long scroll before the first thing you were looking for. Each group's "Sub-projects of X" caption is now a chevron that folds that group, and a **Collapse** pill next to the status filter tabs sets the default for the whole page and is remembered across reloads. The caption stays visible when a group is shut — it is the way back in, and it carries a count of what is behind it. That count is of the cards actually nested there, not the card's own sub-project badge: the API counts sub-projects across every status on purpose, so under the default Active filter the badge can legitimately say 2 where only one card will unfold. A group folded by hand deviates from the default until the pill is pressed, which resets those deviations rather than leaving a group defying the switch that was just flipped. Nothing changes for a page with no nesting, where the pill is not shown at all, and the default with no stored preference is still fully expanded.
