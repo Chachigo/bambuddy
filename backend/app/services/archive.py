@@ -22,54 +22,9 @@ from backend.app.utils.archive_paths import archive_dir as resolve_archive_dir
 from backend.app.utils.ffmpeg_output import NO_FFMPEG_OUTPUT, summarize_ffmpeg_stderr
 from backend.app.utils.filename import clean_display_name
 from backend.app.utils.safe_path import PathTraversalError, assert_under, safe_join_under
+from backend.app.utils.threemf_tools import bed_temperature_from_config
 
 logger = logging.getLogger(__name__)
-
-
-# Bed temperature is not one key in a BambuStudio project. Every plate type has
-# its own per-filament array, and the plate actually fitted is named separately
-# in ``curr_bed_type`` -- so reading a bed temperature means picking the array
-# the plate points at. Keys and mapping are BambuStudio's own
-# ``get_bed_temp_1st_layer_key`` / ``get_bed_temp_key`` (PrintConfig.hpp), and
-# the plate names are the ``curr_bed_type`` enum values (PrintConfig.cpp).
-# First-layer temperature first: that is what the printer heats to before the
-# print starts, which is what preheat is trying to reach.
-#
-# ``Default Plate`` is deliberately absent -- BambuStudio maps it to no key at
-# all, so there is nothing to read and guessing a plate would invent a bed
-# temperature the slice never specified.
-_BED_TEMP_KEYS: dict[str, tuple[str, str]] = {
-    "Cool Plate": ("cool_plate_temp_initial_layer", "cool_plate_temp"),
-    "Engineering Plate": ("eng_plate_temp_initial_layer", "eng_plate_temp"),
-    "High Temp Plate": ("hot_plate_temp_initial_layer", "hot_plate_temp"),
-    "Textured PEI Plate": ("textured_plate_temp_initial_layer", "textured_plate_temp"),
-    "Supertack Plate": ("supertack_plate_temp_initial_layer", "supertack_plate_temp"),
-}
-
-# Fallback for a config that names no plate: the Orca/PrusaSlicer spelling,
-# which is a single value rather than a per-plate array.
-_GENERIC_BED_TEMP_KEYS = ("bed_temperature_initial_layer", "bed_temperature")
-
-
-def _plate_temperature(val) -> int | None:
-    """Bed temperature from one plate-temperature entry, or None.
-
-    The plate arrays carry one entry per filament in the project, and a 0 means
-    that filament cannot print on this plate. The bed only has one temperature,
-    so the print runs at the highest its filaments ask for -- taking entry 0 the
-    way the neighbouring scalar settings do would store a 0 for any project
-    whose first filament is not one this plate is heated for.
-    """
-    values = val if isinstance(val, list) else [val]
-    temps = []
-    for entry in values:
-        if isinstance(entry, bool) or not isinstance(entry, (int, float, str)):
-            continue
-        try:
-            temps.append(int(float(entry)))
-        except (TypeError, ValueError):
-            continue
-    return max(temps) if temps else None
 
 
 def _copy_and_fsync(src: Path, dst: Path, chunk_size: int = 1024 * 1024) -> None:
@@ -550,17 +505,9 @@ class ThreeMFParser:
             # not write -- so every archive from a Bambu slice stored NULL, and
             # preheat fell back to a configured bed temperature on every job
             # (#2989). Orca-exported 3MFs keep working through the generic keys.
-            bed_type = str(data.get("curr_bed_type") or "").strip()
-            for key in (*_BED_TEMP_KEYS.get(bed_type, ()), *_GENERIC_BED_TEMP_KEYS):
-                if key not in data:
-                    continue
-                temperature = _plate_temperature(data[key])
-                # A plate array of all zeros means no filament in the project
-                # prints on this plate, which is not a bed temperature -- keep
-                # looking rather than recording a 0 that reads as "cold bed".
-                if temperature:
-                    self.metadata["bed_temperature"] = temperature
-                    break
+            bed_temperature = bed_temperature_from_config(data)
+            if bed_temperature is not None:
+                self.metadata["bed_temperature"] = bed_temperature
 
             # Nozzle temperature
             for key in ["nozzle_temperature_initial_layer", "nozzle_temperature"]:
@@ -586,30 +533,6 @@ class ThreeMFParser:
                     self.metadata["bed_type"] = val.strip()
         except Exception:
             pass  # Print settings are optional; missing values are left unset
-
-    def _extract_settings_from_content(self, content: str):
-        """Extract print settings from config content."""
-        settings_map = {
-            "layer_height": ("layer_height", float),
-            "nozzle_diameter": ("nozzle_diameter", float),
-            "bed_temperature": ("bed_temperature", int),
-            "nozzle_temperature": ("nozzle_temperature", int),
-        }
-
-        for key, (search_key, converter) in settings_map.items():
-            if key not in self.metadata:
-                try:
-                    # Try JSON format
-                    if f'"{search_key}"' in content:
-                        start = content.find(f'"{search_key}"')
-                        value_start = content.find(":", start) + 1
-                        value_end = content.find(",", value_start)
-                        if value_end == -1:
-                            value_end = content.find("}", value_start)
-                        value = content[value_start:value_end].strip().strip('"')
-                        self.metadata[key] = converter(value)
-                except (ValueError, TypeError):
-                    pass  # Skip settings with unconvertible values
 
     def _parse_3dmodel(self, zf: zipfile.ZipFile):
         """Parse 3D/3dmodel.model for MakerWorld metadata."""
