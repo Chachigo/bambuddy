@@ -1210,6 +1210,39 @@ def default_plate_gcode_name(names: list[str]) -> str | None:
     return gcodes[0]
 
 
+def names_carry_gcode(names: list[str]) -> bool:
+    """Is this 3MF a sliced file — does it carry printer-executable G-code?
+
+    One definition, because several of them is the bug (#2993). The archive
+    side judged a file by what it holds -- the card's GCODE badge reads the
+    layer count and print time parsed out of the plate G-code, and
+    ``/archives/{id}/capabilities`` scanned the zip -- while the library judged
+    it by its filename. So a sliced 3MF stored as ``Foo.3mf`` rather than
+    ``Foo.gcode.3mf`` carried the badge and still re-imported as a source-only
+    project. This is the answer for anything asking the zip directly.
+
+    Defers to ``default_plate_gcode_name`` rather than testing for
+    ``Metadata/plate_<n>.gcode``, so a slicer that lays its output out some
+    other way is judged by the same rule everywhere.
+    """
+    return default_plate_gcode_name(names) is not None
+
+
+def carries_gcode(file_path: Path | str) -> bool:
+    """``names_carry_gcode`` for a file on disk. False for anything unreadable.
+
+    Only the zip's central directory is read — no member is decompressed — so
+    this is cheap enough to run on every ingested file.
+    """
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            return names_carry_gcode(zf.namelist())
+    except (OSError, zipfile.BadZipFile):
+        # Not a zip, gone, or unreadable. Callers treat that as "no G-code
+        # visible", which is what they did before this check existed.
+        return False
+
+
 # The header block sits at the very top of the plate G-code. Read only that
 # much: a sliced plate is routinely tens of megabytes and `ZipFile.read()`
 # would inflate all of it to reach ~40 lines.
