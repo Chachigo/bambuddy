@@ -59,6 +59,7 @@ import type {
 } from '../api/client';
 import { Button } from '../components/Button';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu';
 import { PrintModal } from '../components/PrintModal';
 import { ModelViewerModal } from '../components/ModelViewerModal';
 import { SliceModal } from '../components/SliceModal';
@@ -69,12 +70,13 @@ import { FolderReadmePanel } from '../components/FolderReadmePanel';
 import { LibraryTagsModal } from '../components/LibraryTagsModal';
 import { PurgeOldFilesModal } from '../components/PurgeOldFilesModal';
 import { useToast } from '../contexts/ToastContext';
-import { useIsMobile } from '../hooks/useIsMobile';
 import { usePageFileDrop } from '../hooks/usePageFileDrop';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDuration, parseUTCDate, formatDate } from '../utils/date';
 import { formatFileSize } from '../utils/file';
-import { isApiSliceableFilename, isSliceableFilename, openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
+import { assignableProjects } from '../utils/projectTree';
+import { openInSlicer, resolveDesktopSlicer, type SlicerType } from '../utils/slicer';
+import { isSlicedLibraryFile, isSliceableLibraryFile } from '../utils/libraryFiles';
 
 type SortField = 'name' | 'date' | 'size' | 'type' | 'prints';
 type SortDirection = 'asc' | 'desc';
@@ -404,10 +406,14 @@ function LinkFolderModal({ folder, onClose, onLink, isLoading, t }: LinkFolderMo
     if (folder.archive_id) setLinkType('archive');
   });
 
+  // Archived projects are left out, bar the one this folder is already linked
+  // to -- dropping that one would leave the folder looking unlinked while the
+  // link is still there (#2888).
   const { data: projects } = useQuery({
     queryKey: ['projects'],
     queryFn: () => api.getProjects(),
-    select: (rows) => [...rows].sort((a, b) => a.name.localeCompare(b.name)),
+    select: (rows) =>
+      assignableProjects([...rows].sort((a, b) => a.name.localeCompare(b.name)), folder.project_id),
   });
 
   const { data: archives } = useQuery({
@@ -661,7 +667,7 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
             <Link2 className="w-3.5 h-3.5 text-bambu-gray hover:text-bambu-green" />
           </button>
         )}
-        <div className={`flex-shrink-0 flex items-center gap-0.5 transition-opacity ${wrapNames ? '' : 'opacity-0 group-hover:opacity-100'}`} onClick={(e) => e.stopPropagation()}>
+        <div className={`flex-shrink-0 flex items-center gap-0.5 transition-opacity ${wrapNames ? '' : 'can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`} onClick={(e) => e.stopPropagation()}>
           <div className="relative">
             <button
               onClick={() => setShowActions(!showActions)}
@@ -737,17 +743,10 @@ function FolderTreeItem({ folder, selectedFolderId, onSelect, onDelete, onLink, 
   );
 }
 
-// Helper to check if a file is sliced (printable)
-function isSlicedFilename(filename: string): boolean {
-  const lower = filename.toLowerCase();
-  return lower.endsWith('.gcode') || lower.endsWith('.gcode.3mf');
-}
-
 // File Card
 interface FileCardProps {
   file: LibraryFileListItem;
   isSelected: boolean;
-  isMobile: boolean;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
   onDownload: (id: number) => void;
@@ -769,12 +768,94 @@ interface FileCardProps {
   t: TFunction;
 }
 
-function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, canSlice, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
-  const [showActions, setShowActions] = useState(false);
+function FileCard({ file, isSelected, onSelect, onDelete, onDownload, onPrint, onSlice, onOpenInSlicer, onRunPipeline, useSlicerApi, canSlice, onPreview3d, onRename, onGenerateThumbnail, onTagClick, thumbnailVersion, hasPermission, canModify, authEnabled, showModified, t }: FileCardProps) {
+  // Viewport coordinates rather than a flag, because the menu is rendered by
+  // `ContextMenu` at `position: fixed` and anchored to the button (#2846). The
+  // card it belongs to is only ~270px tall for a bare STL, which is shorter
+  // than the seven-entry menu, so a menu positioned inside the card had its
+  // top entry -- Slice -- cut off. The archive card menu works the same way.
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number } | null>(null);
+
+  const canPreview3d = hasPermission('library:read');
+  const canRename = canModify('library', 'update', file.created_by_id);
+  const canDelete = canModify('library', 'delete', file.created_by_id);
+
+  const menuItems: ContextMenuItem[] = [];
+  if (onPrint && isSlicedLibraryFile(file)) {
+    menuItems.push({
+      label: t('common.print'),
+      // The action stays visually distinct now that the menu component styles
+      // its own labels; only the icon carries the accent.
+      icon: <Printer className="w-4 h-4 text-bambu-green" />,
+      onClick: () => onPrint(file),
+      disabled: !hasPermission('queue:create'),
+      title: !hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined,
+    });
+  }
+  if (isSliceableLibraryFile(file, !!useSlicerApi) && (useSlicerApi ? onSlice : onOpenInSlicer)) {
+    menuItems.push({
+      label: t('slice.action'),
+      icon: useSlicerApi ? <Cog className="w-4 h-4" /> : <ExternalLink className="w-4 h-4" />,
+      onClick: () => { if (useSlicerApi) onSlice?.(file); else onOpenInSlicer?.(file); },
+      disabled: !canSlice,
+      title: !canSlice ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined,
+    });
+  }
+  if (onRunPipeline && useSlicerApi && isSliceableLibraryFile(file, true)) {
+    menuItems.push({
+      label: t('library.runWithPipeline.actionLabel'),
+      icon: <Play className="w-4 h-4" />,
+      onClick: () => onRunPipeline(file),
+      disabled: !hasPermission('pipelines:run'),
+      title: !hasPermission('pipelines:run') ? t('library.runWithPipeline.noPermission') : undefined,
+    });
+  }
+  if (onPreview3d && (file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'stl' || file.file_type === 'gcode.3mf')) {
+    menuItems.push({
+      label: t('fileManager.preview3d'),
+      icon: <Box className="w-4 h-4" />,
+      onClick: () => onPreview3d(file),
+      disabled: !canPreview3d,
+      title: !canPreview3d ? t('fileManager.noPermissionPreview') : undefined,
+    });
+  }
+  menuItems.push({
+    label: t('common.download'),
+    icon: <Download className="w-4 h-4" />,
+    onClick: () => onDownload(file.id),
+    disabled: !hasPermission('library:read'),
+    title: !hasPermission('library:read') ? t('fileManager.noPermissionDownload') : undefined,
+  });
+  if (onRename) {
+    menuItems.push({
+      label: t('common.rename'),
+      icon: <Pencil className="w-4 h-4" />,
+      onClick: () => onRename(file),
+      disabled: !canRename,
+      title: !canRename ? t('fileManager.noPermissionRenameFile') : undefined,
+    });
+  }
+  if (onGenerateThumbnail && file.file_type === 'stl') {
+    menuItems.push({
+      label: t('fileManager.generateThumbnail'),
+      icon: <Image className="w-4 h-4" />,
+      onClick: () => onGenerateThumbnail(file),
+      disabled: !canRename,
+      title: !canRename ? t('fileManager.noPermissionGenerateThumbnail') : undefined,
+    });
+  }
+  menuItems.push({
+    label: t('common.delete'),
+    icon: <Trash2 className="w-4 h-4" />,
+    onClick: () => onDelete(file.id),
+    danger: true,
+    disabled: !canDelete,
+    title: !canDelete ? t('fileManager.noPermissionDeleteFile') : undefined,
+  });
 
   return (
     <div
-      className={`group relative bg-bambu-dark-secondary rounded-lg border transition-all cursor-pointer overflow-hidden ${
+      className={`group relative bg-bambu-dark-secondary rounded-lg border transition-all cursor-pointer ${
         isSelected
           ? 'border-bambu-green ring-1 ring-bambu-green'
           : 'border-bambu-dark-tertiary hover:border-bambu-green/50'
@@ -782,7 +863,7 @@ function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, 
       onClick={() => onSelect(file.id)}
     >
       {/* Thumbnail */}
-      <div className="aspect-square bg-bambu-dark flex items-center justify-center overflow-hidden">
+      <div className="aspect-square bg-bambu-dark flex items-center justify-center overflow-hidden rounded-t-lg">
         {file.thumbnail_path ? (
           <img
             src={`${api.getLibraryFileThumbnailUrl(file.id)}${thumbnailVersion ? ((api.getLibraryFileThumbnailUrl(file.id).includes('?') ? '&' : '?') + `v=${thumbnailVersion}`) : ''}`}
@@ -870,134 +951,29 @@ function FileCard({ file, isSelected, isMobile, onSelect, onDelete, onDownload, 
         )}
       </div>
 
-      {/* Actions - always visible on mobile, hover on desktop */}
-      <div className={`absolute bottom-2 right-2 transition-opacity ${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} onClick={(e) => e.stopPropagation()}>
+      {/* Actions - hover-revealed with a mouse, always there without one (#2865) */}
+      <div className="absolute bottom-2 right-2 transition-opacity can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" onClick={(e) => e.stopPropagation()}>
         <button
-          onClick={() => setShowActions(!showActions)}
+          onClick={(e) => {
+            // No open/close toggle: the menu's own outside-mousedown handler
+            // has already dismissed it by the time this click lands.
+            const rect = e.currentTarget.getBoundingClientRect();
+            setMenuAnchor({ x: rect.left, y: rect.bottom + 4 });
+          }}
           className="p-1.5 rounded bg-bambu-dark-secondary/90 hover:bg-bambu-dark-tertiary"
         >
           <MoreVertical className="w-4 h-4 text-bambu-gray" />
         </button>
-        {showActions && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setShowActions(false)} />
-            <div className="absolute right-0 bottom-8 z-20 bg-bambu-dark-secondary border border-bambu-dark-tertiary rounded-lg shadow-xl py-1 min-w-[140px]">
-              {onPrint && isSlicedFilename(file.filename) && (
-                <button
-                  className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    hasPermission('queue:create') ? 'text-bambu-green hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                  }`}
-                  onClick={() => { if (hasPermission('queue:create')) { onPrint(file); setShowActions(false); } }}
-                  disabled={!hasPermission('queue:create')}
-                  title={!hasPermission('queue:create') ? t('fileManager.noPermissionAddToQueue') : undefined}
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  {t('common.print')}
-                </button>
-              )}
-              {(useSlicerApi ? isApiSliceableFilename(file.filename) : isSliceableFilename(file.filename)) &&
-                (useSlicerApi ? onSlice : onOpenInSlicer) && (
-                <button
-                  className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    canSlice ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                  }`}
-                  onClick={() => {
-                    if (!canSlice) return;
-                    if (useSlicerApi) onSlice?.(file);
-                    else onOpenInSlicer?.(file);
-                    setShowActions(false);
-                  }}
-                  disabled={!canSlice}
-                  title={!canSlice ? (useSlicerApi ? t('fileManager.noPermissionSlice') : t('fileManager.noPermissionDownload')) : undefined}
-                >
-                  {useSlicerApi ? <Cog className="w-3.5 h-3.5" /> : <ExternalLink className="w-3.5 h-3.5" />}
-                  {t('slice.action')}
-                </button>
-              )}
-              {onRunPipeline && useSlicerApi && isApiSliceableFilename(file.filename) && (
-                <button
-                  className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    hasPermission('pipelines:run') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                  }`}
-                  onClick={() => { if (hasPermission('pipelines:run')) { onRunPipeline(file); setShowActions(false); } }}
-                  disabled={!hasPermission('pipelines:run')}
-                  title={!hasPermission('pipelines:run') ? t('library.runWithPipeline.noPermission') : undefined}
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  {t('library.runWithPipeline.actionLabel')}
-                </button>
-              )}
-              {onPreview3d && (file.file_type === '3mf' || file.file_type === 'gcode' || file.file_type === 'stl' || file.file_type === 'gcode.3mf') && (
-                <button
-                  className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    hasPermission('library:read') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                  }`}
-                  onClick={() => { if (hasPermission('library:read')) { onPreview3d(file); setShowActions(false); } }}
-                  disabled={!hasPermission('library:read')}
-                  title={!hasPermission('library:read') ? 'You do not have permission to preview files' : undefined}
-                >
-                  <Box className="w-3.5 h-3.5" />
-                  3D Preview
-                </button>
-              )}
-              <button
-                className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                  hasPermission('library:read') ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                }`}
-                onClick={() => { if (hasPermission('library:read')) { onDownload(file.id); setShowActions(false); } }}
-                disabled={!hasPermission('library:read')}
-                title={!hasPermission('library:read') ? t('fileManager.noPermissionDownload') : undefined}
-              >
-                <Download className="w-3.5 h-3.5" />
-                {t('common.download')}
-              </button>
-              {onRename && (
-                <button
-                  className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                  }`}
-                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onRename(file); setShowActions(false); } }}
-                  disabled={!canModify('library', 'update', file.created_by_id)}
-                  title={!canModify('library', 'update', file.created_by_id) ? t('fileManager.noPermissionRenameFile') : undefined}
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                  {t('common.rename')}
-                </button>
-              )}
-              {onGenerateThumbnail && file.file_type === 'stl' && (
-                <button
-                  className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                    canModify('library', 'update', file.created_by_id) ? 'text-white hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                  }`}
-                  onClick={() => { if (canModify('library', 'update', file.created_by_id)) { onGenerateThumbnail(file); setShowActions(false); } }}
-                  disabled={!canModify('library', 'update', file.created_by_id)}
-                  title={!canModify('library', 'update', file.created_by_id) ? t('fileManager.noPermissionGenerateThumbnail') : undefined}
-                >
-                  <Image className="w-3.5 h-3.5" />
-                  {t('fileManager.generateThumbnail')}
-                </button>
-              )}
-              <button
-                className={`w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 ${
-                  canModify('library', 'delete', file.created_by_id) ? 'text-red-700 dark:text-red-400 hover:bg-bambu-dark' : 'text-bambu-gray cursor-not-allowed'
-                }`}
-                onClick={() => { if (canModify('library', 'delete', file.created_by_id)) { onDelete(file.id); setShowActions(false); } }}
-                disabled={!canModify('library', 'delete', file.created_by_id)}
-                title={!canModify('library', 'delete', file.created_by_id) ? t('fileManager.noPermissionDeleteFile') : undefined}
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                {t('common.delete')}
-              </button>
-            </div>
-          </>
+        {menuAnchor && (
+          <ContextMenu x={menuAnchor.x} y={menuAnchor.y} items={menuItems} onClose={() => setMenuAnchor(null)} />
         )}
       </div>
 
-      {/* Selection checkbox - always visible on mobile, hover on desktop */}
+      {/* Selection checkbox - hover-revealed with a mouse, always there without one (#2865) */}
       <div className={`absolute top-2 left-2 w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${
         isSelected
           ? 'bg-bambu-green border-bambu-green'
-          : `border-white/30 bg-black/30 ${isMobile ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`
+          : 'border-white/30 bg-black/30 can-hover:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
       }`}>
         {isSelected && <div className="w-2 h-2 bg-white rounded-sm" />}
       </div>
@@ -1129,9 +1105,6 @@ export function FileManagerPage() {
   const [showModified, setShowModified] = useState<boolean>(
     () => localStorage.getItem('library-show-modified') === 'true'
   );
-
-  // Mobile detection for touch-friendly UI
-  const isMobile = useIsMobile();
 
   // Update selectedFolderId when URL parameter changes (e.g., navigating from Project or Archive page)
   useEffect(() => {
@@ -1595,17 +1568,11 @@ export function FileManagerPage() {
     onError: (error: Error) => showToast(error.message, 'error'),
   });
 
-  // Helper to check if a file is sliced (printable)
-  const isSlicedFile = useCallback((filename: string) => {
-    const lower = filename.toLowerCase();
-    return lower.endsWith('.gcode') || lower.includes('.gcode.');
-  }, []);
-
   // Get sliced files from selection
   const selectedSlicedFiles = useMemo(() => {
     if (!files) return [];
-    return files.filter(f => selectedFiles.includes(f.id) && isSlicedFile(f.filename));
-  }, [files, selectedFiles, isSlicedFile]);
+    return files.filter(f => selectedFiles.includes(f.id) && isSlicedLibraryFile(f));
+  }, [files, selectedFiles]);
 
   // The clicked file's variant group, so printing one member offers the rest
   // without the user re-selecting them (#2570).
@@ -2454,7 +2421,6 @@ export function FileManagerPage() {
                     key={file.id}
                     file={file}
                     isSelected={selectedFiles.includes(file.id)}
-                    isMobile={isMobile}
                     t={t}
                     onSelect={handleFileSelect}
                     onDelete={(id) => setDeleteConfirm({ type: 'file', id })}
@@ -2470,7 +2436,7 @@ export function FileManagerPage() {
                       // full-page gcode viewer the archive card uses, so
                       // the two paths feel consistent. STL / source 3MF
                       // continue to use the in-app 3D model viewer modal.
-                      if (isSlicedFilename(f.filename)) {
+                      if (isSlicedLibraryFile(f)) {
                         navigate(`/gcode-viewer?library_file=${f.id}`);
                       } else {
                         setViewerFile(f);
@@ -2624,7 +2590,7 @@ export function FileManagerPage() {
                     </div>
                     {/* Actions */}
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      {isSlicedFilename(file.filename) && (
+                      {isSlicedLibraryFile(file) && (
                         <>
                           <button
                             onClick={() => hasPermission('queue:create') && setPrintFile(file)}
@@ -2640,7 +2606,7 @@ export function FileManagerPage() {
                           </button>
                         </>
                       )}
-                      {(settings?.use_slicer_api ? isApiSliceableFilename(file.filename) : isSliceableFilename(file.filename)) && (
+                      {isSliceableLibraryFile(file, !!settings?.use_slicer_api) && (
                         <button
                           onClick={() => {
                             if (!canSlice()) return;
@@ -2657,7 +2623,7 @@ export function FileManagerPage() {
                           {settings?.use_slicer_api ? <Cog className="w-4 h-4" /> : <ExternalLink className="w-4 h-4" />}
                         </button>
                       )}
-                      {(settings?.use_slicer_api ?? false) && isApiSliceableFilename(file.filename) && (
+                      {(settings?.use_slicer_api ?? false) && isSliceableLibraryFile(file, true) && (
                         <button
                           onClick={() => hasPermission('pipelines:run') && setRunPipelineFile(file)}
                           className={`p-1.5 rounded transition-colors ${
@@ -2675,7 +2641,7 @@ export function FileManagerPage() {
                         <button
                           onClick={() => {
                             if (!hasPermission('library:read')) return;
-                            if (isSlicedFilename(file.filename)) {
+                            if (isSlicedLibraryFile(file)) {
                               navigate(`/gcode-viewer?library_file=${file.id}`);
                             } else {
                               setViewerFile(file);
@@ -2903,7 +2869,7 @@ export function FileManagerPage() {
           onSliceWithBambuddy={
             // Only offer in-app slicing on files the SliceModal can actually
             // handle (matches the file-row Cog visibility check at :2127).
-            isApiSliceableFilename(viewerFile.filename) && hasPermission('library:upload')
+            isSliceableLibraryFile(viewerFile, true) && hasPermission('library:upload')
               ? () => {
                   const f = viewerFile;
                   setViewerFile(null);

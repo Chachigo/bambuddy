@@ -10,6 +10,7 @@ AMS remain% delta is the fallback for trays not covered by 3MF data.
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -738,7 +739,13 @@ async def on_print_complete(
 
         search_filename = data.get("filename") or data.get("subtask_name") or (session.print_name if session else "")
         if search_filename:
-            threemf_path = await _find_3mf_by_filename(printer_id, search_filename, db, app_settings.base_dir)
+            threemf_path = await _find_3mf_by_filename(
+                printer_id,
+                search_filename,
+                db,
+                app_settings.base_dir,
+                print_name=data.get("subtask_name") or (session.print_name if session else None),
+            )
 
     if archive_id or threemf_path:
         threemf_results = await _track_from_3mf(
@@ -830,6 +837,18 @@ async def on_print_complete(
                     continue  # Already tracked via 3MF
 
                 if key not in session.tray_remain_start:
+                    # No usable remain% when the print began, so there is no delta
+                    # to charge. Said out loud for the same reason as the branches
+                    # below: a slot the print used, holding a spool the operator
+                    # assigned, otherwise vanished from the accounting without a
+                    # word. Common on non-RFID spools, which report remain = -1
+                    # until a remaining amount is set by hand.
+                    if not print_used_keys or key in print_used_keys:
+                        logger.info(
+                            "[UsageTracker] %s: no valid remain%% at print start, nothing to charge for printer %d",
+                            tray_label,
+                            printer_id,
+                        )
                     continue
 
                 # Skip trays the print never touched. Only enforce when we have
@@ -994,32 +1013,165 @@ async def on_print_complete(
     return results
 
 
+# A running print's ``filename`` is the path the printer is executing, and on a
+# sliced job that is always ``…/Metadata/plate_<N>.gcode``. Its stem names the
+# *plate*, not the model, and every Bambu print in existence has one — so it
+# identifies nothing and must never be used to match a 3MF. It reached the
+# matcher for real on H2-series and P2S prints, where the file goes to internal
+# eMMC, no 3MF can be fetched, and the archive keeps the gcode path as its
+# filename: `plate_1` then matched an unrelated `lid_plate_1.gcode.3mf` and that
+# print's filament figures were read off a different model entirely.
+_GENERIC_PLATE_STEM = re.compile(r"^plate_?\d+$", re.IGNORECASE)
+
+
+def _like_escape(value: str) -> str:
+    """Escape LIKE metacharacters so a stem matches literally.
+
+    ``_`` is a single-character wildcard, and model names are full of them.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _threemf_search_stem(*candidates: str | None) -> str | None:
+    """First candidate that names a model, or None if none of them do.
+
+    Candidates are tried in order and the generic plate name is skipped rather
+    than accepted, so a print that only has one falls through to "no match"
+    instead of matching everything.
+    """
+    for raw in candidates:
+        if not raw:
+            continue
+        stem = raw.split("/")[-1].strip()
+        for suffix in (".gcode.3mf", ".gcode", ".3mf"):
+            if stem.lower().endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        # Stripped only to judge the stem, never to change it: a real archive
+        # here is named "…Face Down .gcode.3mf", and a stem trimmed to
+        # "…Face Down" no longer matches the file it came from.
+        probe = stem.strip()
+        if probe and not _GENERIC_PLATE_STEM.match(probe):
+            return stem
+    return None
+
+
+def _stem_matches(column, stem: str):
+    """Filter matching *stem* at a filename boundary rather than anywhere.
+
+    ``ilike("%<stem>.%")`` also matched a *suffix* of a longer name, which is how
+    `plate_1` reached `lid_plate_1.gcode.3mf`. A name is either the whole
+    basename or the basename after a directory separator.
+    """
+    escaped = _like_escape(stem)
+    return column.ilike(f"{escaped}.%", escape="\\") | column.ilike(f"%/{escaped}.%", escape="\\")
+
+
+def _expected_plate_for_print(plate_id: int | None, gcode_file: str | None) -> int | None:
+    """The plate a running print is on, from whatever was recorded about it.
+
+    ``plate_id`` is the reliable source, and the archives that need a donor 3MF
+    have none: the no-3MF fallback row is created before any 3MF is read, so
+    the column is never filled. The gcode path the printer echoed is the other
+    source, exact on the firmwares that echo ``Metadata/plate_N.gcode``. Some
+    P1S builds echo only the 3MF filename, and then the plate is simply not
+    knowable at print start (#2957).
+    """
+    from backend.app.services.printer_manager import parse_plate_id
+
+    if plate_id is not None:
+        return plate_id
+    return parse_plate_id(gcode_file)
+
+
+def _donor_3mf_conflicts(candidate, expected_plate: int | None) -> str | None:
+    """Why *candidate* cannot be this print's 3MF, or None if nothing rules it out.
+
+    A same-name 3MF is not the same print. Bambu Studio writes the printer-side
+    filename from the project's ``Title`` metadata, so every plate of a project
+    arrives under one name however the user renamed the file on disk, and a
+    donor chosen on the name alone hands one plate's slicer estimates to another
+    plate's print. A reporter's single-filament job was charged against three
+    spools that way, and nothing about the deduction said it was a guess
+    (#2957).
+
+    The plate is the one thing that can settle this. It is the same comparison
+    #1204 already makes against a freshly downloaded 3MF, so a single-plate
+    export is known to carry its original index rather than a renumbered 1.
+
+    Filament *count* deliberately is not checked, however tempting: the slicer's
+    ``ams_mapping`` is indexed by the project's filament slot -- see
+    ``slot_to_tray[slot_id - 1]`` below -- not by the plate's, so a real
+    single-filament print reports ``[0, -1, -1, -1]`` and its length says
+    nothing about how many filaments the plate uses.
+    """
+    from backend.app.services.archive import plate_indexes_in_3mf
+
+    if expected_plate is None:
+        return None
+
+    plates = plate_indexes_in_3mf(candidate)
+    if not plates or any(plate is None for plate in plates):
+        # Nothing was read, or not all of it was, and neither is evidence about
+        # the plate. Refusing here would drop the fallback for every 3MF variant
+        # this parser does not understand; downstream reports that honestly as
+        # "no filament usage data".
+        return None
+    if len(plates) == 1 and plates[0] != expected_plate:
+        return f"it holds plate {plates[0]}, this print is plate {expected_plate}"
+    if expected_plate not in plates:
+        # An all-plates export is a good donor precisely when it carries the
+        # plate that is running. Without this the plate is looked for
+        # downstream, found missing, and the whole file's filaments are summed
+        # onto one plate's print.
+        return f"it has no plate {expected_plate}"
+    return None
+
+
 async def _resolve_3mf_fallback(archive, db: AsyncSession, base_dir):
     """Try to find a 3MF file from library or a previous archive when the current archive has none.
 
     This handles fallback archives (FTP download failed) where the 3MF may already exist
     locally from a library upload or a previous successful print of the same file.
+
+    A name match alone does not make a candidate this print's file, so every
+    candidate is put through :func:`_donor_3mf_conflicts` before it is handed
+    back (#2957).
     """
     from pathlib import Path
 
     from backend.app.models.archive import PrintArchive
     from backend.app.models.library import LibraryFile
 
-    # Derive search name from archive filename (e.g. "benchy.3mf" or "benchy.gcode.3mf")
-    search_name = archive.filename or archive.print_name
-    if not search_name:
-        return None
-    # Normalize: strip path parts, get base name
-    search_name = search_name.split("/")[-1]
-    search_base = search_name.replace(".gcode.3mf", "").replace(".gcode", "").replace(".3mf", "")
+    # Derive search name from archive filename (e.g. "benchy.3mf" or "benchy.gcode.3mf"),
+    # falling back to the print name when the filename is only a plate path.
+    search_base = _threemf_search_stem(archive.filename, archive.print_name)
     if not search_base:
         return None
+
+    print_data = (getattr(archive, "extra_data", None) or {}).get("_print_data") or {}
+    expected_plate = _expected_plate_for_print(
+        getattr(archive, "plate_id", None),
+        archive.filename or print_data.get("filename"),
+    )
+    if expected_plate is None:
+        # Worth saying out loud. On the firmwares that echo only the 3MF
+        # filename there is nothing to check a donor against, so whatever is
+        # accepted below is accepted on its name alone -- which is how the
+        # reporter's spools were debited for another plate's filament. The
+        # deduction being silent was half the bug (#2957).
+        logger.warning(
+            "[UsageTracker] 3MF fallback: archive %s does not know its plate (%r), so a same-named "
+            "3MF can only be matched on its name",
+            archive.id,
+            archive.filename,
+        )
 
     # 1. Try library files matching the name (match base name at file boundary)
     try:
         lib_result = await db.execute(
             LibraryFile.active()
-            .where(LibraryFile.file_path.ilike(f"%/{search_base}.%") | LibraryFile.file_path.ilike(f"{search_base}.%"))
+            .where(_stem_matches(LibraryFile.file_path, search_base))
             .where(LibraryFile.file_path.ilike("%.3mf"))
             .order_by(LibraryFile.created_at.desc())
             .limit(3)
@@ -1028,7 +1180,21 @@ async def _resolve_3mf_fallback(archive, db: AsyncSession, base_dir):
             lib_path = Path(lib_file.file_path)
             candidate = lib_path if lib_path.is_absolute() else base_dir / lib_file.file_path
             if candidate.exists() and candidate.suffix == ".3mf":
-                logger.info("[UsageTracker] 3MF fallback: found library file %s for archive %s", candidate, archive.id)
+                conflict = _donor_3mf_conflicts(candidate, expected_plate)
+                if conflict:
+                    logger.warning(
+                        "[UsageTracker] 3MF fallback: not using library file %s for archive %s — %s",
+                        candidate,
+                        archive.id,
+                        conflict,
+                    )
+                    continue
+                logger.info(
+                    "[UsageTracker] 3MF fallback: found library file %s for archive %s (expected plate=%s)",
+                    candidate,
+                    archive.id,
+                    expected_plate,
+                )
                 return candidate
     except Exception as e:
         logger.debug("[UsageTracker] 3MF fallback: library lookup failed: %s", e)
@@ -1041,19 +1207,27 @@ async def _resolve_3mf_fallback(archive, db: AsyncSession, base_dir):
             .where(PrintArchive.printer_id == archive.printer_id)
             .where(PrintArchive.file_path != "")
             .where(PrintArchive.file_path.isnot(None))
-            .where(
-                PrintArchive.filename.ilike(f"%{search_base}.%") | PrintArchive.filename.ilike(f"{search_base}.%"),
-            )
+            .where(_stem_matches(PrintArchive.filename, search_base))
             .order_by(PrintArchive.created_at.desc())
             .limit(3)
         )
         for prev_archive in prev_result.scalars().all():
             candidate = base_dir / prev_archive.file_path
             if candidate.exists() and candidate.suffix == ".3mf":
+                conflict = _donor_3mf_conflicts(candidate, expected_plate)
+                if conflict:
+                    logger.warning(
+                        "[UsageTracker] 3MF fallback: not using archive %s's file for archive %s — %s",
+                        prev_archive.id,
+                        archive.id,
+                        conflict,
+                    )
+                    continue
                 logger.info(
-                    "[UsageTracker] 3MF fallback: found previous archive %s file for archive %s",
+                    "[UsageTracker] 3MF fallback: found previous archive %s file for archive %s (expected plate=%s)",
                     prev_archive.id,
                     archive.id,
+                    expected_plate,
                 )
                 return candidate
     except Exception as e:
@@ -1067,27 +1241,34 @@ async def _find_3mf_by_filename(
     filename: str,
     db: AsyncSession,
     base_dir,
+    print_name: str | None = None,
 ):
     """Find a 3MF file by filename from library or previous archives.
 
     Used when auto-archive is disabled and there's no archive_id, but we still
     need the 3MF slicer data for filament usage tracking.
+
+    ``print_name`` is the model name to fall back to when ``filename`` is the
+    printer's plate path, which names no model at all -- and when it is that
+    plate path, it is also what keeps a same-named file for a different plate
+    from being adopted (#2957); see :func:`_donor_3mf_conflicts`.
     """
     from pathlib import Path
 
     from backend.app.models.archive import PrintArchive
     from backend.app.models.library import LibraryFile
 
-    search_name = filename.split("/")[-1] if "/" in filename else filename
-    search_base = search_name.replace(".gcode.3mf", "").replace(".gcode", "").replace(".3mf", "")
+    search_base = _threemf_search_stem(filename, print_name)
     if not search_base:
         return None
+
+    expected_plate = _expected_plate_for_print(None, filename)
 
     # 1. Try library files matching the name
     try:
         lib_result = await db.execute(
             LibraryFile.active()
-            .where(LibraryFile.file_path.ilike(f"%/{search_base}.%") | LibraryFile.file_path.ilike(f"{search_base}.%"))
+            .where(_stem_matches(LibraryFile.file_path, search_base))
             .where(LibraryFile.file_path.ilike("%.3mf"))
             .order_by(LibraryFile.created_at.desc())
             .limit(3)
@@ -1096,6 +1277,15 @@ async def _find_3mf_by_filename(
             lib_path = Path(lib_file.file_path)
             candidate = lib_path if lib_path.is_absolute() else base_dir / lib_file.file_path
             if candidate.exists() and candidate.suffix == ".3mf":
+                conflict = _donor_3mf_conflicts(candidate, expected_plate)
+                if conflict:
+                    logger.warning(
+                        "[UsageTracker] 3MF (no-archive): not using library file %s for '%s' — %s",
+                        candidate,
+                        filename,
+                        conflict,
+                    )
+                    continue
                 logger.info("[UsageTracker] 3MF (no-archive): found library file %s for '%s'", candidate, filename)
                 return candidate
     except Exception as e:
@@ -1108,15 +1298,22 @@ async def _find_3mf_by_filename(
             .where(PrintArchive.printer_id == printer_id)
             .where(PrintArchive.file_path != "")
             .where(PrintArchive.file_path.isnot(None))
-            .where(
-                PrintArchive.filename.ilike(f"%{search_base}.%") | PrintArchive.filename.ilike(f"{search_base}.%"),
-            )
+            .where(_stem_matches(PrintArchive.filename, search_base))
             .order_by(PrintArchive.created_at.desc())
             .limit(3)
         )
         for prev_archive in prev_result.scalars().all():
             candidate = base_dir / prev_archive.file_path
             if candidate.exists() and candidate.suffix == ".3mf":
+                conflict = _donor_3mf_conflicts(candidate, expected_plate)
+                if conflict:
+                    logger.warning(
+                        "[UsageTracker] 3MF (no-archive): not using archive %s's file for '%s' — %s",
+                        prev_archive.id,
+                        filename,
+                        conflict,
+                    )
+                    continue
                 logger.info(
                     "[UsageTracker] 3MF (no-archive): found previous archive %s file for '%s'",
                     prev_archive.id,
@@ -1413,6 +1610,10 @@ async def _track_from_3mf(
                 pass  # Fall back to linear scaling
 
     results = []
+    # Trays this print drew from that no longer have an assignment to charge.
+    # Collected rather than acted on inline so one notification covers the whole
+    # print instead of one per slot (#2812).
+    unassigned_global_trays: list[int] = []
 
     for usage in filament_usage:
         slot_id = usage.get("slot_id", 0)
@@ -1639,7 +1840,19 @@ async def _track_from_3mf(
             print_started_at=print_started_at,
         )
         if spool_id is None:
-            logger.info("[UsageTracker] 3MF: no spool assignment at printer %d AMS%d-T%d", printer_id, ams_id, tray_id)
+            # WARNING, not INFO: everything upstream of this line succeeded --
+            # the 3MF was found, the grams were read, the tray resolved -- and
+            # the print will still report success while this filament is never
+            # deducted. At INFO it was invisible under the default log level and
+            # absent from the reasoning in support bundles (#2812).
+            logger.warning(
+                "[UsageTracker] 3MF: no spool assignment at printer %d AMS%d-T%d — %.1fg not deducted",
+                printer_id,
+                ams_id,
+                tray_id,
+                used_g,
+            )
+            unassigned_global_trays.append(global_tray_id)
             continue
 
         # Load spool
@@ -1748,5 +1961,12 @@ async def _track_from_3mf(
                     joined_types,
                 )
                 archive.filament_type = joined_types
+
+    if unassigned_global_trays:
+        from backend.app.services.spool_assignment_notifications import (
+            notify_missing_spool_assignments_on_print_complete,
+        )
+
+        await notify_missing_spool_assignments_on_print_complete(printer_id, unassigned_global_trays, db, logger)
 
     return results

@@ -32,6 +32,48 @@ export function normalizeColorForCompare(color: string | undefined): string {
 }
 
 /**
+ * Which side letter stands for a Filament Track Switch inlet: In-A reads as L,
+ * In-B as R.
+ *
+ * This labels the inlet's position, not the nozzle it feeds — the switch can
+ * route either inlet to either nozzle, and it never reports which pairing is
+ * live. Anywhere this letter is shown next to a hover target, the tooltip names
+ * the inlet outright so the two cannot be confused.
+ */
+export const FTS_INLET_SIDE = { A: 'L', B: 'R' } as const;
+
+/**
+ * Which extruder each switch inlet feeds. Out-A is the left hotend and Out-B the
+ * right one (measured on an H2C), and the inlet pairs with its own outlet in the
+ * switch's rest position. Mirrors `backend/app/utils/fts_routing.py`, which
+ * carries the full reasoning and the reason `fila_switch.out` cannot be used.
+ */
+const FTS_INLET_EXTRUDER: Record<string, number> = { A: 1, B: 0 };
+
+/**
+ * The extruder an AMS slot feeds, or undefined when it genuinely cannot be told.
+ *
+ * Undefined is not the same as extruder 0. K-profiles are per-nozzle, so a slot
+ * whose nozzle is unknown must not be silently treated as right-hand — that is
+ * what bound a left-nozzle profile to a slot sitting on the right.
+ */
+export function resolveSlotExtruder(
+  amsId: number,
+  trayId: number,
+  amsExtruderMap: Record<string, number> | undefined,
+  amsSwitchInlet: Record<string, string> | undefined
+): number | undefined {
+  // External holder: the tray id names the side. 254/Ext-L feeds extruder 1.
+  if (amsId === 255) return trayId === 0 || trayId === 1 ? 1 - trayId : undefined;
+
+  const mapped = amsExtruderMap?.[String(amsId)];
+  if (mapped !== undefined) return mapped;
+
+  const inlet = amsSwitchInlet?.[String(amsId)];
+  return inlet ? FTS_INLET_EXTRUDER[inlet.toUpperCase()] : undefined;
+}
+
+/**
  * AMS unit label using the codebase convention: "AMS-A / AMS-B / ..." for
  * regular AMS, "HT-A / HT-B / ..." for AMS-HT (single-tray modules with
  * IDs starting at 128). `trayCount` is required because the type can't be
@@ -548,10 +590,14 @@ export function installedNozzleDiameters(
  * the machine instead of assuming 0.4mm (#1899).
  *
  * On dual-nozzle printers (H2D) each AMS is bound to one extruder via
- * `ams_extruder_map` (amsId → extruder index, 0=left/primary, 1=right), so we
- * read that nozzle's diameter. Single-nozzle printers have no map entry and
- * fall back to the primary nozzle (index 0). Returns undefined when the printer
- * hasn't reported nozzle hardware yet, letting the caller keep its own default.
+ * `ams_extruder_map` (amsId → extruder index), so we read that nozzle's
+ * diameter. `status.nozzles` is indexed by extruder id -- [0] is the RIGHT
+ * hotend and [1] the left, measured on an H2D fitted with 0.4 left / 0.6 right
+ * -- so indexing it by the extruder is correct. (This comment used to say
+ * "0=left/primary, 1=right", which was backwards; the code was always right.)
+ * Single-nozzle printers have no map entry and fall back to index 0. Returns
+ * undefined when the printer hasn't reported nozzle hardware yet, letting the
+ * caller keep its own default.
  * Diameter is the bare decimal string the status carries, e.g. "0.4" / "0.6".
  */
 export function resolveSlotNozzleDiameter(
@@ -584,6 +630,34 @@ export function isBambuLabSpool(tray: {
   if (tray.tray_uuid && tray.tray_uuid !== '00000000000000000000000000000000') return true;
   if (tray.tag_uid && tray.tag_uid !== '0000000000000000') return true;
   return false;
+}
+
+/**
+ * Does a stored slot preset still describe what is in the slot?
+ *
+ * `slot_preset_mappings` remembers the preset a slot was last configured with,
+ * and the AMS slot card shows that name ahead of anything the printer reports —
+ * which is what lets a slot keep a hand-picked name like "# Bambu PLA Matte
+ * @BBL H2C 0.4 nozzle (Custom)" instead of the plain catalog one. The cost is
+ * that a swapped spool leaves the previous spool's name on the card until the
+ * row is refetched, and until then a cached row outranks live telemetry.
+ *
+ * The printer's own `tray_info_idx` settles it, but only for official Bambu
+ * presets, where the two id forms differ by one letter (setting_id `GFSA01` ↔
+ * filament_id `GFA01`). A user preset genuinely carries two unrelated ids — a
+ * slot configured with `PFUSa3b8b0c664c142` reports `tray_info_idx=P8a85d5a` —
+ * and a local preset (`local_68`) has no printer-side id at all, so neither can
+ * be checked here and both keep the stored name. Same for a slot reporting no
+ * id (generic filament with no tag), which is the case the row exists for.
+ */
+export function slotPresetDescribesTray(
+  presetId: string | null | undefined,
+  trayInfoIdx: string | null | undefined,
+): boolean {
+  const preset = (presetId || '').split('_')[0].toUpperCase();
+  const tray = (trayInfoIdx || '').split('_')[0].toUpperCase();
+  if (!preset.startsWith('GFS') || !tray.startsWith('GF') || tray.startsWith('GFS')) return true;
+  return `GF${preset.slice(3)}` === tray;
 }
 
 export interface AmsTrayLike {

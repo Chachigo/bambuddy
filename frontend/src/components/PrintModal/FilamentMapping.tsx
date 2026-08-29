@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Circle, Check, AlertTriangle, RefreshCw, ChevronDown, ChevronUp, Palette } from 'lucide-react';
 import { api } from '../../api/client';
+import type { SlotSpoolIdentity } from '../../api/client';
 import { useFilamentMapping } from '../../hooks/useFilamentMapping';
-import { getGlobalTrayId, effectivePreferLowest } from '../../utils/amsHelpers';
-import { getColorName } from '../../utils/colors';
+import { getGlobalTrayId, effectivePreferLowest, FTS_INLET_SIDE } from '../../utils/amsHelpers';
+import { disambiguateColorNames, getColorName } from '../../utils/colors';
 import { useFilamentLabels } from './useFilamentLabels';
 import { autoAssignRackPositions, rackOptionsForGroup } from '../../utils/nozzleRack';
 import type { FilamentMappingProps, RackGroupInfo } from './types';
@@ -112,6 +113,14 @@ export function FilamentMapping({
     queryFn: () => api.getInventoryRemain(printerId),
     enabled: !!printerId,
     staleTime: 30 * 1000,
+    // Fresh on every open, cached while open. This payload now names the
+    // slots, and a spool assigned moments ago would otherwise keep its old
+    // name for the rest of the stale window. Doing it here rather than
+    // invalidating the key from each of the eighteen places a binding or a
+    // spool can change: half of those are internal-inventory paths and half
+    // are Spoolman ones, and covering some of them would make freshness
+    // depend on which inventory mode you run.
+    refetchOnMount: 'always',
   });
   const inventoryByTrayId = useMemo(() => {
     if (!inventoryRemain?.inventory_remain_g) return undefined;
@@ -122,13 +131,34 @@ export function FilamentMapping({
     });
     return map;
   }, [inventoryRemain]);
+  // The other half of the same payload: what Bambuddy has bound to each slot,
+  // so a slot reads as the spool the operator assigned rather than as whatever
+  // the printer can say about it. A third-party spool reports no sub-brand at
+  // all and its colour hex resolves against Bambu's catalogue, so without this
+  // the dialog named slots differently from the printer card.
+  const slotSpools = useMemo(() => {
+    const slots = inventoryRemain?.slot_materials;
+    if (!slots?.length) return undefined;
+    const map = new Map<number, SlotSpoolIdentity>();
+    slots.forEach((slot) => {
+      if (slot.spool) map.set(slot.global_tray_id, slot.spool);
+    });
+    return map.size > 0 ? map : undefined;
+  }, [inventoryRemain]);
   const gatedPreferLowest = effectivePreferLowest(
     settings?.prefer_lowest_filament,
     printerStatus?.ams_filament_backup,
   );
 
   const { loadedFilaments, filamentComparison, hasTypeMismatch, hasColorMismatch } =
-    useFilamentMapping(filamentReqs, printerStatus, manualMappings, gatedPreferLowest, inventoryByTrayId);
+    useFilamentMapping(
+      filamentReqs,
+      printerStatus,
+      manualMappings,
+      gatedPreferLowest,
+      inventoryByTrayId,
+      slotSpools,
+    );
 
   // Per-slot sub-brand + material-disambiguated colour labels (#1718). Same
   // shared hook the model-mode FilamentOverride uses so both panels render
@@ -234,16 +264,39 @@ export function FilamentMapping({
 
   // Filament Track Switch: when installed, AMS-to-extruder mapping is dynamic
   // (any slot can be routed to either extruder), so the per-nozzle dropdown
-  // filter is suppressed. fila_switch.in_slots[track] = currently fed slot,
-  // fila_switch.out_extruders[track] = extruder that track terminates at. See #1162.
+  // filter is suppressed. See #1162.
+  //
+  // What a slot CAN be labelled with is the switch inlet its AMS is plumbed
+  // into (ams_switch_inlet, from AMS info bits 24-27). That is the stable
+  // relationship the printer's own "Manual AMS Setup" screen sets. The live
+  // inlet-to-outlet route is deliberately not shown: the firmware never reports
+  // which inlet is currently paired with which outlet, so any left/right label
+  // on a slot would be a guess.
   const ftsInstalled = printerStatus?.fila_switch?.installed === true;
-  const ftsExtruderForSlot = (globalTrayId: number): number | null => {
-    const fs = printerStatus?.fila_switch;
-    if (!fs?.installed) return null;
-    const track = fs.in_slots.indexOf(globalTrayId);
-    if (track < 0) return null;
-    return fs.out_extruders[track] ?? null;
-  };
+  const amsSwitchInlet = printerStatus?.ams_switch_inlet;
+  const ftsInletForAms = (amsId: number): 'A' | 'B' | null =>
+    (ftsInstalled && amsSwitchInlet?.[String(amsId)]) || null;
+
+  // Every filament for this print sitting behind one inlet is the case worth
+  // flagging. Bambu's own guidance: a change between two filaments on the same
+  // inlet has to retract the old one all the way back to its AMS before the new
+  // one can be fed through the shared tube, where a change across the two
+  // inlets only retracts as far as the switch. All-on-one-inlet means every
+  // single change in the job takes the slow path.
+  const sameInletWarning = useMemo(() => {
+    if (!ftsInstalled) return null;
+    const inlets = new Set<string>();
+    for (const item of filamentComparison) {
+      if (!item.loaded || item.loaded.isExternal) return null;
+      const inlet = ftsInletForAms(item.loaded.amsId);
+      if (!inlet) return null;
+      inlets.add(inlet);
+    }
+    if (filamentComparison.length < 2 || inlets.size !== 1) return null;
+    return [...inlets][0];
+    // ftsInletForAms is a stable closure over the two values already listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ftsInstalled, amsSwitchInlet, filamentComparison]);
 
   // Don't render if no filament requirements
   if (!hasFilamentReqs) {
@@ -301,11 +354,11 @@ export function FilamentMapping({
         <Circle className="w-4 h-4" fill={statusColor} stroke="none" />
         <span>{plateLabel ? `${t('printModal.filamentMapping')} — ${plateLabel}` : t('printModal.filamentMapping')}</span>
         {hasTypeMismatch ? (
-          <span className="text-xs text-orange-700 dark:text-orange-400">(Type not found)</span>
+          <span className="text-xs text-orange-700 dark:text-orange-400">({t('printModal.statusTypeNotFound')})</span>
         ) : hasColorMismatch ? (
-          <span className="text-xs text-yellow-700 dark:text-yellow-400">(Color mismatch)</span>
+          <span className="text-xs text-yellow-700 dark:text-yellow-400">({t('printModal.statusColorMismatch')})</span>
         ) : (
-          <span className="text-xs text-bambu-green">(Ready)</span>
+          <span className="text-xs text-bambu-green">({t('printModal.statusReady')})</span>
         )}
         {isExpanded ? (
           <ChevronUp className="w-4 h-4 ml-auto" />
@@ -345,6 +398,12 @@ export function FilamentMapping({
               </button>
             </div>
           </div>
+          {sameInletWarning && (
+            <div className="flex items-start gap-1.5 rounded border border-yellow-500/40 bg-yellow-500/10 px-2 py-1.5 text-xs text-yellow-700 dark:text-yellow-400">
+              <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+              <span>{t('printModal.ftsSameInletHint', { inlet: sameInletWarning })}</span>
+            </div>
+          )}
           {filamentComparison.map((item, idx) => {
             // #1717: surface the same per-slot force-color-match checkbox here
             // that FilamentOverride exposes for model-mode dispatch. The
@@ -356,6 +415,14 @@ export function FilamentMapping({
             // array shape; defensive fallback covers the empty-reqs render
             // path that shouldn't reach here anyway.
             const { resolvedName, colorLabel } = filamentLabels[idx] ?? { resolvedName: item.type, colorLabel: getColorName(item.color) };
+            // Both sides of a colour mismatch routinely resolve to the same
+            // name -- a slicer's pure blue and a spool's navy are both "Blue" --
+            // which made the warning look like it was contradicting itself
+            // (#2941). Qualify them with their hex when the names collide.
+            const [requiredColorLabel, loadedColorLabel] = disambiguateColorNames(
+              { name: colorLabel, hex: item.color },
+              { name: item.loaded?.colorName, hex: item.loaded?.color },
+            );
             return (
             <div key={idx} className="space-y-1">
               <div
@@ -373,7 +440,7 @@ export function FilamentMapping({
                 }}
               >
                 {/* Required color */}
-                <span title={`Required: ${resolvedName} - ${colorLabel}`}>
+                <span title={t('printModal.requiredTooltip', { name: resolvedName, color: requiredColorLabel })}>
                   <Circle className="w-3 h-3" fill={item.color} stroke={item.color} />
                 </span>
                 {/* Required type + grams + nozzle badge. Only the name
@@ -434,10 +501,10 @@ export function FilamentMapping({
                       ? 'border-yellow-500 dark:border-yellow-400/50 text-yellow-700 dark:text-yellow-400'
                       : 'border-orange-500 dark:border-orange-400/50 text-orange-700 dark:text-orange-400'
                   } ${item.isManual ? 'ring-1 ring-blue-400/50' : ''}`}
-                  title={item.isManual ? 'Manually selected' : 'Auto-matched'}
+                  title={item.isManual ? t('printModal.manuallySelected') : t('printModal.autoMatched')}
                 >
                   <option value="" className="bg-bambu-dark text-bambu-gray">
-                    -- Select slot --
+                    -- {t('printModal.selectSlot')} --
                   </option>
                   {/*
                     #1722: every loaded slot is offered for every filament row,
@@ -460,19 +527,18 @@ export function FilamentMapping({
                             defaultValue: ` - ${remainingWeight}g left`,
                           })
                         : '';
-                      // FTS routing badge: if this slot is currently fed into an FTS
-                      // track, show the destination extruder. Idle (not-loaded) slots
-                      // get no badge — they can be routed to either extruder on demand.
-                      const ftsTargetExtruder = ftsInstalled
-                        ? ftsExtruderForSlot(f.globalTrayId)
-                        : null;
-                      const ftsBadge =
-                        ftsTargetExtruder == null
-                          ? ''
-                          : ` [${ftsTargetExtruder === 1 ? t('printModal.leftNozzle') : t('printModal.rightNozzle')}]`;
+                      // FTS badge: which switch inlet this slot's AMS feeds. Not a
+                      // nozzle — the slot reaches both through the switch — but it
+                      // is what decides whether a change to the next filament is
+                      // the fast cross-inlet one or the slow same-inlet one.
+                      const ftsInlet = ftsInletForAms(f.amsId);
+                      // Same L/R lettering the printer card uses for inlets, so the
+                      // two views agree. Not translated: L and R are the letters on
+                      // the machine.
+                      const ftsBadge = ftsInlet == null ? '' : ` [${FTS_INLET_SIDE[ftsInlet]}]`;
                       return (
                         <option key={f.globalTrayId} value={f.globalTrayId} className="bg-bambu-dark text-white">
-                          {f.label}: {f.traySubBrands || f.type} ({f.colorName}){remainingLabel}{ftsBadge}
+                          {f.label}: {f.spoolName || f.traySubBrands || f.type} ({f.colorName}){remainingLabel}{ftsBadge}
                         </option>
                       );
                   })}
@@ -481,11 +547,20 @@ export function FilamentMapping({
                 {item.status === 'match' ? (
                   <Check className="w-3 h-3 text-bambu-green" />
                 ) : item.status === 'type_only' ? (
-                  <span title="Same type, different color">
+                  <span
+                    title={
+                      requiredColorLabel && loadedColorLabel
+                        ? t('printModal.sameTypeDifferentColorDetail', {
+                            required: requiredColorLabel,
+                            loaded: loadedColorLabel,
+                          })
+                        : t('printModal.sameTypeDifferentColor')
+                    }
+                  >
                     <AlertTriangle className="w-3 h-3 text-yellow-600 dark:text-yellow-400" />
                   </span>
                 ) : (
-                  <span title="Filament type not loaded">
+                  <span title={t('printModal.filamentTypeNotLoaded')}>
                     <AlertTriangle className="w-3 h-3 text-orange-600 dark:text-orange-400" />
                   </span>
                 )}
@@ -525,7 +600,9 @@ export function FilamentMapping({
             </p>
           )}
           {hasTypeMismatch && (
-            <p className="text-xs text-orange-700 dark:text-orange-400 mt-2">Required filament type not found in printer.</p>
+            <p className="text-xs text-orange-700 dark:text-orange-400 mt-2">
+              {t('printModal.requiredTypeNotInPrinter')}
+            </p>
           )}
         </div>
       )}
