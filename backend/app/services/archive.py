@@ -19,8 +19,9 @@ from backend.app.models.archive import PrintArchive
 from backend.app.models.filament import Filament
 from backend.app.models.printer import Printer
 from backend.app.utils.archive_paths import archive_dir as resolve_archive_dir
+from backend.app.utils.ffmpeg_output import NO_FFMPEG_OUTPUT, summarize_ffmpeg_stderr
 from backend.app.utils.filename import clean_display_name
-from backend.app.utils.safe_path import PathTraversalError, safe_join_under
+from backend.app.utils.safe_path import PathTraversalError, assert_under, safe_join_under
 
 logger = logging.getLogger(__name__)
 
@@ -1676,52 +1677,140 @@ class ArchiveService:
             # the first soft-delete pass so there is nothing left on disk.
             return True
 
-        dir_to_delete = self._resolve_archive_dir_for_delete(archive)
+        dirs_to_delete = self._resolve_archive_dirs_for_delete(archive)
+        recorded_paths = (archive.timelapse_path, archive.thumbnail_path)
 
         await _null_print_log_thumbnail_paths(self.db, archive_id)
         await _delete_related_queue_items(self.db, archive_id)
         archive.deleted_at = datetime.now(timezone.utc)
         await self.db.commit()
 
-        if dir_to_delete:
-            shutil.rmtree(dir_to_delete, ignore_errors=True)
+        for directory in dirs_to_delete:
+            shutil.rmtree(directory, ignore_errors=True)
+        self._purge_id_named_dir(archive_id, recorded_paths)
         return True
 
-    def _resolve_archive_dir_for_delete(self, archive: PrintArchive) -> Path | None:
-        """Return the on-disk directory that backs *archive*, after the same
-        two safety checks ``delete_archive`` enforces.
+    def _resolve_archive_dirs_for_delete(self, archive: PrintArchive) -> list[Path]:
+        """Directories belonging to *archive* alone, safe to remove whole.
 
-        Extracted so soft-delete and hard-delete share the path-resolution
-        rules. Returns ``None`` when nothing should be removed from disk
-        (no file_path, path outside archive_dir, or path not deep enough).
+        Shared by soft-delete and hard-delete so the two cannot drift apart
+        again — the previous helper said it was extracted for that reason, and
+        ``delete_archive`` was still doing its own copy of the same rules.
+
+        An archive with a 3MF owns the directory its ``file_path`` sits in,
+        ``<archive_dir>/<printer_id>/<timestamp>_<name>/``. Any archive may also
+        own ``archive/no_source/<id>/``, where a source 3MF uploaded onto a
+        no-3MF archive lands (#1531); that one was never removed, so deleting
+        such an archive freed the row and left the upload behind.
+
+        Two directories are deliberately absent. ``<base_dir>/photos`` is the
+        legacy location *every* no-3MF archive wrote into at once, so removing
+        it on one delete would take the others' photos with it. And
+        ``<archive_dir>/<id>`` — the directory :func:`resolve_archive_dir` gives
+        an archive with no ``file_path`` — is handled by
+        :meth:`_purge_id_named_dir` instead, for the reason given there.
         """
-        if not archive.file_path or not archive.file_path.strip():
-            logger.error(
-                f"SECURITY: Refusing to delete files for archive {archive.id} - "
-                f"file_path is empty or invalid: '{archive.file_path}'"
-            )
-            return None
+        candidates: list[Path] = []
+        # Only when there is a path to derive it from. Without one,
+        # ``resolve_archive_dir`` returns the id-named directory, which must not
+        # be removed wholesale -- see _purge_id_named_dir.
+        if archive.file_path and archive.file_path.strip():
+            candidates.append(resolve_archive_dir(archive))
+        candidates.append(settings.archive_dir / "no_source" / str(archive.id))
 
-        file_path = settings.base_dir / archive.file_path
-        if not file_path.exists():
-            return None
+        resolved: list[Path] = []
+        for candidate in candidates:
+            if candidate in resolved or not candidate.is_dir():
+                continue
+            try:
+                relative_path = candidate.resolve().relative_to(settings.archive_dir.resolve())
+            except ValueError:
+                # A genuine guard trip, unlike the empty ``file_path`` this used
+                # to shout about: the row points somewhere outside the archive
+                # tree, which only a corrupted import or hand-edited SQL can do.
+                logger.error(
+                    f"SECURITY: Refusing to delete archive {archive.id} - "
+                    f"path {candidate} is outside archive directory {settings.archive_dir}"
+                )
+                continue
+            # Two deep, not one. An archive directory has been
+            # ``<archive_dir>/<printer_id>/<timestamp>_<name>/`` since the first
+            # commit, so nothing legitimate sits one level down -- but the
+            # per-printer folder does, and it holds every print that printer
+            # ever made. Under the old ``< 1`` a row whose file_path had lost a
+            # path component took the whole folder with it.
+            if len(relative_path.parts) < 2:
+                logger.error(
+                    f"SECURITY: Refusing to delete archive {archive.id} - "
+                    f"path {candidate} is not deep enough inside archive directory"
+                )
+                continue
+            resolved.append(candidate)
+        return resolved
 
-        archive_dir = file_path.parent
+    def _purge_id_named_dir(self, archive_id: int, recorded_paths: tuple[str | None, ...]) -> None:
+        """Remove one archive's own files from ``<archive_dir>/<id>``, carefully.
+
+        Takes the recorded paths rather than the row because ``delete_archive``
+        removes the row before it touches the disk, deliberately: a failed
+        commit must leave the files alone. Reading ``archive.timelapse_path``
+        off a deleted instance afterwards would raise or silently refresh.
+
+        That directory is where an archive with no 3MF keeps its timelapse and
+        its finish photos (:func:`resolve_archive_dir`). It is emphatically NOT
+        an ``rmtree`` target, because it shares a namespace with the per-printer
+        folders: a normal archive lives at
+        ``<archive_dir>/<printer_id>/<timestamp>_<name>/``, so ``archive/1`` is
+        printer 1's folder *and* the directory the helper hands archive id 1.
+        Archive ids and printer ids are both small integers from unrelated
+        sequences, so on any install the first few archives collide with the
+        printers. Removing the directory would take every print that printer
+        ever made — measured on a scratch tree before this guard existed.
+
+        So nothing is removed that has not been identified as this archive's.
+        ``photos`` is a fixed subdirectory name and an archive directory is
+        always ``<timestamp>_<name>``, so the two cannot be confused; the video
+        is removed by the path the row itself records. The directory then goes
+        only if that left it empty, which a printer folder holding prints never
+        will. Anything unrecognised keeps it alive and is leaked rather than
+        guessed at — the safe direction for a recursive delete.
+        """
+        directory = settings.archive_dir / str(archive_id)
+        if not directory.is_dir():
+            return
         try:
-            relative_path = archive_dir.resolve().relative_to(settings.archive_dir.resolve())
+            relative_path = directory.resolve().relative_to(settings.archive_dir.resolve())
         except ValueError:
-            logger.error(
-                f"SECURITY: Refusing to delete archive {archive.id} - "
-                f"path {archive_dir} is outside archive directory {settings.archive_dir}"
-            )
-            return None
-        if len(relative_path.parts) < 1:
-            logger.error(
-                f"SECURITY: Refusing to delete archive {archive.id} - "
-                f"path {archive_dir} is not deep enough inside archive directory"
-            )
-            return None
-        return archive_dir
+            return
+        if len(relative_path.parts) != 1:
+            return
+
+        shutil.rmtree(directory / "photos", ignore_errors=True)  # SEC-PATH-OK: constant subdirectory
+        for recorded in recorded_paths:
+            if not recorded:
+                continue
+            try:
+                # Two checks, not one. safe_join_under rejects the absolute and
+                # ``..`` shapes and proves the result is inside the data
+                # directory; assert_under then narrows it to *this* archive's
+                # own directory, because a row whose timelapse_path names
+                # another archive's file must not take it with this delete.
+                # The column is written by Bambuddy from a filename the printer
+                # supplied over FTP, so it is not a trusted constant.
+                candidate = safe_join_under(settings.base_dir, recorded, http=False)
+                assert_under(directory, candidate, http=False)
+            except PathTraversalError:
+                continue
+            if candidate.is_file():
+                candidate.unlink(missing_ok=True)
+
+        try:
+            directory.rmdir()
+        except OSError:
+            # Not empty (a printer folder, or a file this archive did not
+            # record) or already gone. Both are fine: the point of rmdir over
+            # rmtree is that it cannot take anything with it.
+            pass
 
     async def delete_archive(self, archive_id: int) -> bool:
         """Delete an archive and its files."""
@@ -1729,46 +1818,12 @@ class ArchiveService:
         if not archive:
             return False
 
-        # Resolve the directory to delete BEFORE committing the DB change
-        dir_to_delete: Path | None = None
-
-        if archive.file_path and archive.file_path.strip():
-            file_path = settings.base_dir / archive.file_path
-            if file_path.exists():
-                archive_dir = file_path.parent
-
-                # Safety check 1: archive_dir must be inside archive_dir
-                try:
-                    archive_dir.resolve().relative_to(settings.archive_dir.resolve())
-                except ValueError:
-                    logger.error(
-                        f"SECURITY: Refusing to delete archive {archive_id} - "
-                        f"path {archive_dir} is outside archive directory {settings.archive_dir}"
-                    )
-                    await self.db.delete(archive)
-                    await self.db.commit()
-                    return True
-
-                # Safety check 2: archive_dir must be at least 1 level deep inside archive_dir
-                try:
-                    relative_path = archive_dir.resolve().relative_to(settings.archive_dir.resolve())
-                    if len(relative_path.parts) < 1:
-                        logger.error(
-                            f"SECURITY: Refusing to delete archive {archive_id} - "
-                            f"path {archive_dir} is not deep enough inside archive directory"
-                        )
-                        await self.db.delete(archive)
-                        await self.db.commit()
-                        return True
-                except ValueError:
-                    pass  # Already handled above
-
-                dir_to_delete = archive_dir
-        else:
-            logger.error(
-                f"SECURITY: Refusing to delete files for archive {archive_id} - "
-                f"file_path is empty or invalid: '{archive.file_path}'"
-            )
+        # Resolved BEFORE committing the DB change, since the row is what says
+        # where the files are. Shared with soft-delete rather than repeated
+        # here: this was a second copy of the same checks and it had already
+        # diverged from the one it was extracted from.
+        dirs_to_delete = self._resolve_archive_dirs_for_delete(archive)
+        recorded_paths = (archive.timelapse_path, archive.thumbnail_path)
 
         # NULL stale thumbnail_path on linked PrintLogEntries before the FK
         # SET-NULL cascade fires. The on-disk file is about to be removed by
@@ -1783,8 +1838,9 @@ class ArchiveService:
         await self.db.commit()
 
         # Only delete files AFTER the DB commit succeeds to avoid orphaned records
-        if dir_to_delete:
-            shutil.rmtree(dir_to_delete, ignore_errors=True)
+        for directory in dirs_to_delete:
+            shutil.rmtree(directory, ignore_errors=True)
+        self._purge_id_named_dir(archive_id, recorded_paths)
 
         return True
 
@@ -1922,7 +1978,7 @@ async def _convert_timelapse_to_mp4(archive_id: int, source_path: Path) -> None:
             logger.warning(
                 "Timelapse conversion failed for archive %s: %s",
                 archive_id,
-                stderr.decode()[-500:],
+                summarize_ffmpeg_stderr(stderr) or NO_FFMPEG_OUTPUT,
             )
             if mp4_path.exists():
                 mp4_path.unlink()
